@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+./rotating_coil_analyzer/__init__.py
+./rotating_coil_analyzer/scripts/__init__.py
+./rotating_coil_analyzer/scripts/gui_phase1.py
+./rotating_coil_analyzer/scripts/io_plateau.py
+./rotating_coil_analyzer/scripts/validate_plateau.py
+rotating_coil_analyzer.egg-info/PKG-INFO
+rotating_coil_analyzer.egg-info/SOURCES.txt
+rotating_coil_analyzer.egg-info/dependency_links.txt
+rotating_coil_analyzer.egg-info/requires.txt
+rotating_coil_analyzer.egg-info/top_level.txt
