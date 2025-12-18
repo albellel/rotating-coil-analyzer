@@ -1,21 +1,69 @@
-# Python bytecode
+# =========================
+# Python bytecode / caches
+# =========================
 __pycache__/
 *.py[cod]
+*$py.class
 
-# Packaging/build artifacts
-*.egg-info/
-build/
-dist/
-
+# =========================
 # Virtual environments
+# =========================
 .venv/
 venv/
 ENV/
 env/
 
-# Jupyter checkpoints
+# =========================
+# Packaging / build artifacts
+# =========================
+*.egg-info/
+.eggs/
+build/
+dist/
+wheelhouse/
+pip-wheel-metadata/
+
+# =========================
+# Test / type-check / tool caches
+# =========================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# =========================
+# Jupyter
+# =========================
 .ipynb_checkpoints/
 
-# OS/editor noise
+# =========================
+# IDE / OS
+# =========================
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
+
+# =========================
+# Project outputs (do not version)
+# =========================
+processed_data/
+plots/
+reports/
+tmp/
+*.log
+
+# =========================
+# Data (raw measurement data should live outside repo)
+# =========================
+data/raw/
+data/large/
+*.bin
+# If you want to keep small example .bin files under version control, remove the line above.
+
+# =========================
+# Optional: local scratch notebooks
+# =========================
+notebooks/_scratch/
