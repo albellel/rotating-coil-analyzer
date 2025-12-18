@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Sequence, Tuple
+import math
 
 import numpy as np
 import pandas as pd
@@ -10,258 +11,230 @@ import pandas as pd
 from rotating_coil_analyzer.models.frames import SegmentFrame
 
 
-def _dt_nominal(samples_per_turn: int, shaft_speed_rpm: float) -> Optional[float]:
-    v = abs(float(shaft_speed_rpm))
-    if v <= 0 or samples_per_turn <= 0:
-        return None
-    T_nom = 60.0 / v
-    return T_nom / float(samples_per_turn)
-
-
-def _time_is_plausible(t: np.ndarray, dt_nom: Optional[float], samples_per_turn: int) -> Tuple[bool, float, float]:
+@dataclass(frozen=True)
+class Sm18ReaderConfig:
     """
-    Returns (ok, dt_median, neg_frac)
-    Accepts:
-      - strictly increasing time
-      - per-turn wrapped time (resets at turn boundaries)
+    Reader configuration.
+
+    strict_time:
+      - True: require strictly increasing finite time vector after trimming trailing invalid rows.
+      - False: allow non-monotonic time (not recommended).
+    dt_rel_tol:
+      Relative tolerance for dt_median vs dt_nominal (computed from |v| and samples_per_turn).
+      Example: 0.2 means ±20%.
+    max_currents:
+      Try formats with 1..max_currents current channels (total columns = 3 + n_currents).
     """
-    if t.size < 10:
-        return False, np.nan, np.nan
-
-    dt = np.diff(t.astype(np.float64, copy=False))
-    if dt.size == 0:
-        return False, np.nan, np.nan
-
-    neg = np.count_nonzero(dt <= 0)
-    neg_frac = neg / float(dt.size)
-
-    # median of positive dt only (avoid turn resets)
-    dt_pos = dt[dt > 0]
-    if dt_pos.size == 0:
-        return False, np.nan, neg_frac
-    dt_med = float(np.median(dt_pos))
-
-    # Basic plausibility: time step should be in a sane range
-    if not (1e-7 < dt_med < 0.5):
-        return False, dt_med, neg_frac
-
-    # If we know expected dt_nom, require same order-of-magnitude (loose)
-    if dt_nom is not None:
-        if not (0.05 * dt_nom <= dt_med <= 20.0 * dt_nom):
-            return False, dt_med, neg_frac
-
-    # If there are negatives, they should mostly occur at turn boundaries
-    if neg > 0 and samples_per_turn > 0:
-        boundary_idx = np.arange(dt.size) % samples_per_turn == (samples_per_turn - 1)
-        neg_idx = dt <= 0
-        if np.count_nonzero(neg_idx & boundary_idx) / float(neg) < 0.8:
-            # too many negative dt away from boundaries
-            return False, dt_med, neg_frac
-
-    return True, dt_med, neg_frac
+    strict_time: bool = True
+    dt_rel_tol: float = 0.20
+    max_currents: int = 4
+    dtype_candidates: Tuple[np.dtype, ...] = (np.dtype(np.float64), np.dtype(np.float32))
 
 
-def _choose_format(data: np.ndarray, dt_nom: Optional[float], samples_per_turn: int) -> float:
-    """
-    Score candidate interpretation, higher is better.
-    data shape: (n_rows, n_cols)
-    We consider candidate 'time' in col 0.
-    """
-    t = data[:, 0]
-    ok, dt_med, neg_frac = _time_is_plausible(t, dt_nom=dt_nom, samples_per_turn=samples_per_turn)
-    if not ok:
-        return -1.0
-
-    score = 0.0
-    score += 5.0
-
-    if dt_nom is not None:
-        score += 3.0 * (1.0 / (1.0 + abs(dt_med - dt_nom) / dt_nom))
-    score += 1.0 * (1.0 - neg_frac)  # prefer fewer resets
-    return score
-
-
-def _find_raw_time_file(corr_sigs_path: Path, aperture: int, segment: str) -> Optional[Path]:
-    """
-    If corr_sigs is an older format without embedded FDI time, time may exist in a sibling file.
-    We only use REAL time from file; we never synthesize time.
-    """
-    root = corr_sigs_path.parent
-
-    patterns = [
-        f"*raw_time*Ap_{aperture}*Seg{segment}*.bin",
-        f"*raw_time*Ap_{aperture}*Seg_{segment}*.bin",
-        f"*fdi_raw_time*Ap_{aperture}*Seg{segment}*.bin",
-        f"*time*Ap_{aperture}*Seg{segment}*.bin",
-    ]
-    hits: List[Path] = []
-    for pat in patterns:
-        hits.extend(root.glob(pat))
-
-    # De-dup
-    uniq = []
-    seen = set()
-    for p in hits:
-        if p.name not in seen:
-            uniq.append(p)
-            seen.add(p.name)
-
-    if len(uniq) == 1:
-        return uniq[0]
-    return None
-
-
-@dataclass
 class Sm18CorrSigsReader:
     """
-    Reads SM18 *_corr_sigs_*.bin.
+    Reader for *_corr_sigs_*.bin files.
 
-    Script documentation indicates (newer) format is:
-      [t_fdi, flux_abs, flux_cmp, I1..IN]  (double)  :contentReference[oaicite:5]{index=5}
-
-    Older runs may omit 't' in corr_sigs; if so we try a separate raw_time file.
+    IMPORTANT: This reader never synthesizes time. The first column must contain a valid time axis.
     """
-    max_currents: int = 4  # try up to 4 current columns in corr_sigs
+    def __init__(self, config: Optional[Sm18ReaderConfig] = None) -> None:
+        self.config = config or Sm18ReaderConfig()
 
     def read(
         self,
-        file_path: Path,
+        file_path: str | Path,
+        *,
         run_id: str,
         segment: str,
         samples_per_turn: int,
         shaft_speed_rpm: float,
-        aperture: int = 1,
     ) -> SegmentFrame:
-        file_path = Path(file_path)
-        warnings: List[str] = []
+        path = Path(file_path).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(str(path))
 
-        if samples_per_turn <= 0:
+        Ns = int(samples_per_turn)
+        if Ns <= 0:
             raise ValueError("samples_per_turn must be > 0")
 
-        dt_nom = _dt_nominal(samples_per_turn=samples_per_turn, shaft_speed_rpm=shaft_speed_rpm)
+        best = self._infer_and_load(path, Ns=Ns, shaft_speed_rpm=float(shaft_speed_rpm))
+        mat, ncols, warnings = best
 
-        # Candidate interpretations:
-        # dtype: float64 and float32 (little endian), columns: 3..(3+max_currents+1 for time)
-        candidates: List[Tuple[str, np.dtype, int, bool]] = []
-
-        # with time
-        for n_curr in range(1, self.max_currents + 1):
-            n_cols = 3 + n_curr  # t, abs, cmp, currents...
-            candidates.append((f"float64_le_{n_cols}col", np.dtype("<f8"), n_cols, True))
-            candidates.append((f"float32_le_{n_cols}col", np.dtype("<f4"), n_cols, True))
-
-        # without time (older): abs, cmp, currents...
-        for n_curr in range(1, self.max_currents + 1):
-            n_cols = 2 + n_curr  # abs, cmp, currents...
-            candidates.append((f"float64_le_{n_cols}col_noT", np.dtype("<f8"), n_cols, False))
-            candidates.append((f"float32_le_{n_cols}col_noT", np.dtype("<f4"), n_cols, False))
-
-        best = None
-        best_score = -1.0
-        reports: List[str] = []
-
-        file_size = file_path.stat().st_size
-
-        for name, dt, n_cols, has_time in candidates:
-            itemsize = dt.itemsize
-            if file_size % itemsize != 0:
-                continue
-            n_vals = file_size // itemsize
-            if n_vals % n_cols != 0:
-                continue
-            n_rows = n_vals // n_cols
-
-            # Read ONLY first chunk for scoring (fast, robust)
-            n_probe = min(n_rows, max(5000, 5 * samples_per_turn))
-            raw = np.fromfile(file_path, dtype=dt, count=n_probe * n_cols)
-            if raw.size != n_probe * n_cols:
-                continue
-            mat = raw.reshape(-1, n_cols)
-
-            if has_time:
-                score = _choose_format(mat, dt_nom=dt_nom, samples_per_turn=samples_per_turn)
-                reports.append(f"{name}: score={score:.3f}")
-                if score > best_score:
-                    best_score = score
-                    best = (name, dt, n_cols, True)
-            else:
-                # No-time candidates: accept only if values look like flux+current (heuristic)
-                # flux columns should be relatively small compared to current columns.
-                flux_mag = float(np.nanmedian(np.abs(mat[:, 0:2])))
-                curr_mag = float(np.nanmedian(np.abs(mat[:, -1])))
-                ok = (np.isfinite(flux_mag) and np.isfinite(curr_mag) and curr_mag > 0.01 and flux_mag < 10.0)
-                score = 1.0 if ok else -1.0
-                reports.append(f"{name}: score={score:.3f} (no-time heuristic)")
-                if score > best_score:
-                    best_score = score
-                    best = (name, dt, n_cols, False)
-
-        if best is None or best_score < 0:
-            msg = "No supported binary format validated for this file.\n" + "\n".join(reports[:80])
-            raise ValueError(msg)
-
-        name, dt, n_cols, has_time = best
-        warnings.append(f"Selected binary format: {name}")
-
-        # Load full file with chosen interpretation
-        raw = np.fromfile(file_path, dtype=dt)
-        mat = raw.reshape(-1, n_cols)
-
-        # Trim to multiple of samples_per_turn (never invent time; just drop trailing partial turn)
-        rem = mat.shape[0] % samples_per_turn
-        if rem != 0:
-            warnings.append(f"Trimmed to multiple of samples_per_turn: {mat.shape[0]} -> {mat.shape[0] - rem}")
-            mat = mat[: mat.shape[0] - rem, :]
-
-        n_rows = int(mat.shape[0])
-        n_turns = n_rows // samples_per_turn
-
-        if has_time:
-            t = mat[:, 0].astype(np.float64, copy=False)
-            df_abs = mat[:, 1].astype(np.float64, copy=False)
-            df_cmp = mat[:, 2].astype(np.float64, copy=False)
-            currents = mat[:, 3:].astype(np.float64, copy=False)
+        # Columns: t, df_abs, df_cmp, currents...
+        t = mat[:, 0]
+        df_abs = mat[:, 1]
+        df_cmp = mat[:, 2]
+        if ncols >= 4:
+            I = mat[:, 3]
         else:
-            # Try to obtain REAL FDI time from a separate file if present
-            tf = _find_raw_time_file(file_path, aperture=aperture, segment=segment)
-            if tf is None:
-                raise ValueError(
-                    "corr_sigs appears to have no embedded FDI time column, and no unique raw_time file was found.\n"
-                    "Per your requirement, we will NOT synthesize time.\n"
-                    f"corr_sigs: {file_path}"
-                )
-            warnings.append(f"Using time from separate file: {tf.name}")
+            I = np.full_like(t, np.nan, dtype=np.float64)
 
-            t_raw = np.fromfile(tf, dtype=dt)
-            # time file is typically single-column
-            if t_raw.size != n_rows:
-                raise ValueError(f"raw_time length mismatch: {t_raw.size} != {n_rows} (corr_sigs rows)")
-            t = t_raw.astype(np.float64, copy=False)
+        df = pd.DataFrame({"t": t, "df_abs": df_abs, "df_cmp": df_cmp, "I": I})
 
-            df_abs = mat[:, 0].astype(np.float64, copy=False)
-            df_cmp = mat[:, 1].astype(np.float64, copy=False)
-            currents = mat[:, 2:].astype(np.float64, copy=False)
-
-        # Build dataframe
-        df_dict: Dict[str, np.ndarray] = {"t": t, "df_abs": df_abs, "df_cmp": df_cmp}
-        if currents.shape[1] == 1:
-            df_dict["I"] = currents[:, 0]
-        else:
-            for k in range(currents.shape[1]):
-                df_dict[f"I{k+1}"] = currents[:, k]
-
-        df = pd.DataFrame(df_dict)
-
-        # Add a minimal warning about nominal speed computation (abs(v))
-        if shaft_speed_rpm < 0:
-            warnings.append(f"Note: Parameters.Measurement.v is negative; using |v|={abs(shaft_speed_rpm)} rpm.")
+        n_turns = int(len(df) // Ns)
 
         return SegmentFrame(
-            source_path=file_path,
+            source_path=path,
             run_id=run_id,
-            segment=str(segment),
-            samples_per_turn=int(samples_per_turn),
-            n_turns=int(n_turns),
+            segment=segment,
+            samples_per_turn=Ns,
+            n_turns=n_turns,
             df=df,
             warnings=tuple(warnings),
         )
+
+    def _infer_and_load(
+        self,
+        path: Path,
+        *,
+        Ns: int,
+        shaft_speed_rpm: float,
+    ) -> Tuple[np.ndarray, int, List[str]]:
+        """
+        Infer dtype and column count from file size and timing consistency.
+        Returns (mat_float64, ncols, warnings).
+        """
+        cfg = self.config
+        warnings: List[str] = []
+
+        file_size = path.stat().st_size
+        if file_size <= 0:
+            raise ValueError("Empty file.")
+
+        v = abs(float(shaft_speed_rpm))
+        dt_nom: Optional[float] = None
+        if v > 0:
+            Tnom = 60.0 / v
+            dt_nom = Tnom / float(Ns)
+
+        reports: List[str] = []
+        best_score = -1e300
+        best: Optional[Tuple[np.ndarray, int, List[str]]] = None
+
+        for dtype in cfg.dtype_candidates:
+            bps = int(dtype.itemsize)
+            if file_size % bps != 0:
+                continue
+            n_scalars = file_size // bps
+
+            # total columns = 3 + n_currents
+            for n_curr in range(1, max(1, cfg.max_currents) + 1):
+                ncols = 3 + n_curr
+                if n_scalars % ncols != 0:
+                    continue
+
+                # Load and reshape
+                arr = np.fromfile(path, dtype=dtype)
+                if arr.size != n_scalars:
+                    # Extremely unlikely; but keep safe.
+                    arr = arr[:n_scalars]
+                mat = arr.reshape(-1, ncols).astype(np.float64, copy=False)
+
+                ok, score, rep, local_warnings, mat_out = self._validate_candidate(
+                    mat,
+                    Ns=Ns,
+                    dt_nom=dt_nom,
+                    strict_time=cfg.strict_time,
+                    dt_rel_tol=cfg.dt_rel_tol,
+                )
+                reports.append(f"{dtype.name}_le_{ncols}col: {rep}")
+                if ok and score > best_score:
+                    best_score = score
+                    warnings2 = warnings + local_warnings + [f"Selected binary format: {dtype.name}_le_{ncols}col"]
+                    best = (mat_out, ncols, warnings2)
+
+        if best is None:
+            msg = "No supported binary format validated for this file.\n" + "\n".join(reports[:80])
+            raise ValueError(msg)
+
+        return best
+
+    def _validate_candidate(
+        self,
+        mat: np.ndarray,
+        *,
+        Ns: int,
+        dt_nom: Optional[float],
+        strict_time: bool,
+        dt_rel_tol: float,
+    ) -> Tuple[bool, float, str, List[str], np.ndarray]:
+        """
+        Validate candidate by:
+        - trimming trailing invalid rows (non-finite in t/df_abs/df_cmp)
+        - enforcing strictly increasing time (if strict_time)
+        - enforcing dt_median close to dt_nom (if provided)
+
+        Returns (ok, score, report, warnings, mat_trimmed)
+        """
+        warnings: List[str] = []
+
+        if mat.shape[1] < 3:
+            return False, -1e300, "reject (ncols<3)", warnings, mat
+
+        t = mat[:, 0]
+        df_abs = mat[:, 1]
+        df_cmp = mat[:, 2]
+
+        finite = np.isfinite(t) & np.isfinite(df_abs) & np.isfinite(df_cmp)
+        if not finite.all():
+            bad_idx = np.flatnonzero(~finite)
+            first_bad = int(bad_idx[0])
+            # Do not accept NaNs/Infs in the middle
+            if not finite[:first_bad].all():
+                return False, -1e300, "reject (non-finite in middle)", warnings, mat
+            n_bad = int(len(bad_idx))
+            warnings.append(f"Trimmed trailing invalid rows: first_bad_index={first_bad}, n_bad={n_bad}")
+            mat = mat[:first_bad, :]
+
+        if mat.shape[0] < Ns:
+            return False, -1e300, "reject (too few rows after trim)", warnings, mat
+
+        # Trim to a multiple of Ns (drop partial last turn)
+        remainder = int(mat.shape[0] % Ns)
+        if remainder != 0:
+            warnings.append(f"Trimmed to multiple of samples_per_turn: {mat.shape[0]} -> {mat.shape[0] - remainder}")
+            mat = mat[: mat.shape[0] - remainder, :]
+
+        t = mat[:, 0]
+        if not np.isfinite(t).all():
+            return False, -1e300, "reject (non-finite time after trim)", warnings, mat
+
+        dt = np.diff(t)
+        if not np.isfinite(dt).all():
+            return False, -1e300, "reject (non-finite dt)", warnings, mat
+
+        n_nonpos = int(np.count_nonzero(dt <= 0.0))
+        if strict_time and n_nonpos > 0:
+            return False, -1e300, f"reject (time not strictly increasing: count(dt<=0)={n_nonpos})", warnings, mat
+
+        dt_med = float(np.median(dt)) if dt.size else float("nan")
+        dt_min = float(np.min(dt)) if dt.size else float("nan")
+        dt_max = float(np.max(dt)) if dt.size else float("nan")
+
+        # Score: closeness to dt_nom if available; otherwise prefer strict monotonic
+        score = 0.0
+        rep = f"note (dt stats [s]: min={dt_min:.6g}, median={dt_med:.6g}, max={dt_max:.6g})"
+
+        if dt_nom is not None and math.isfinite(dt_med) and dt_med > 0:
+            ratio = dt_med / dt_nom
+            # ratio close to 1 is best (score 0); penalize log-distance
+            score = -abs(math.log(ratio))
+            if strict_time and abs(ratio - 1.0) > dt_rel_tol:
+                return False, -1e300, f"reject (dt_med/dt_nom={ratio:.3g} outside ±{dt_rel_tol:.3g})", warnings, mat
+            rep += f", dt_nom={dt_nom:.6g}, ratio={ratio:.6g}"
+        else:
+            if strict_time and n_nonpos > 0:
+                return False, -1e300, f"reject (time not strictly increasing: count(dt<=0)={n_nonpos})", warnings, mat
+            # Slightly prefer strictly increasing
+            score = 0.0 if n_nonpos == 0 else -10.0
+
+        # Also compute turn-duration stats from turn start times (for reporting)
+        t0 = t[::Ns]
+        if t0.size >= 2:
+            Tturn = np.diff(t0)
+            Tmin = float(np.min(Tturn))
+            Tmed = float(np.median(Tturn))
+            Tmax = float(np.max(Tturn))
+            rep += f", turn duration T [s]: min={Tmin:.6g}, median={Tmed:.6g}, max={Tmax:.6g}"
+
+        return True, float(score), rep, warnings, mat

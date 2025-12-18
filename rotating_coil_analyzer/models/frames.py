@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple
 
 import pandas as pd
 
@@ -10,10 +10,11 @@ import pandas as pd
 @dataclass(frozen=True)
 class SegmentFrame:
     """
-    Container for one segment's time-series as read from disk.
+    In-memory representation of one segment file (one run_id + one segment) after basic cleaning.
 
-    IMPORTANT: We never "invent" a new time axis. If 't' exists, it comes from FDI
-    (either embedded in corr_sigs or read from a separate raw_time file).
+    Notes
+    - 't' is always the time vector coming from the FDI (no synthetic time generation).
+    - df columns are always float64.
     """
     source_path: Path
     run_id: str
@@ -21,18 +22,8 @@ class SegmentFrame:
     samples_per_turn: int
     n_turns: int
     df: pd.DataFrame
-
-    warnings: Tuple[str, ...] = field(default_factory=tuple)
-
-    def require_columns(self, *cols: str) -> None:
-        missing = [c for c in cols if c not in self.df.columns]
-        if missing:
-            raise ValueError(f"Missing required columns: {missing}. Present: {list(self.df.columns)}")
+    warnings: Tuple[str, ...] = ()
 
     @property
-    def has_time(self) -> bool:
-        return "t" in self.df.columns
-
-    @property
-    def n_rows(self) -> int:
+    def n_samples(self) -> int:
         return int(len(self.df))
