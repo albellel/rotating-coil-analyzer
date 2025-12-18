@@ -3,293 +3,206 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Optional
 
-from rotating_coil_analyzer.models.catalog import (
-    ChannelSpec,
-    MeasurementCatalog,
-    RunDescriptor,
-    SegmentSpec,
-)
-
-# File discovery: allow underscores/hyphens/etc in the cycle token by stopping at "_corr_sigs_"
-_RUN_RE = re.compile(
-    r"""
-    ^
-    (?P<magnet>.+?)
-    _(?P<date>\d{8})
-    _(?P<time>\d{6})
-    _(?P<cycle>.+?)
-    _corr_sigs_
-    (?:Ap_(?P<ap>\d+)_)?     # optional
-    Seg(?P<seg>[A-Za-z0-9]+)
-    \.(?P<ext>bin|txt)
-    $
-    """,
-    re.VERBOSE,
-)
-
-# Parameters keys: support both
-#   Measurement.AP1.FDIs
-#   Parameters.Measurement.AP1.FDIs
-_FDI_KEY_RE = re.compile(r"^(?:.*\.)?Measurement\.AP(?P<ap>\d+)\.FDIs$")
-_AP_ENABLED_KEY_RE = re.compile(r"^(?:.*\.)?Measurement\.AP(?P<ap>\d+)\.enabled$")
+from rotating_coil_analyzer.models.catalog import MeasurementCatalog, RunSpec, SegmentSpec
 
 
-@dataclass
-class DiscoveryOptions:
-    max_parent_search_depth: int = 2
-    strict: bool = True
+_PARAM_SAMPLES = "Parameters.Measurement.samples"
+_PARAM_SPEED = "Parameters.Measurement.v"
+
+
+@dataclass(frozen=True)
+class _ParsedParameters:
+    samples_per_turn: int
+    shaft_speed_rpm: float
+    enabled_apertures: tuple[int, ...]
+    segments: tuple[SegmentSpec, ...]
+    warnings: tuple[str, ...]
 
 
 class MeasurementDiscovery:
-    def __init__(self, options: Optional[DiscoveryOptions] = None) -> None:
-        self.options = options or DiscoveryOptions()
+    """
+    Phase-1: filesystem discovery + Parameters parsing (strict about having FDIs mapping).
+    No multipoles here; only catalog + file mapping.
+    """
 
-    def locate_parameters(self, selected_dir: Path) -> Path:
-        d = selected_dir.resolve()
-        for _ in range(self.options.max_parent_search_depth + 1):
-            candidate = d / "Parameters.txt"
-            if candidate.exists():
-                return candidate
-            d = d.parent
-        raise FileNotFoundError(
-            f"Parameters.txt not found within {self.options.max_parent_search_depth} parent levels of {selected_dir}"
-        )
+    def __init__(self, max_parent_hops_for_parameters: int = 2) -> None:
+        self._max_hops = int(max_parent_hops_for_parameters)
 
-    def parse_parameters(self, parameters_path: Path) -> Dict[str, Any]:
-        params: Dict[str, Any] = {}
-        for line in parameters_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line or ":" not in line:
-                continue
-            key, val = line.split(":", 1)
-            params[key.strip()] = val.strip()
-        return params
+    def build_catalog(self, selected_folder: Path) -> MeasurementCatalog:
+        p = Path(selected_folder).expanduser().resolve()
 
-    @staticmethod
-    def _parse_bool(v: str) -> bool:
-        s = str(v).strip().lower()
-        return s in ("true", "1", "yes", "y", "on")
+        params_path = self._find_parameters(p)
+        lines = params_path.read_text(encoding="utf-8", errors="replace").splitlines()
 
-    @staticmethod
-    def _parse_table_value(raw: str) -> List[str]:
-        """
-        Accept TABLE{...} with either real tabs/newlines or escaped \\t \\n.
-        Returns list of row strings.
-        """
-        s = str(raw).strip()
-        if not (s.startswith("TABLE{") and s.endswith("}")):
-            raise ValueError(f"FDIs value is not TABLE{{...}}: {s[:80]!r}")
+        parsed = self._parse_parameters(lines)
 
-        inner = s[len("TABLE{") : -1]
-        inner = inner.replace("\\t", "\t").replace("\\n", "\n")
-        rows = [r.strip() for r in inner.splitlines() if r.strip()]
-        return rows
+        # Discover corrected-signal files (.bin) and map to (run_id, segment)
+        seg_files, runs = self._discover_segment_files(p)
 
-    @staticmethod
-    def _split_row(row: str) -> List[str]:
-        """
-        Support either tab-separated or whitespace-separated rows.
-        """
-        if "\t" in row:
-            cols = [c.strip() for c in row.split("\t") if c.strip() != ""]
-        else:
-            cols = [c.strip() for c in re.split(r"\s+", row) if c.strip() != ""]
-        return cols
+        # Strict requirement: we must have segments parsed from Parameters.
+        if len(parsed.segments) == 0:
+            raise ValueError("Strict mode: failed to parse segments from Measurement.AP#.FDIs TABLE{...}.")
 
-    def _discover_fdi_table_keys(self, params: Dict[str, Any]) -> List[Tuple[int, str]]:
-        found: List[Tuple[int, str]] = []
-        for k in params.keys():
-            m = _FDI_KEY_RE.match(k)
-            if m:
-                found.append((int(m.group("ap")), k))
-        found.sort(key=lambda x: x[0])
-        return found
-
-    def _discover_enabled_keys(self, params: Dict[str, Any]) -> Dict[int, str]:
-        enabled: Dict[int, str] = {}
-        for k in params.keys():
-            m = _AP_ENABLED_KEY_RE.match(k)
-            if m:
-                enabled[int(m.group("ap"))] = k
-        return enabled
-
-    def parse_segments(self, params: Dict[str, Any]) -> Tuple[List[int], List[SegmentSpec], List[str]]:
-        warnings: List[str] = []
-        segments: List[SegmentSpec] = []
-
-        fdi_keys = self._discover_fdi_table_keys(params)
-        enabled_keys = self._discover_enabled_keys(params)
-
-        if not fdi_keys:
-            if self.options.strict:
-                keys_hint = [k for k in params.keys() if "FDI" in k or "FDIs" in k or "AP" in k]
-                raise ValueError(
-                    "Strict mode: no Measurement.AP#.FDIs keys found. "
-                    f"Nearby keys: {keys_hint[:40]}"
-                )
-            return [], [], warnings
-
-        # Determine enabled apertures.
-        enabled_apertures: List[int] = []
-        for ap, k_fdi in fdi_keys:
-            k_en = enabled_keys.get(ap)
-            if k_en is None:
-                # Deterministic rule: if FDIs table exists, treat aperture as enabled but warn.
-                enabled_apertures.append(ap)
-                warnings.append(f"AP{ap}: enabled key missing; assuming enabled because {k_fdi} exists.")
-            else:
-                if self._parse_bool(params[k_en]):
-                    enabled_apertures.append(ap)
-
-        if self.options.strict and not enabled_apertures:
-            raise ValueError("Strict mode: no enabled apertures (Measurement.AP#.enabled all false/missing).")
-
-        multi_ap = len(enabled_apertures) > 1
-
-        for ap in enabled_apertures:
-            # Find the FDIs key for this aperture
-            k_fdi = next((k for ap2, k in fdi_keys if ap2 == ap), None)
-            if k_fdi is None:
-                continue
-
-            rows = self._parse_table_value(params[k_fdi])
-
-            for row in rows:
-                cols = self._split_row(row)
-
-                # Accept 3 or 4 columns:
-                # (segment, abs, cmp) or (segment, abs, cmp, length_m)
-                if len(cols) not in (3, 4):
-                    raise ValueError(
-                        f"Strict mode: AP{ap} FDIs row has {len(cols)} columns; expected 3 or 4. Row={row!r}"
-                    )
-
-                seg_name = cols[0]
-                fdi_abs = int(cols[1])
-                fdi_cmp = int(cols[2])
-
-                if len(cols) == 4:
-                    length_m = float(cols[3])
-                else:
-                    length_m = float("nan")
-                    warnings.append(f"AP{ap} segment {seg_name}: length missing in FDIs table; set to NaN.")
-
-                segments.append(
-                    SegmentSpec(
-                        segment=str(seg_name),
-                        fdi_abs=fdi_abs,
-                        fdi_cmp=fdi_cmp,
-                        length_m=length_m,
-                        aperture_id=(ap if multi_ap else None),
-                    )
-                )
-
-        if self.options.strict and not segments:
-            raise ValueError("Strict mode: failed to parse any segments from Measurement.AP#.FDIs TABLE{...}.")
-
-        return enabled_apertures, segments, warnings
-
-    def discover_segment_files(self, root_dir: Path) -> List[Path]:
-        keep: List[Path] = []
-        for ext in ("*.bin", "*.txt"):
-            for p in root_dir.rglob(ext):
-                if _RUN_RE.match(p.name):
-                    keep.append(p)
-        return sorted(keep)
-
-    def build_catalog(self, selected_dir: Path) -> MeasurementCatalog:
-        parameters_path = self.locate_parameters(selected_dir)
-        root_dir = parameters_path.parent
-        params = self.parse_parameters(parameters_path)
-
-        # Required
-        if "Parameters.Measurement.samples" not in params:
-            raise ValueError("Strict mode: missing Parameters.Measurement.samples")
-        samples_per_turn = int(params["Parameters.Measurement.samples"])
-
-        # Optional (may be negative: direction)
-        shaft_speed_rpm = None
-        if "Parameters.Measurement.v" in params:
-            try:
-                shaft_speed_rpm = float(params["Parameters.Measurement.v"])
-            except ValueError:
-                shaft_speed_rpm = None
-
-        enabled_apertures, segments, warn_seg = self.parse_segments(params)
-        files = self.discover_segment_files(root_dir)
-
-        runs: Dict[str, RunDescriptor] = {}
-        segment_files: Dict[Tuple[str, str], Path] = {}
-
-        for f in files:
-            m = _RUN_RE.match(f.name)
-            if not m:
-                continue
-
-            magnet = m.group("magnet")
-            date = m.group("date")
-            time = m.group("time")
-            cycle = m.group("cycle")
-            ap_tok = m.group("ap")
-            seg = m.group("seg")
-
-            aperture_token = int(ap_tok) if ap_tok else None
-            run_id = f"{magnet}_{date}_{time}_{cycle}" + (f"_Ap{aperture_token}" if aperture_token else "")
-
-            if run_id not in runs:
-                runs[run_id] = RunDescriptor(
-                    run_id=run_id,
-                    magnet_name=magnet,
-                    date_yyyymmdd=date,
-                    time_hhmmss=time,
-                    cycle_name=cycle,
-                    aperture_token=aperture_token,
-                )
-
-            segment_files[(run_id, seg)] = f
-
-        channels: List[ChannelSpec] = []
-        for s in segments:
-            channels.append(
-                ChannelSpec(
-                    segment=s.segment,
-                    mode="abs",
-                    fdi_id=s.fdi_abs,
-                    length_m=s.length_m,
-                    aperture_id=s.aperture_id,
-                    aperture_token=None,
-                )
-            )
-            channels.append(
-                ChannelSpec(
-                    segment=s.segment,
-                    mode="cmp",
-                    fdi_id=s.fdi_cmp,
-                    length_m=s.length_m,
-                    aperture_id=s.aperture_id,
-                    aperture_token=None,
-                )
-            )
-
-        if self.options.strict:
-            if not segment_files:
-                raise ValueError(
-                    "Strict mode: no corr_sigs files found matching expected pattern "
-                    "(check filenames or broaden discovery for this measurement type)."
-                )
+        warnings = list(parsed.warnings)
+        if len(seg_files) == 0:
+            warnings.append("No corr_sigs *.bin files discovered under selected folder.")
 
         return MeasurementCatalog(
-            root_dir=root_dir,
-            parameters_path=parameters_path,
-            parameters=params,
+            root_dir=p,
+            parameters_path=params_path,
+            samples_per_turn=parsed.samples_per_turn,
+            shaft_speed_rpm=parsed.shaft_speed_rpm,
+            enabled_apertures=parsed.enabled_apertures,
+            segments=parsed.segments,
+            runs=tuple(RunSpec(r) for r in sorted(runs)),
+            segment_files=seg_files,
+            warnings=tuple(warnings),
+        )
+
+    def _find_parameters(self, selected_folder: Path) -> Path:
+        cur = selected_folder
+        for _ in range(self._max_hops + 1):
+            candidate = cur / "Parameters.txt"
+            if candidate.exists() and candidate.is_file():
+                return candidate
+            if cur.parent == cur:
+                break
+            cur = cur.parent
+        raise FileNotFoundError(f"Parameters.txt not found in {selected_folder} or up to {self._max_hops} parent folders.")
+
+    def _parse_parameters(self, lines: list[str]) -> _ParsedParameters:
+        kv: dict[str, str] = {}
+        for ln in lines:
+            if ":" not in ln:
+                continue
+            k, v = ln.split(":", 1)
+            kv[k.strip()] = v.strip()
+
+        warnings: list[str] = []
+
+        # samples_per_turn
+        if _PARAM_SAMPLES not in kv:
+            raise ValueError(f"Missing {_PARAM_SAMPLES} in Parameters.txt")
+        samples_per_turn = int(float(kv[_PARAM_SAMPLES]))
+
+        # shaft speed (can be negative -> take sign elsewhere later, but store the numeric)
+        if _PARAM_SPEED not in kv:
+            raise ValueError(f"Missing {_PARAM_SPEED} in Parameters.txt")
+        shaft_speed_rpm = float(kv[_PARAM_SPEED])
+
+        # enabled apertures
+        enabled: list[int] = []
+        for ap in (1, 2, 3, 4):
+            k = f"Measurement.AP{ap}.enabled"
+            if k in kv and kv[k].lower() == "true":
+                enabled.append(ap)
+        if len(enabled) == 0:
+            # If not specified, assume single aperture AP1 enabled (common legacy behavior)
+            enabled = [1]
+            warnings.append("No Measurement.AP#.enabled flags found; assuming AP1 enabled.")
+
+        # segments from Measurement.AP#.FDIs: TABLE{...}
+        segs: list[SegmentSpec] = []
+        for ap in enabled:
+            table_key = f"Measurement.AP{ap}.FDIs"
+            if table_key not in kv:
+                warnings.append(f"Missing {table_key}; no segments parsed for AP{ap}.")
+                continue
+            table_str = kv[table_key]
+            segs_ap, w_ap = self._parse_fdis_table(ap, table_str)
+            segs.extend(segs_ap)
+            warnings.extend(w_ap)
+
+        return _ParsedParameters(
             samples_per_turn=samples_per_turn,
             shaft_speed_rpm=shaft_speed_rpm,
-            enabled_apertures=enabled_apertures,
-            segments=segments,
-            channels=channels,
-            runs=sorted(runs.values(), key=lambda r: r.run_id),
-            segment_files=segment_files,
-            warnings=warn_seg,
+            enabled_apertures=tuple(enabled),
+            segments=tuple(segs),
+            warnings=tuple(warnings),
         )
+
+    def _parse_fdis_table(self, ap: int, table_str: str) -> tuple[list[SegmentSpec], list[str]]:
+        """
+        Supports both formats:
+
+        (A) with length:
+            TABLE{NCS\t0\t1\t0.47\nCS\t2\t3\t0.47}
+
+        (B) without length:
+            TABLE{1\t0\t1\n2\t2\t3\n...}
+
+        Returns SegmentSpec(aperture_id=ap, segment=<token0>, fdi_abs=<token1>, fdi_cmp=<token2>, length_m=<optional>).
+        """
+        warnings: list[str] = []
+        m = re.search(r"TABLE\s*\{(.*)\}\s*$", table_str)
+        if not m:
+            return [], [f"AP{ap}: FDIs entry is not a TABLE{{...}}: {table_str!r}"]
+
+        body = m.group(1)
+        rows = body.split("\\n")
+        out: list[SegmentSpec] = []
+
+        for r in rows:
+            r = r.strip()
+            if not r:
+                continue
+            # Accept both tab and spaces
+            parts = re.split(r"[\t ]+", r)
+            if len(parts) < 3:
+                warnings.append(f"AP{ap}: malformed FDIs row (need >=3 fields): {r!r}")
+                continue
+
+            seg_name = str(parts[0])
+            try:
+                fdi_abs = int(float(parts[1]))
+                fdi_cmp = int(float(parts[2]))
+            except Exception:
+                warnings.append(f"AP{ap}: cannot parse FDIs indices in row: {r!r}")
+                continue
+
+            length_m: Optional[float] = None
+            if len(parts) >= 4:
+                try:
+                    length_m = float(parts[3])
+                except Exception:
+                    length_m = None
+                    warnings.append(f"AP{ap} segment {seg_name}: length present but not numeric; set to None.")
+            else:
+                warnings.append(f"AP{ap} segment {seg_name}: length missing in FDIs table; set to None.")
+
+            out.append(SegmentSpec(aperture_id=ap, segment=seg_name, fdi_abs=fdi_abs, fdi_cmp=fdi_cmp, length_m=length_m))
+
+        return out, warnings
+
+    def _discover_segment_files(self, selected_folder: Path) -> tuple[dict[tuple[str, str], Path], set[str]]:
+        """
+        Maps corr_sigs files:
+          <run>_corr_sigs_Ap_1_SegCS.bin
+          <run>_corr_sigs_Ap_1_Seg2.bin
+        to keys: (run_id, segment)
+
+        run_id keeps a suffix "_Ap1" if Ap_1 is present.
+        """
+        seg_files: dict[tuple[str, str], Path] = {}
+        runs: set[str] = set()
+
+        rx = re.compile(r"^(?P<run>.+?)_corr_sigs_(?:(?P<ap>Ap_\d+)_)?Seg(?P<seg>[^.]+)\.bin$", re.IGNORECASE)
+
+        for f in selected_folder.glob("*.bin"):
+            m = rx.match(f.name)
+            if not m:
+                continue
+            run = m.group("run")
+            ap = m.group("ap")
+            seg = m.group("seg")
+
+            run_id = run
+            if ap is not None:
+                run_id = f"{run}_Ap{ap.split('_')[1]}"
+
+            runs.add(run_id)
+            seg_files[(run_id, str(seg))] = f
+
+        return seg_files, runs
