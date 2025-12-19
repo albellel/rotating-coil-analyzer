@@ -16,8 +16,7 @@ def _parse_kv_parameters(path: Path) -> Dict[str, str]:
     """
     Minimal Parameters.txt parser.
 
-    The SM18 Parameters.txt often contains TABLE{...} payloads where \t and \n are *escaped*
-    (i.e. literal backslash characters). We keep values raw here and decode TABLE payloads later.
+    Preserves raw values. TABLE payloads are decoded in _parse_table().
     """
     d: Dict[str, str] = {}
     for raw_line in path.read_text(errors="ignore").splitlines():
@@ -31,54 +30,59 @@ def _parse_kv_parameters(path: Path) -> Dict[str, str]:
     return d
 
 
-def _get_str(d: Dict[str, str], key: str, default: Optional[str] = None) -> Optional[str]:
-    return d.get(key, default)
-
-
-def _get_int(d: Dict[str, str], key: str, default: Optional[int] = None) -> Optional[int]:
-    v = d.get(key, None)
+def _parse_bool(v: Optional[str], default: bool = False) -> bool:
     if v is None:
         return default
-    try:
-        return int(str(v).strip())
-    except Exception:
-        return default
-
-
-def _get_float(d: Dict[str, str], key: str, default: Optional[float] = None) -> Optional[float]:
-    v = d.get(key, None)
-    if v is None:
-        return default
-    try:
-        return float(str(v).strip())
-    except Exception:
-        return default
-
-
-def _get_bool(d: Dict[str, str], key: str, default: Optional[bool] = None) -> Optional[bool]:
-    v = d.get(key, None)
-    if v is None:
-        return default
-    s = str(v).strip().lower()
-    if s in _BOOL_TRUE:
+    vv = v.strip().lower()
+    if vv in _BOOL_TRUE:
         return True
-    if s in _BOOL_FALSE:
+    if vv in _BOOL_FALSE:
         return False
     return default
 
 
+def _parse_int(v: Optional[str], default: int) -> int:
+    if v is None:
+        return default
+    try:
+        return int(float(v.strip()))
+    except Exception:
+        return default
+
+
+def _parse_float(v: Optional[str], default: float) -> float:
+    if v is None:
+        return default
+    try:
+        return float(v.strip())
+    except Exception:
+        return default
+
+
+def find_parameters_txt(selected_dir: Path, max_up: int = 2) -> Path:
+    """
+    Search Parameters.txt in selected_dir or up to max_up parent levels.
+    Returns the first match (nearest to selected_dir).
+    """
+    p = Path(selected_dir).expanduser().resolve()
+    for k in range(max_up + 1):
+        cand = p / "Parameters.txt"
+        if cand.exists() and cand.is_file():
+            return cand
+        if p.parent == p:
+            break
+        p = p.parent
+    raise FileNotFoundError(f"Parameters.txt not found in '{selected_dir}' or up to {max_up} parent levels.")
+
+
 def _decode_table_payload(payload: str) -> str:
     """
-    Decode a TABLE payload that may contain escaped '\t' and '\n' sequences.
-    We intentionally do NOT attempt to "fix" malformed payloads; strict mode will fail.
+    Decode TABLE payload that may contain escaped sequences like '\\t' and '\\n'.
+    Also accept payloads that already contain real tabs/newlines.
     """
-    # Convert literal backslash sequences to actual control characters.
-    # Example in Parameters.txt: "TABLE{1\\t0\\t1\\n2\\t2\\t3}"
-    try:
-        return payload.encode("utf-8").decode("unicode_escape")
-    except Exception:
-        # Fallback: minimal replacements
-        return payload.replace("\\t", "\t").replace("\\n", "\n")
+    # Convert escaped backslash sequences to actual characters
+    payload = payload.replace("\\t", "\t").replace("\\n", "\n").replace("\\r", "\n")
+    return payload
 
 
 def _parse_table(value: str) -> List[List[str]]:
@@ -86,125 +90,96 @@ def _parse_table(value: str) -> List[List[str]]:
     Parse a Parameters TABLE{...} into rows/columns (tab-separated, newline-separated).
 
     Accepts both:
-      - TABLE{1\t0\t1\n2\t2\t3}   (escaped)
+      - TABLE{1\\t0\\t1\\n2\\t2\\t3}   (escaped)
       - TABLE{...} where the payload already contains real newlines/tabs
     """
     m = re.match(r"^TABLE\{(.*)\}\s*$", value, flags=re.DOTALL)
     if not m:
         raise ValueError(f"Not a TABLE{{...}} value: {value[:60]}...")
-    payload = _decode_table_payload(m.group(1))
+    payload = _decode_table_payload(m.group(1).strip())
     rows = [r for r in payload.splitlines() if r.strip()]
     return [r.split("\t") for r in rows]
+
+
+def _segment_sort_key(seg_id: str) -> Tuple[int, str]:
+    """
+    Sort numeric segment ids numerically, then fallback to lexical for non-numeric.
+    """
+    try:
+        return (0, f"{int(seg_id):06d}")
+    except Exception:
+        return (1, seg_id)
 
 
 @dataclass
 class MeasurementDiscovery:
     """
     Phase-1 discovery: build a catalog for a measurement folder.
+
+    STRICT POLICY (per your requirement): no degraded mode
+      - Parameters.txt must be found (selected folder or up to 2 parents)
+      - Measurement.AP*.FDIs table must parse for enabled apertures
+      - We do not invent segments from filenames if Parameters do not define them
     """
     strict: bool = True
 
-    # Keep this method name: the GUI expects it.
-    def build_catalog(self, root_dir: str | Path) -> MeasurementCatalog:
-        root = Path(root_dir).expanduser().resolve()
-        if not root.exists() or not root.is_dir():
-            raise FileNotFoundError(f"Folder not found or not a directory: {root}")
+    def build_catalog(self, selected_dir: str | Path) -> MeasurementCatalog:
+        selected = Path(selected_dir).expanduser().resolve()
+        if not selected.exists() or not selected.is_dir():
+            raise FileNotFoundError(f"Not a directory: {selected}")
 
-        params_path = root / "Parameters.txt"
-        if not params_path.exists():
-            raise FileNotFoundError(f"Parameters.txt not found in: {root}")
+        parameters_path = find_parameters_txt(selected, max_up=2)
+        parameters_root = parameters_path.parent
+        params = _parse_kv_parameters(parameters_path)
 
-        d = _parse_kv_parameters(params_path)
         warnings: List[str] = []
 
-        Ns = _get_int(d, "Parameters.Measurement.samples", None)
-        if Ns is None or Ns <= 0:
-            raise ValueError("Missing or invalid Parameters.Measurement.samples (samples per turn).")
+        samples_per_turn = _parse_int(params.get("Parameters.Measurement.samples"), default=512)
+        shaft_speed_rpm = _parse_float(params.get("Parameters.Measurement.v"), default=60.0)
 
-        # 'v' can be negative (direction). We keep the sign in catalog, but downstream timing uses |v|.
-        v_rpm = _get_float(d, "Parameters.Measurement.v", None)
-        if v_rpm is None:
-            raise ValueError("Missing Parameters.Measurement.v (shaft speed, rpm).")
-
-        # Determine enabled apertures
         enabled_aps: List[int] = []
-        for ap in (1, 2):
-            key = f"Measurement.AP{ap}.enabled"
-            b = _get_bool(d, key, None)
-            if b is True:
-                enabled_aps.append(ap)
-        if not enabled_aps:
-            # Some datasets omit Measurement.AP#.enabled. In strict mode, raise.
-            if self.strict:
-                raise ValueError("No enabled apertures found (Measurement.AP#.enabled).")
-            warnings.append("No enabled apertures found; defaulting to [1].")
-            enabled_aps = [1]
+        # If keys missing: default AP1 enabled, AP2 disabled.
+        ap1_en = _parse_bool(params.get("Measurement.AP1.enabled"), default=True)
+        ap2_en = _parse_bool(params.get("Measurement.AP2.enabled"), default=False)
+        if ap1_en:
+            enabled_aps.append(1)
+        if ap2_en:
+            enabled_aps.append(2)
 
-        # Parse segment table(s) from enabled apertures. In Phase-1 we only need segment IDs and FDIs.
         segments: List[SegmentSpec] = []
         for ap in enabled_aps:
             key = f"Measurement.AP{ap}.FDIs"
-            raw = _get_str(d, key, None)
-            if raw is None:
-                if self.strict:
-                    raise ValueError(f"Strict mode: failed to parse segments from {key} (key missing).")
-                warnings.append(f"{key} missing; no segments for AP{ap}.")
-                continue
-
-            try:
-                rows = _parse_table(raw)
-            except Exception as e:
-                if self.strict:
-                    raise ValueError(f"Strict mode: failed to parse segments from {key} TABLE{{...}}.") from e
-                warnings.append(f"{key} parse failed: {e}")
-                continue
-
-            for r in rows:
-                # Allowed: 3 columns (segment, abs_fdi, cmp_fdi) or 4 columns (+length)
-                if len(r) < 3:
-                    if self.strict:
-                        raise ValueError(f"{key} row has <3 columns: {r!r}")
-                    warnings.append(f"{key} row has <3 columns; skipped: {r!r}")
-                    continue
-
-                seg_id = str(r[0]).strip()
-                try:
-                    fdi_abs = int(str(r[1]).strip())
-                    fdi_cmp = int(str(r[2]).strip())
-                except Exception as e:
-                    if self.strict:
-                        raise ValueError(f"{key} row has non-integer FDI indices: {r!r}") from e
-                    warnings.append(f"{key} row has non-integer FDI indices; skipped: {r!r}")
-                    continue
-
+            if key not in params:
+                raise ValueError(f"Missing required key '{key}' in Parameters.txt")
+            table = _parse_table(params[key])  # may raise (strict)
+            for row in table:
+                if len(row) < 3:
+                    raise ValueError(f"Malformed {key} row (need >=3 columns): {row}")
+                seg_id = row[0].strip()
+                fdi_abs = int(float(row[1]))
+                fdi_cmp = int(float(row[2]))
                 length_m: Optional[float] = None
-                if len(r) >= 4 and str(r[3]).strip():
+                if len(row) >= 4 and row[3].strip() != "":
                     try:
-                        length_m = float(str(r[3]).strip())
+                        length_m = float(row[3])
                     except Exception:
                         length_m = None
+                        warnings.append(f"AP{ap} seg {seg_id}: could not parse length '{row[3]}', set None")
+                segments.append(SegmentSpec(aperture_id=ap, segment_id=seg_id, fdi_abs=fdi_abs, fdi_cmp=fdi_cmp, length_m=length_m))
 
-                if len(r) < 4:
-                    warnings.append(f"AP{ap} segment {seg_id}: length missing in FDIs table; set to None.")
-
-                segments.append(SegmentSpec(segment_id=seg_id, fdi_abs=fdi_abs, fdi_cmp=fdi_cmp, length_m=length_m))
-
-        if not segments and self.strict:
-            raise ValueError("Strict mode: no segments parsed from any enabled aperture FDIs tables.")
-
-        # Discover segment files
-        segment_files: Dict[Tuple[str, str], Path] = {}
-        run_ids: set[str] = set()
-
+        # Scan for segment files (bin/txt/csv), include both corr_sigs and generic_corr_sigs.
         # Typical filename:
         #   <run_id>_corr_sigs_Ap_<ap>_Seg<seg>.bin
-        # Some exports can be ASCII (txt/csv). Accept those too.
+        #   <run_id>_generic_corr_sigs_Ap_<ap>_Seg<seg>.bin
         pat = re.compile(
-            r"^(?P<run>.+?)_corr_sigs_Ap_(?P<ap>\d+)_Seg(?P<seg>[^.]+)\.(?P<ext>bin|txt|csv)$",
+            r"^(?P<run>.+?)_(?:(?P<generic>generic)_)?corr_sigs_Ap_(?P<ap>\d+)_Seg(?P<seg>[^.]+)\.(?P<ext>bin|txt|csv)$",
             re.IGNORECASE,
         )
 
-        for p in root.rglob("*"):
+        segment_files: Dict[Tuple[str, int, str], Path] = {}
+        run_ids: set[str] = set()
+
+        for p in parameters_root.rglob("*"):
             if not p.is_file():
                 continue
             if p.suffix.lower() not in {".bin", ".txt", ".csv"}:
@@ -216,33 +191,59 @@ class MeasurementDiscovery:
             if ap not in enabled_aps:
                 continue
             run_id = m.group("run")
-            seg = m.group("seg")
+            seg_id = m.group("seg")
+
+            key = (run_id, ap, seg_id)
+
+            # If multiple files for the same key, prefer:
+            # 1) .bin over .txt/.csv
+            # 2) non-generic over generic
+            prev = segment_files.get(key)
+            if prev is None:
+                segment_files[key] = p
+            else:
+                prev_ext = prev.suffix.lower()
+                new_ext = p.suffix.lower()
+                prev_is_bin = prev_ext == ".bin"
+                new_is_bin = new_ext == ".bin"
+                prev_is_generic = ("_generic_corr_sigs_" in prev.name.lower())
+                new_is_generic = ("_generic_corr_sigs_" in p.name.lower())
+
+                choose_new = False
+                if (not prev_is_bin) and new_is_bin:
+                    choose_new = True
+                elif prev_is_bin == new_is_bin:
+                    # same "bin-ness": prefer non-generic
+                    if prev_is_generic and (not new_is_generic):
+                        choose_new = True
+
+                if choose_new:
+                    segment_files[key] = p
+
             run_ids.add(run_id)
-            segment_files[(run_id, seg)] = p
-
-        # If Parameters.txt did not list some segments (e.g. generic corr_sigs),
-        # still expose them in the GUI by augmenting the segments list.
-        seg_ids_from_params = {s.segment_id for s in segments}
-        seg_ids_from_files = {seg for (_run, seg) in segment_files.keys()}
-        missing = sorted(seg_ids_from_files - seg_ids_from_params)
-        for seg_id in missing:
-            segments.append(SegmentSpec(segment_id=seg_id, fdi_abs=None, fdi_cmp=None, length_m=None))
-
-        # Keep a deterministic order
-        segments = sorted(segments, key=lambda s: (str(s.segment_id)))
 
         runs = sorted(run_ids)
 
-        if not runs and self.strict:
-            raise FileNotFoundError(
-                "Strict mode: no *_corr_sigs_*.(bin|txt|csv) files found under the selected folder."
-            )
+        # Strict: warn about files for segments not defined in Parameters (do not invent SegmentSpec).
+        defined = {(s.aperture_id, s.segment_id) for s in segments}
+        extras = []
+        for (run_id, ap, seg_id), p in segment_files.items():
+            if (ap, seg_id) not in defined:
+                extras.append((run_id, ap, seg_id, p.name))
+        if extras:
+            warnings.append("Found segment files not defined in Parameters.AP*.FDIs (ignored by UI selection):")
+            for run_id, ap, seg_id, name in extras[:20]:
+                warnings.append(f"  run={run_id} ap={ap} seg={seg_id} file={name}")
+
+        # Sort segments
+        segments = sorted(segments, key=lambda s: (s.aperture_id, _segment_sort_key(s.segment_id)))
 
         return MeasurementCatalog(
-            root_dir=root,
-            parameters_path=params_path,
-            samples_per_turn=int(Ns),
-            shaft_speed_rpm=float(v_rpm),
+            root_dir=selected,
+            parameters_path=parameters_path,
+            parameters_root=parameters_root,
+            samples_per_turn=int(samples_per_turn),
+            shaft_speed_rpm=float(shaft_speed_rpm),
             enabled_apertures=enabled_aps,
             segments=segments,
             runs=runs,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import ipywidgets as w
@@ -16,9 +16,21 @@ from rotating_coil_analyzer.ingest.readers_sm18 import Sm18CorrSigsReader, Sm18R
 _ACTIVE_GUI: Optional[w.Widget] = None
 
 
+def _close_all_figures() -> None:
+    try:
+        plt.close("all")
+    except Exception:
+        pass
+
+
 def build_catalog_gui() -> w.Widget:
     """
     Phase-1 catalog/preview GUI (Jupyter / VSCode notebooks).
+
+    Notes on "widget multiplication":
+      - This function closes the previous GUI instance created from this module.
+      - If the notebook cell output itself is duplicated, use the notebook UI "Clear Outputs"
+        for that cell, then re-run.
     """
     global _ACTIVE_GUI
 
@@ -34,41 +46,76 @@ def build_catalog_gui() -> w.Widget:
 
     folder = w.Text(
         description="Folder",
-        placeholder=".../aperture1",
+        placeholder=".../aperture1 (or any folder under the run; Parameters.txt may be above)",
         layout=w.Layout(width="80%"),
     )
     btn_browse = w.Button(description="Browse…", layout=w.Layout(width="120px"))
     btn_load = w.Button(description="Load Catalog", button_style="primary", layout=w.Layout(width="140px"))
 
-    dd_run = w.Dropdown(options=[], description="Run", layout=w.Layout(width="320px"))
-    dd_segment = w.Dropdown(options=[], description="Segment", layout=w.Layout(width="240px"))
-    dd_mode = w.Dropdown(options=[("abs", "abs"), ("cmp", "cmp")], value="abs", description="Mode", layout=w.Layout(width="220px"))
+    dd_run = w.Dropdown(options=[], description="Run", layout=w.Layout(width="360px"))
+    dd_ap = w.Dropdown(options=[], description="Aperture", layout=w.Layout(width="200px"))
+    dd_segment = w.Dropdown(options=[], description="Segment", layout=w.Layout(width="220px"))
 
-    btn_preview = w.Button(description="Preview", button_style="", layout=w.Layout(width="120px"))
-    btn_diag = w.Button(description="Diagnostics", button_style="warning", layout=w.Layout(width="140px"))
+    mode_dd = w.Dropdown(description="Mode", options=[("abs", "abs"), ("cmp", "cmp")], value="abs")
+    btn_preview = w.Button(description="Preview", button_style="")
+    btn_diag = w.Button(description="Diagnostics", button_style="warning")
 
-    # Diagnostics parameters
-    alpha_jump = w.FloatText(value=10.0, description="α jump", layout=w.Layout(width="220px"))
-    tol_turn = w.FloatText(value=1.0, description="Turn tol %", layout=w.Layout(width="220px"))
-
-    header = w.HBox([folder, btn_browse, btn_load])
-    row2 = w.HBox([dd_run, dd_segment, dd_mode, btn_preview, btn_diag])
-    row3 = w.HBox([alpha_jump, tol_turn])
-
-    gui = w.VBox([header, row2, row3, out])
-    _ACTIVE_GUI = gui
-
-    # State
     state = {"catalog": None}
 
-    def _print_catalog_debug(cat) -> None:
+    def _browse_for_folder() -> Optional[str]:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            picked = filedialog.askdirectory(title="Select measurement folder")
+            root.destroy()
+            return picked or None
+        except Exception:
+            return None
+
+    def _refresh_dropdowns():
+        cat = state["catalog"]
+        if cat is None:
+            dd_run.options = []
+            dd_ap.options = []
+            dd_segment.options = []
+            return
+
+        dd_run.options = [(r, r) for r in cat.runs]
+        if cat.runs:
+            dd_run.value = cat.runs[0]
+
+        dd_ap.options = [(("AP" + str(ap)) if ap is not None else "AP (single)", ap) for ap in cat.logical_apertures]
+        dd_ap.value = cat.logical_apertures[0]
+
+        segs = cat.segments_for_aperture(dd_ap.value)
+        dd_segment.options = [(s.segment_id, s.segment_id) for s in segs]
+        if segs:
+            dd_segment.value = segs[0].segment_id
+
+    def _on_ap_change(_change):
+        cat = state["catalog"]
+        if cat is None:
+            return
+        segs = cat.segments_for_aperture(dd_ap.value)
+        dd_segment.options = [(s.segment_id, s.segment_id) for s in segs]
+        if segs:
+            dd_segment.value = segs[0].segment_id
+
+    dd_ap.observe(_on_ap_change, names="value")
+
+    def _print_catalog(cat):
         print("=== CATALOG DEBUG ===")
-        print("root_dir:", str(cat.root_dir))
+        print("selected root_dir:", str(cat.root_dir))
         print("Parameters.txt:", str(cat.parameters_path))
+        print("parameters_root:", str(cat.parameters_root))
         print("samples_per_turn:", cat.samples_per_turn)
         print("shaft_speed_rpm:", cat.shaft_speed_rpm)
         print("enabled_apertures:", cat.enabled_apertures)
-        print("segments:", [(s.segment_id, s.fdi_abs, s.fdi_cmp, s.length_m) for s in cat.segments])
+        print("segments:", [(s.aperture_id, s.segment_id, s.fdi_abs, s.fdi_cmp, s.length_m) for s in cat.segments])
         print("runs_found:", len(cat.runs))
         print("segment_files_found:", len(cat.segment_files))
         if cat.warnings:
@@ -84,190 +131,133 @@ def build_catalog_gui() -> w.Widget:
         t = df["t"].to_numpy()
         y = df[ycol].to_numpy()
 
+        _close_all_figures()
+
         plt.figure()
         plt.plot(t, y)
         plt.title(f"{title_prefix} — first {n_show_turns} turns")
         plt.xlabel("t [s]")
-        plt.ylabel(f"{ycol} (selected channel)")
+        plt.ylabel(ycol)
         plt.show()
 
-        plt.figure()
-        plt.plot(t, df["I"].to_numpy())
-        plt.title(f"{title_prefix} current — first {n_show_turns} turns")
-        plt.xlabel("t [s]")
-        plt.ylabel("I [A]")
-        plt.show()
+        if "I" in df.columns:
+            plt.figure()
+            plt.plot(t, df["I"].to_numpy())
+            plt.title(f"{title_prefix} current — first {n_show_turns} turns")
+            plt.xlabel("t [s]")
+            plt.ylabel("I")
+            plt.show()
 
-    def _time_discontinuity_diag(seg_frame, alpha: float) -> None:
-        Ns = seg_frame.samples_per_turn
-        t = seg_frame.df["t"].to_numpy()
-        dt = np.diff(t)
-        dt_med = float(np.median(dt)) if dt.size else float("nan")
-        thr = float(alpha) * dt_med
+    def _plot_all_columns_vs_time(seg_frame) -> None:
+        df = seg_frame.df
+        t = df["t"].to_numpy()
+        n = len(df)
+        stride = max(1, n // 250_000)
+        _close_all_figures()
+        for col in df.columns:
+            if col == "t":
+                continue
+            plt.figure()
+            plt.plot(t[::stride], df[col].to_numpy()[::stride])
+            plt.title(f"{seg_frame.segment}: {col} vs t (stride={stride})")
+            plt.xlabel("t [s]")
+            plt.ylabel(col)
+            plt.show()
 
-        idx = np.where(dt > thr)[0]
-        print("\n=== TIME DISCONTINUITY DIAGNOSTICS (Phase-1 quick tool) ===")
-        print(f"segment: {seg_frame.segment} | run: {seg_frame.run_id}")
-        print(f"samples_per_turn: {Ns}")
-        print(f"dt median={dt_med:.6g} s, threshold={alpha:.6g}*median={thr:.6g} s")
-        print(f"n discontinuities: {int(idx.size)}")
-        for k, i in enumerate(idx[:30]):
-            turn = int(i // Ns) + 1
-            within = int(i % Ns)
-            print(f"[{k}] i={int(i)} -> i+1={int(i+1)} | dt={float(dt[i]):.6g} s | "
-                  f"t[i]={float(t[i]):.6g} s, t[i+1]={float(t[i+1]):.6g} s | "
-                  f"turn={turn} (0-based {turn-1}), within_turn={within}")
-
-    def _turn_duration_qc(seg_frame, tol_percent: float) -> None:
-        Ns = seg_frame.samples_per_turn
-        t0 = seg_frame.df["t"].to_numpy()[::Ns]
-        if t0.size < 2:
-            print("\n=== TURN DURATION QC (Phase-1 quick tool) ===")
-            print("Not enough turns.")
-            return
-        T = np.diff(t0)
-        Tmed = float(np.median(T))
-        tol = float(tol_percent) / 100.0
-        bad = np.where(np.abs(T / Tmed - 1.0) > tol)[0]  # 0-based turn indices (between starts)
-        print("\n=== TURN DURATION QC (Phase-1 quick tool) ===")
-        print(f"median(T)={Tmed:.6g} s, tolerance=±{tol_percent:.6g}%")
-        print(f"n bad turns: {int(bad.size)}")
-        if bad.size:
-            # Report in 1-based turn numbers (turn k refers to interval between start[k-1] and start[k])
-            bad1 = (bad + 1).astype(int)
-            print("bad turns (1-based):", bad1[:200].tolist())
-
-    def _browse(_btn) -> None:
-        # Best-effort directory browser for local environments.
+    def _on_browse(_):
+        picked = _browse_for_folder()
         with out:
-            out.clear_output()
-            print("=== INPUT DEBUG ===")
-            try:
-                import tkinter as tk
-                from tkinter import filedialog
-                root = tk.Tk()
-                root.withdraw()
-                p = filedialog.askdirectory()
-                if p:
-                    folder.value = p
-                print("selected:", folder.value)
-            except Exception as e:
-                print("Browse failed (tkinter unavailable). Please paste the path manually.")
-                print("error:", repr(e))
+            out.clear_output(wait=True)
+            if picked is None:
+                print("Browse failed (headless environment). Please paste the folder path manually.")
+                return
+            folder.value = picked
+            print(f"Selected folder: {picked}")
 
-    def _load_catalog(_btn) -> None:
+    def _on_load(_):
         with out:
-            out.clear_output()
-            print("=== INPUT DEBUG ===")
-            root = Path(folder.value).expanduser()
-            print("selected:", str(root))
-            print("exists:", root.exists(), "is_dir:", root.is_dir())
-
+            out.clear_output(wait=True)
             try:
-                disc = MeasurementDiscovery(strict=True)
-                cat = disc.build_catalog(root)
+                p = Path(folder.value).expanduser()
+                print("=== INPUT DEBUG ===")
+                print("selected:", p)
+                print("exists:", p.exists(), "is_dir:", p.is_dir())
+
+                cat = MeasurementDiscovery(strict=True).build_catalog(p)
                 state["catalog"] = cat
-                _print_catalog_debug(cat)
 
-                # Populate dropdowns
-                dd_run.options = cat.runs
-                dd_run.value = cat.runs[0] if cat.runs else None
-
-                seg_ids = [s.segment_id for s in cat.segments]
-                # Some measurements define segments in Parameters but files may not exist for all.
-                dd_segment.options = seg_ids
-                dd_segment.value = seg_ids[0] if seg_ids else None
+                _print_catalog(cat)
+                _refresh_dropdowns()
 
             except Exception as e:
                 print("ERROR:", repr(e))
 
-    def _preview(_btn) -> None:
+    def _read_selected_segment():
+        cat = state["catalog"]
+        if cat is None:
+            raise RuntimeError("Load a catalog first.")
+
+        run_id = dd_run.value
+        ap_ui = dd_ap.value
+        seg_id = dd_segment.value
+
+        fpath = cat.get_segment_file(run_id, ap_ui, seg_id)
+        ap_phys = cat.resolve_aperture(ap_ui)
+
+        cfg = Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5)
+        reader = Sm18CorrSigsReader(cfg)
+        seg_frame = reader.read(
+            fpath,
+            run_id=run_id,
+            segment=str(seg_id),
+            samples_per_turn=cat.samples_per_turn,
+            shaft_speed_rpm=cat.shaft_speed_rpm,
+            aperture_id=ap_phys,
+        )
+        return cat, fpath, seg_frame
+
+    def _on_preview(_):
         with out:
-            out.clear_output()
-            cat = state.get("catalog", None)
-            if cat is None:
-                print("No catalog loaded. Click 'Load Catalog' first.")
-                return
-
-            run_id = dd_run.value
-            seg = dd_segment.value
-            mode = dd_mode.value
-
-            print("=== PREVIEW DEBUG ===")
+            out.clear_output(wait=True)
             try:
-                fpath = cat.get_segment_file(run_id, seg)
+                cat, fpath, seg_frame = _read_selected_segment()
+                print("=== PREVIEW DEBUG ===")
+                print("file:", fpath)
+                for msg in seg_frame.warnings:
+                    print("CHECK:", msg)
+                display(seg_frame.df.head(12))
+
+                ycol = "df_abs" if mode_dd.value == "abs" else "df_cmp"
+                title = f"AP{seg_frame.aperture_id} Seg{seg_frame.segment} {mode_dd.value}"
+                _plot_first_turns(seg_frame, ycol=ycol, title_prefix=title)
+
             except Exception as e:
                 print("ERROR:", repr(e))
-                return
-            print("file:", str(fpath))
 
-            # Reader is STRICT: will raise if time is not strictly increasing or dt is inconsistent.
-            reader = Sm18CorrSigsReader(Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=4))
-            try:
-                seg_frame = reader.read(
-                    fpath,
-                    run_id=run_id,
-                    segment=seg,
-                    samples_per_turn=cat.samples_per_turn,
-                    shaft_speed_rpm=cat.shaft_speed_rpm,
-                )
-            except Exception as e:
-                print("ERROR:", repr(e))
-                return
-
-            for msg in seg_frame.warnings:
-                print("CHECK:", msg)
-
-            # Show first rows
-            display(seg_frame.df.head(10))
-
-            # Plot
-            ycol = "df_abs" if mode == "abs" else "df_cmp"
-            _plot_first_turns(seg_frame, ycol=ycol, title_prefix=f"{seg} {mode}")
-
-    def _diagnostics(_btn) -> None:
+    def _on_diag(_):
         with out:
-            out.clear_output()
-            cat = state.get("catalog", None)
-            if cat is None:
-                print("No catalog loaded. Click 'Load Catalog' first.")
-                return
-
-            run_id = dd_run.value
-            seg = dd_segment.value
-            mode = dd_mode.value
-
-            print("=== DIAGNOSTICS DEBUG ===")
+            out.clear_output(wait=True)
             try:
-                fpath = cat.get_segment_file(run_id, seg)
+                cat, fpath, seg_frame = _read_selected_segment()
+                print("=== DIAGNOSTICS DEBUG ===")
+                print("file:", fpath)
+                for msg in seg_frame.warnings:
+                    print("CHECK:", msg)
+
+                print("\n=== PLOT ALL COLUMNS VS TIME (decimated) ===")
+                _plot_all_columns_vs_time(seg_frame)
+
             except Exception as e:
                 print("ERROR:", repr(e))
-                return
-            print("file:", str(fpath))
 
-            reader = Sm18CorrSigsReader(Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=4))
-            try:
-                seg_frame = reader.read(
-                    fpath,
-                    run_id=run_id,
-                    segment=seg,
-                    samples_per_turn=cat.samples_per_turn,
-                    shaft_speed_rpm=cat.shaft_speed_rpm,
-                )
-            except Exception as e:
-                print("ERROR:", repr(e))
-                return
+    btn_browse.on_click(_on_browse)
+    btn_load.on_click(_on_load)
+    btn_preview.on_click(_on_preview)
+    btn_diag.on_click(_on_diag)
 
-            for msg in seg_frame.warnings:
-                print("CHECK:", msg)
+    top = w.HBox([folder, btn_browse, btn_load])
+    mid = w.HBox([dd_run, dd_ap, dd_segment, mode_dd, btn_preview, btn_diag])
+    gui = w.VBox([top, mid, out])
 
-            _time_discontinuity_diag(seg_frame, alpha=float(alpha_jump.value))
-            _turn_duration_qc(seg_frame, tol_percent=float(tol_turn.value))
-
-    # Wire callbacks (single time per GUI instance)
-    btn_browse.on_click(_browse)
-    btn_load.on_click(_load_catalog)
-    btn_preview.on_click(_preview)
-    btn_diag.on_click(_diagnostics)
-
+    _ACTIVE_GUI = gui
     return gui

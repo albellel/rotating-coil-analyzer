@@ -1,93 +1,105 @@
-# rotating-coil-analyzer
+# Rotating Coil Analyzer (Python) — Phase 1
 
+This repository is an **offline Python analyzer** for rotating-coil magnetic measurements, inspired by CERN MMM / FFMM workflows.
 
+Phase-1 scope is intentionally limited to:
 
-## Getting started
+- **Discovery / cataloging** of a measurement folder
+- Parsing `Parameters.txt` (including `TABLE{...}` payloads with escaped `\t` / `\n`)
+- **Locating segment files** (SM18 `corr_sigs` and `generic_corr_sigs`)
+- Reading segment files (`.bin`, `.txt`, `.csv`) into a clean `pandas.DataFrame`
+- Emitting **sanity checks** and convenient **debug plots** (GUI)
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+No FFT/multipoles/TurnQC/Kn calculations are part of Phase-1.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+---
 
-## Add your files
+## Installation (editable)
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+From the repo root (same directory as `pyproject.toml`):
 
+```bash
+python -m pip install -U pip
+python -m pip install -e .
 ```
-cd existing_repo
-git remote add origin https://gitlab.cern.ch/albellel/rotating-coil-analyzer.git
-git branch -M master
-git push -uf origin master
+
+Recommended for notebooks:
+
+```python
+%load_ext autoreload
+%autoreload 2
 ```
 
-## Integrate with your tools
+---
 
-- [ ] [Set up project integrations](https://gitlab.cern.ch/albellel/rotating-coil-analyzer/-/settings/integrations)
+## Expected file naming patterns (Phase-1)
 
-## Collaborate with your team
+Discovery supports both patterns:
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+- `<run_id>_corr_sigs_Ap_<ap>_Seg<seg>.bin`
+- `<run_id>_generic_corr_sigs_Ap_<ap>_Seg<seg>.bin`
 
-## Test and Deploy
+Also accepts `.txt` and `.csv` instead of `.bin`.
 
-Use the built-in continuous integration in GitLab.
+Where:
+- `ap` is a **physical aperture id** (e.g., `1` or `2`)
+- `seg` can be numeric (`3`) or string (`CS`, `NCS`, ...)
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+---
 
-***
+## Parameters.txt handling
 
-# Editing this README
+Phase-1 searches for `Parameters.txt` in the selected folder **or up to 2 parent folders above**.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Required keys:
+- `Parameters.Measurement.samples`
+- `Parameters.Measurement.v`
+- `Measurement.AP1.enabled`, `Measurement.AP2.enabled` (AP2 optional)
+- `Measurement.AP1.FDIs` and `Measurement.AP2.FDIs` for enabled apertures
 
-## Suggestions for a good README
+Strict policy: **no degraded mode**. If Parameters parsing fails, discovery fails loudly.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+---
 
-## Name
-Choose a self-explaining name for your project.
+## Running the GUI (Jupyter / VS Code notebook)
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+In a notebook cell:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```python
+from rotating_coil_analyzer.gui.app import build_catalog_gui
+gui = build_catalog_gui()
+gui
+```
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Notes:
+- If you re-run the cell and see “duplicated GUI outputs”, use the notebook UI **Clear Outputs** for that cell.
+- If you edit code but the kernel keeps using old imports, restart the kernel (or use autoreload).
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+---
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## Sanity checks shown in the GUI
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+The reader emits `SegmentFrame.warnings`, including:
+- selected binary format (dtype + number of columns)
+- flux column assignment (abs/cmp)
+- dt nominal check (from |v| and samples_per_turn)
+- current candidate dynamic ranges
+- duplicate current detection (`I1 == I2`, etc.)
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+---
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## Tests (minimal ROI set)
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+Tests are in `rotating_coil_analyzer/tests` and use the standard library `unittest`.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Run from repo root:
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+```bash
+python -m unittest discover -s rotating_coil_analyzer/tests -v
+```
 
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Covers:
+- discovery filename regex: `corr_sigs` + `generic_corr_sigs`
+- two-aperture collision prevention (segment_files key includes aperture)
+- Parameters TABLE parsing with escaped sequences
+- binary inference sanity (dt nominal check)

@@ -23,21 +23,26 @@ class Sm18ReaderConfig:
       Relative tolerance for dt_median vs dt_nominal (computed from |v| and samples_per_turn).
       Example: 0.2 means ±20%.
     max_currents:
-      Try formats with 1..max_currents current channels (total columns = 3 + n_currents).
+      Try formats with 0..max_currents current channels (total columns = 3 + n_currents).
+    dtype_candidates:
+      Candidate numpy dtypes to test for the binary content (little-endian only).
     """
     strict_time: bool = True
-    dt_rel_tol: float = 0.20
-    max_currents: int = 4
-    dtype_candidates: Tuple[np.dtype, ...] = (np.dtype(np.float64), np.dtype(np.float32))
+    dt_rel_tol: float = 0.25
+    max_currents: int = 3
+    dtype_candidates: Tuple[np.dtype, ...] = (np.dtype("<f8"), np.dtype("<f4"))
 
 
 class Sm18CorrSigsReader:
     """
-    Reader for *_corr_sigs_*.bin files.
+    Reader for SM18 corr_sigs and generic_corr_sigs segment files (bin/txt/csv).
 
-    IMPORTANT: This reader never synthesizes time. The first column must contain a valid time axis.
+    HARD REQUIREMENT:
+      - time is always taken from the file (column 0)
+      - no synthetic time is ever generated
     """
-    def __init__(self, config: Optional[Sm18ReaderConfig] = None) -> None:
+
+    def __init__(self, config: Optional[Sm18ReaderConfig] = None):
         self.config = config or Sm18ReaderConfig()
 
     def read(
@@ -48,6 +53,7 @@ class Sm18CorrSigsReader:
         segment: str,
         samples_per_turn: int,
         shaft_speed_rpm: float,
+        aperture_id: Optional[int] = None,
     ) -> SegmentFrame:
         path = Path(file_path).expanduser().resolve()
         if not path.exists():
@@ -57,30 +63,47 @@ class Sm18CorrSigsReader:
         if Ns <= 0:
             raise ValueError("samples_per_turn must be > 0")
 
-        # Support both binary and ASCII exports.
         if path.suffix.lower() in {".txt", ".csv"}:
             mat, ncols, warnings = self._load_ascii(path)
         else:
             mat, ncols, warnings = self._infer_and_load(path, Ns=Ns, shaft_speed_rpm=float(shaft_speed_rpm))
 
         # Column semantics (per SM18 scripts):
-        #   col0: time [s]
-        #   col1: abs flux (or related)
-        #   col2: compensated flux (or related)
+        #   col0: time [s] (FDI time)
+        #   col1/col2: flux channels (abs/cmp, order can vary -> we auto-assign by robust amplitude)
         #   col3..: one or more current traces (potentially from different sources)
         t = mat[:, 0]
-        df_abs = mat[:, 1] if ncols >= 2 else np.full((len(t),), np.nan, dtype=np.float64)
-        df_cmp = mat[:, 2] if ncols >= 3 else np.full((len(t),), np.nan, dtype=np.float64)
+
+        # Assign df_abs and df_cmp robustly between col1 and col2
+        if ncols >= 3:
+            c1 = mat[:, 1]
+            c2 = mat[:, 2]
+            r1 = float(np.nanpercentile(c1, 99.5) - np.nanpercentile(c1, 0.5))
+            r2 = float(np.nanpercentile(c2, 99.5) - np.nanpercentile(c2, 0.5))
+            if np.isfinite(r1) and np.isfinite(r2) and (r2 > r1):
+                df_abs = c2
+                df_cmp = c1
+                warnings.append("swapped flux columns: treated col2 as abs and col1 as cmp (by robust range)")
+                abs_col, cmp_col = 2, 1
+            else:
+                df_abs = c1
+                df_cmp = c2
+                abs_col, cmp_col = 1, 2
+        else:
+            df_abs = mat[:, 1] if ncols >= 2 else np.full((len(t),), np.nan, dtype=np.float64)
+            df_cmp = mat[:, 2] if ncols >= 3 else np.full((len(t),), np.nan, dtype=np.float64)
+            abs_col, cmp_col = 1, 2
 
         # Collect current candidates and select a "main" current.
         I_main = np.full((len(t),), np.nan, dtype=np.float64)
         curr_cols = []
+        curr_mat = None
         if ncols >= 4:
             curr_cols = list(range(3, ncols))
             curr_mat = mat[:, 3:ncols]
 
-            # Robust dynamic range (avoid being fooled by a few spikes).
-            ranges = []
+            # Robust dynamic range (avoid spikes).
+            ranges: List[Tuple[float, int]] = []
             for k in range(curr_mat.shape[1]):
                 c = curr_mat[:, k]
                 finite = np.isfinite(c)
@@ -91,23 +114,22 @@ class Sm18CorrSigsReader:
                 hi = float(np.nanpercentile(c, 99.5))
                 ranges.append((hi - lo, k))
 
-            ranges_sorted = sorted(ranges, reverse=True)
-            best_k = ranges_sorted[0][1] if ranges_sorted else 0
+            # Select by max range; tie-breaker: smallest column index (deterministic)
+            best_range = max(r for r, _ in ranges) if ranges else float("-inf")
+            best_ks = [k for r, k in ranges if np.isfinite(r) and abs(r - best_range) <= 0.0]
+            best_k = min(best_ks) if best_ks else (ranges[0][1] if ranges else 0)
             I_main = curr_mat[:, best_k]
 
-            # Emit a short mapping summary.
-            abs_r = float(np.nanpercentile(df_abs, 99.5) - np.nanpercentile(df_abs, 0.5))
-            cmp_r = float(np.nanpercentile(df_cmp, 99.5) - np.nanpercentile(df_cmp, 0.5))
-            warnings.append(
-                f"column map: t=0, df_abs=1, df_cmp=2, current cols=3..{ncols-1}"
-            )
+            # Emit mapping summary.
+            abs_r = float(np.nanpercentile(df_abs, 99.5) - np.nanpercentile(df_abs, 0.5)) if len(df_abs) else float("nan")
+            cmp_r = float(np.nanpercentile(df_cmp, 99.5) - np.nanpercentile(df_cmp, 0.5)) if len(df_cmp) else float("nan")
+            warnings.append(f"column map: t=0, df_abs={abs_col}, df_cmp={cmp_col}, current cols=3..{ncols-1}")
             warnings.append(f"flux ranges (p99.5-p0.5): abs={abs_r:.6g}, cmp={cmp_r:.6g}")
-            # Report current candidates in physical-ish units without assuming units.
+
+            # Report current candidates
+            ranges_sorted = sorted(ranges, key=lambda rk: (-rk[0], rk[1]))
             rng_txt = ", ".join([f"col{3+k}:{r:.6g}" for r, k in ranges_sorted if np.isfinite(r)])
             warnings.append(f"current candidate ranges (p99.5-p0.5): {rng_txt}")
-            warnings.append(
-                f"selected main current: col{3+best_k} (as df['I']) by largest robust range"
-            )
 
         df = pd.DataFrame({"t": t, "df_abs": df_abs, "df_cmp": df_cmp, "I": I_main})
 
@@ -115,16 +137,26 @@ class Sm18CorrSigsReader:
         for j, col_idx in enumerate(curr_cols):
             df[f"I{j}"] = mat[:, col_idx]
 
+        # Duplicate current detection (exact sample equality)
+        if len(curr_cols) >= 2:
+            for a in range(len(curr_cols)):
+                for b in range(a + 1, len(curr_cols)):
+                    ia = df[f"I{a}"].to_numpy()
+                    ib = df[f"I{b}"].to_numpy()
+                    if np.allclose(ia, ib, atol=0.0, rtol=0.0, equal_nan=True):
+                        warnings.append(f"duplicate current detected: I{a} == I{b} (exact match). Canonical will use lowest-index among ties.")
+
         n_turns = int(len(df) // Ns)
 
         return SegmentFrame(
             source_path=path,
             run_id=run_id,
-            segment=segment,
+            segment=str(segment),
             samples_per_turn=Ns,
             n_turns=n_turns,
-            df=df,
+            df=df.astype(np.float64, copy=False),
             warnings=tuple(warnings),
+            aperture_id=aperture_id,
         )
 
     def _infer_and_load(
@@ -143,17 +175,20 @@ class Sm18CorrSigsReader:
 
         file_size = path.stat().st_size
         if file_size <= 0:
-            raise ValueError("Empty file.")
+            raise ValueError("Empty file")
 
-        v = abs(float(shaft_speed_rpm))
-        dt_nom: Optional[float] = None
-        if v > 0:
-            Tnom = 60.0 / v
-            dt_nom = Tnom / float(Ns)
+        # Nominal dt from |v|
+        v = abs(float(shaft_speed_rpm)) if shaft_speed_rpm is not None else 0.0
+        if v <= 0:
+            warnings.append("shaft_speed_rpm <= 0; nominal dt check disabled")
+            dt_nom = None
+        else:
+            T_nom = 60.0 / v
+            dt_nom = T_nom / float(Ns)
 
         reports: List[str] = []
-        best_score = -1e300
         best: Optional[Tuple[np.ndarray, int, List[str]]] = None
+        best_score = -1e99
 
         for dtype in cfg.dtype_candidates:
             bps = int(dtype.itemsize)
@@ -161,18 +196,19 @@ class Sm18CorrSigsReader:
                 continue
             n_scalars = file_size // bps
 
-            # total columns = 3 + n_currents
-            for n_curr in range(1, max(1, cfg.max_currents) + 1):
+            # total columns = 3 + n_currents  (allow 0 currents)
+            for n_curr in range(0, max(0, int(cfg.max_currents)) + 1):
                 ncols = 3 + n_curr
+                if ncols <= 0:
+                    continue
                 if n_scalars % ncols != 0:
                     continue
 
-                # Load and reshape
                 arr = np.fromfile(path, dtype=dtype)
                 if arr.size != n_scalars:
-                    # Extremely unlikely; but keep safe.
                     arr = arr[:n_scalars]
-                mat = arr.reshape(-1, ncols).astype(np.float64, copy=False)
+                with np.errstate(all="ignore"):
+                    mat = arr.reshape(-1, ncols).astype(np.float64, copy=False)
 
                 ok, score, rep, local_warnings, mat_out = self._validate_candidate(
                     mat,
@@ -193,45 +229,6 @@ class Sm18CorrSigsReader:
 
         return best
 
-    def _load_ascii(self, path: Path) -> Tuple[np.ndarray, int, List[str]]:
-        """Load whitespace- or comma-separated numeric exports.
-
-        This is intended for Phase-1 exploration: it makes minimal
-        assumptions and returns a dense float64 matrix.
-
-        Supported:
-        - whitespace/tab-separated text files
-        - comma-separated CSV files (headerless preferred)
-        """
-
-        # Sniff delimiter from the first non-empty, non-comment line.
-        delim = None
-        try:
-            with path.open("r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    s = line.strip()
-                    if not s:
-                        continue
-                    if s.startswith("#") or s.startswith("%") or s.startswith("//"):
-                        continue
-                    if ";" in s and "," not in s:
-                        delim = ";"
-                    elif "," in s:
-                        delim = ","
-                    break
-        except OSError:
-            delim = None
-
-        if delim in {",", ";"}:
-            df = pd.read_csv(path, comment="#", header=None, sep=delim, engine="python")
-        else:
-            df = pd.read_csv(path, comment="#", header=None, sep=r"\s+", engine="python")
-
-        df = df.dropna(axis=1, how="all")
-        mat = df.to_numpy(dtype=np.float64)
-        warnings = [f"Selected text format: ncols={mat.shape[1]} ({path.suffix.lower()})"]
-        return mat, int(mat.shape[1]), warnings
-
     def _validate_candidate(
         self,
         mat: np.ndarray,
@@ -242,82 +239,79 @@ class Sm18CorrSigsReader:
         dt_rel_tol: float,
     ) -> Tuple[bool, float, str, List[str], np.ndarray]:
         """
-        Validate candidate by:
-        - trimming trailing invalid rows (non-finite in t/df_abs/df_cmp)
-        - enforcing strictly increasing time (if strict_time)
-        - enforcing dt_median close to dt_nom (if provided)
+        Validate a candidate matrix:
+          - finite time
+          - trim trailing invalid rows
+          - strict monotonic time if strict_time
+          - dt median close to dt_nom if dt_nom available
 
-        Returns (ok, score, report, warnings, mat_trimmed)
+        Returns (ok, score, report, warnings, mat_out).
         """
         warnings: List[str] = []
 
         if mat.shape[1] < 3:
-            return False, -1e300, "reject (ncols<3)", warnings, mat
+            return False, -1e9, "reject: ncols < 3", warnings, mat
 
-        t = mat[:, 0]
-        df_abs = mat[:, 1]
-        df_cmp = mat[:, 2]
-
-        finite = np.isfinite(t) & np.isfinite(df_abs) & np.isfinite(df_cmp)
-        if not finite.all():
-            bad_idx = np.flatnonzero(~finite)
-            first_bad = int(bad_idx[0])
-            # Do not accept NaNs/Infs in the middle
-            if not finite[:first_bad].all():
-                return False, -1e300, "reject (non-finite in middle)", warnings, mat
-            n_bad = int(len(bad_idx))
-            warnings.append(f"Trimmed trailing invalid rows: first_bad_index={first_bad}, n_bad={n_bad}")
+        # Trim trailing rows with any non-finite in t/flux columns
+        finite_mask = np.isfinite(mat[:, 0]) & np.isfinite(mat[:, 1]) & np.isfinite(mat[:, 2])
+        if not np.all(finite_mask):
+            first_bad = int(np.argmax(~finite_mask))
+            if first_bad < max(10, int(0.01 * len(mat))):
+                return False, -1e9, f"reject: invalid rows too early (first_bad={first_bad})", warnings, mat
+            warnings.append(f"trim trailing invalid rows: first_bad={first_bad}, n_bad={(~finite_mask).sum()}")
             mat = mat[:first_bad, :]
 
-        if mat.shape[0] < Ns:
-            return False, -1e300, "reject (too few rows after trim)", warnings, mat
-
-        # Trim to a multiple of Ns (drop partial last turn)
-        remainder = int(mat.shape[0] % Ns)
-        if remainder != 0:
-            warnings.append(f"Trimmed to multiple of samples_per_turn: {mat.shape[0]} -> {mat.shape[0] - remainder}")
-            mat = mat[: mat.shape[0] - remainder, :]
+        # Trim to integer turns
+        rem = mat.shape[0] % int(Ns)
+        if rem != 0:
+            warnings.append(f"trim to multiple of samples_per_turn: removed {rem} rows")
+            mat = mat[:-rem, :]
 
         t = mat[:, 0]
-        if not np.isfinite(t).all():
-            return False, -1e300, "reject (non-finite time after trim)", warnings, mat
-
         dt = np.diff(t)
-        if not np.isfinite(dt).all():
-            return False, -1e300, "reject (non-finite dt)", warnings, mat
+        dt_f = dt[np.isfinite(dt)]
+        if dt_f.size < 10:
+            return False, -1e9, "reject: too few finite dt", warnings, mat
+        dt_med = float(np.median(dt_f))
+        if not np.isfinite(dt_med) or dt_med <= 0:
+            return False, -1e9, f"reject: dt_med={dt_med}", warnings, mat
 
-        n_nonpos = int(np.count_nonzero(dt <= 0.0))
-        if strict_time and n_nonpos > 0:
-            return False, -1e300, f"reject (time not strictly increasing: count(dt<=0)={n_nonpos})", warnings, mat
+        noninc = int(np.sum(dt_f <= 0))
+        if strict_time and noninc > 0:
+            return False, -1e9, f"reject: time not strictly increasing (dt<=0 count={noninc})", warnings, mat
 
-        dt_med = float(np.median(dt)) if dt.size else float("nan")
-        dt_min = float(np.min(dt)) if dt.size else float("nan")
-        dt_max = float(np.max(dt)) if dt.size else float("nan")
-
-        # Score: closeness to dt_nom if available; otherwise prefer strict monotonic
+        # Nominal dt check
         score = 0.0
-        rep = f"note (dt stats [s]: min={dt_min:.6g}, median={dt_med:.6g}, max={dt_max:.6g})"
+        if dt_nom is not None and np.isfinite(dt_nom) and dt_nom > 0:
+            rel = abs(dt_med - dt_nom) / dt_nom
+            if rel > float(dt_rel_tol):
+                return False, -1e9, f"reject: dt_med {dt_med:.6g} not within {dt_rel_tol:.3g} of dt_nom {dt_nom:.6g}", warnings, mat
+            score += (1.0 - rel) * 100.0
+            warnings.append(f"dt nominal check: dt_med={dt_med:.6g}, dt_nom={dt_nom:.6g}, rel_err={rel:.3g}")
 
-        if dt_nom is not None and math.isfinite(dt_med) and dt_med > 0:
-            ratio = dt_med / dt_nom
-            # ratio close to 1 is best (score 0); penalize log-distance
-            score = -abs(math.log(ratio))
-            if strict_time and abs(ratio - 1.0) > dt_rel_tol:
-                return False, -1e300, f"reject (dt_med/dt_nom={ratio:.3g} outside ±{dt_rel_tol:.3g})", warnings, mat
-            rep += f", dt_nom={dt_nom:.6g}, ratio={ratio:.6g}"
-        else:
-            if strict_time and n_nonpos > 0:
-                return False, -1e300, f"reject (time not strictly increasing: count(dt<=0)={n_nonpos})", warnings, mat
-            # Slightly prefer strictly increasing
-            score = 0.0 if n_nonpos == 0 else -10.0
+        # Prefer more rows (more turns)
+        score += mat.shape[0] / float(Ns)
 
-        # Also compute turn-duration stats from turn start times (for reporting)
-        t0 = t[::Ns]
-        if t0.size >= 2:
-            Tturn = np.diff(t0)
-            Tmin = float(np.min(Tturn))
-            Tmed = float(np.median(Tturn))
-            Tmax = float(np.max(Tturn))
-            rep += f", turn duration T [s]: min={Tmin:.6g}, median={Tmed:.6g}, max={Tmax:.6g}"
+        rep = f"ok rows={mat.shape[0]} ncols={mat.shape[1]} dt_med={dt_med:.6g} noninc={noninc} score={score:.3f}"
+        return True, score, rep, warnings, mat
 
-        return True, float(score), rep, warnings, mat
+    def _load_ascii(self, path: Path) -> Tuple[np.ndarray, int, List[str]]:
+        """
+        Load ASCII (txt/csv) into a matrix.
+
+        Policy:
+          - time must be present as column 0
+          - accept >=3 columns
+          - return float64 matrix
+        """
+        warnings: List[str] = []
+        # Try whitespace first, then CSV
+        df = None
+        try:
+            df = pd.read_csv(path, sep=r"\s+", engine="python", header=None, comment="#")
+        except Exception:
+            df = pd.read_csv(path, sep=",", engine="python", header=None, comment="#")
+        if df is None or df.shape[1] < 3:
+            raise ValueError(f"ASCII file must have >=3 columns (t, flux1, flux2, ...): {path}")
+        mat = df.to_numpy(dtype=np.float64, copy=False)
+        return mat, int(mat.shape[1]), warnings
