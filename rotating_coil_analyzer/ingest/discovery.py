@@ -59,29 +59,14 @@ def _parse_float(v: Optional[str], default: float) -> float:
         return default
 
 
-def find_parameters_txt(selected_dir: Path, max_up: int = 2) -> Path:
-    """
-    Search Parameters.txt in selected_dir or up to max_up parent levels.
-    Returns the first match (nearest to selected_dir).
-    """
-    p = Path(selected_dir).expanduser().resolve()
-    for k in range(max_up + 1):
-        cand = p / "Parameters.txt"
-        if cand.exists() and cand.is_file():
-            return cand
-        if p.parent == p:
-            break
-        p = p.parent
-    raise FileNotFoundError(f"Parameters.txt not found in '{selected_dir}' or up to {max_up} parent levels.")
-
-
 def _decode_table_payload(payload: str) -> str:
     """
-    Decode TABLE payload that may contain escaped sequences like '\\t' and '\\n'.
-    Also accept payloads that already contain real tabs/newlines.
+    Parameters TABLE payloads may include literal escape sequences:
+      '\\t' for tabs, '\\n' for newlines.
+    Decode them conservatively.
     """
-    # Convert escaped backslash sequences to actual characters
-    payload = payload.replace("\\t", "\t").replace("\\n", "\n").replace("\\r", "\n")
+    # Replace escaped sequences. Do not touch other backslashes.
+    payload = payload.replace("\\t", "\t").replace("\\n", "\n")
     return payload
 
 
@@ -101,14 +86,71 @@ def _parse_table(value: str) -> List[List[str]]:
     return [r.split("\t") for r in rows]
 
 
-def _segment_sort_key(seg_id: str) -> Tuple[int, str]:
+def find_parameters_txt(selected_dir: Path, max_up: int = 2) -> Path:
     """
-    Sort numeric segment ids numerically, then fallback to lexical for non-numeric.
+    Search Parameters.txt in selected_dir or up to max_up parent levels.
+    Returns the first match (nearest to selected_dir).
     """
-    try:
-        return (0, f"{int(seg_id):06d}")
-    except Exception:
-        return (1, seg_id)
+    p = Path(selected_dir).expanduser().resolve()
+    for up in range(max_up + 1):
+        cand = p / "Parameters.txt"
+        if cand.exists() and cand.is_file():
+            return cand
+        p = p.parent
+    raise FileNotFoundError(f"Parameters.txt not found in {selected_dir} or up to {max_up} parent folders.")
+
+
+def _find_fdis_table_key(params: Dict[str, str], ap: int, strict: bool = True) -> Tuple[str, List[str]]:
+    """
+    Find the Parameters key that defines the FDIs table for a given aperture.
+
+    Supported variants (checked in order):
+      - Measurement.AP{ap}.FDIs
+      - Parameters.AP{ap}.FDIs
+    Additionally, for aperture 1 we accept:
+      - Measurement.MH.FDIs
+      - Parameters.MH.FDIs
+      - Any single remaining *.FDIs TABLE (non-AP*) as a last-resort disambiguation
+    """
+    tried: List[str] = []
+    candidates: List[str] = []
+    direct = [f"Measurement.AP{ap}.FDIs", f"Parameters.AP{ap}.FDIs"]
+    if ap == 1:
+        direct += ["Measurement.MH.FDIs", "Parameters.MH.FDIs"]
+    for k in direct:
+        tried.append(k)
+        if k in params:
+            return k, tried
+
+    # If AP-specific key not found, try to infer (only for ap=1)
+    if ap == 1:
+        # collect all keys ending with .FDIs that look like TABLE{...}
+        for k, v in params.items():
+            if not k.endswith(".FDIs"):
+                continue
+            if k in tried:
+                continue
+            if not isinstance(v, str):
+                continue
+            if v.strip().startswith("TABLE{"):
+                candidates.append(k)
+
+        # Remove AP2 key candidates if any exist (ap=1 inference should not steal ap=2 tables)
+        candidates_no_ap2 = [k for k in candidates if not re.search(r"\.AP2\.FDIs$", k)]
+        # Prefer non-AP keys if available
+        if len(candidates_no_ap2) == 1:
+            return candidates_no_ap2[0], tried + candidates_no_ap2
+        if len(candidates_no_ap2) > 1 and strict:
+            raise ValueError(
+                "Ambiguous FDIs table for aperture 1. Found multiple candidates: "
+                + ", ".join(sorted(candidates_no_ap2))
+                + ". Provide Measurement.AP1.FDIs (or Parameters.AP1.FDIs) to disambiguate."
+            )
+
+    if strict:
+        raise ValueError(f"Missing required FDIs table for aperture {ap}. Tried: {', '.join(tried)}")
+    # Non-strict fallback: return empty and let caller decide
+    return "", tried
 
 
 @dataclass
@@ -118,8 +160,8 @@ class MeasurementDiscovery:
 
     STRICT POLICY (per your requirement): no degraded mode
       - Parameters.txt must be found (selected folder or up to 2 parents)
-      - Measurement.AP*.FDIs table must parse for enabled apertures
-      - We do not invent segments from filenames if Parameters do not define them
+      - An FDIs table must be present for each enabled aperture
+      - We do not invent segments if no FDIs table exists
     """
     strict: bool = True
 
@@ -148,9 +190,12 @@ class MeasurementDiscovery:
 
         segments: List[SegmentSpec] = []
         for ap in enabled_aps:
-            key = f"Measurement.AP{ap}.FDIs"
+            key, tried = _find_fdis_table_key(params, ap=ap, strict=self.strict)
             if key not in params:
                 raise ValueError(f"Missing required key '{key}' in Parameters.txt")
+            if key not in [f"Measurement.AP{ap}.FDIs", f"Parameters.AP{ap}.FDIs"]:
+                warnings.append(f"FDIs table for aperture {ap} taken from '{key}' (fallback).")
+
             table = _parse_table(params[key])  # may raise (strict)
             for row in table:
                 if len(row) < 3:
@@ -159,94 +204,131 @@ class MeasurementDiscovery:
                 fdi_abs = int(float(row[1]))
                 fdi_cmp = int(float(row[2]))
                 length_m: Optional[float] = None
-                if len(row) >= 4 and row[3].strip() != "":
+                if len(row) >= 4:
                     try:
                         length_m = float(row[3])
                     except Exception:
                         length_m = None
-                        warnings.append(f"AP{ap} seg {seg_id}: could not parse length '{row[3]}', set None")
-                segments.append(SegmentSpec(aperture_id=ap, segment_id=seg_id, fdi_abs=fdi_abs, fdi_cmp=fdi_cmp, length_m=length_m))
+                segments.append(
+                    SegmentSpec(aperture_id=ap, segment_id=seg_id, fdi_abs=fdi_abs, fdi_cmp=fdi_cmp, length_m=length_m)
+                )
 
-        # Scan for segment files (bin/txt/csv), include both corr_sigs and generic_corr_sigs.
-        # Typical filename:
-        #   <run_id>_corr_sigs_Ap_<ap>_Seg<seg>.bin
-        #   <run_id>_generic_corr_sigs_Ap_<ap>_Seg<seg>.bin
-        pat = re.compile(
+        # Discover segment files. Two supported families:
+        # A) SM18 corr_sigs / generic_corr_sigs
+        # B) MBA raw_measurement_data plateau text files (multiple per segment; reader concatenates)
+        segment_files: Dict[Tuple[str, int, str], Path] = {}
+
+        # Build fast lookup for allowed segments per aperture
+        segs_by_ap: Dict[int, set[str]] = {}
+        for s in segments:
+            segs_by_ap.setdefault(s.aperture_id, set()).add(s.segment_id)
+
+        # A) SM18
+        pat_sm18 = re.compile(
             r"^(?P<run>.+?)_(?:(?P<generic>generic)_)?corr_sigs_Ap_(?P<ap>\d+)_Seg(?P<seg>[^.]+)\.(?P<ext>bin|txt|csv)$",
-            re.IGNORECASE,
+            flags=re.IGNORECASE,
         )
 
-        segment_files: Dict[Tuple[str, int, str], Path] = {}
-        run_ids: set[str] = set()
+        # B) MBA plateau (no aperture token in filename typically)
+        pat_mba = re.compile(
+            r"^(?P<base>.+?)_Run_(?P<step>\d+)_I_(?P<i>[-\d.]+)A_(?P<seg>[^_]+)_raw_measurement_data\.txt$",
+            flags=re.IGNORECASE,
+        )
 
         for p in parameters_root.rglob("*"):
             if not p.is_file():
                 continue
-            if p.suffix.lower() not in {".bin", ".txt", ".csv"}:
-                continue
-            m = pat.match(p.name)
-            if not m:
-                continue
-            ap = int(m.group("ap"))
-            if ap not in enabled_aps:
-                continue
-            run_id = m.group("run")
-            seg_id = m.group("seg")
+            name = p.name
 
-            key = (run_id, ap, seg_id)
+            m = pat_sm18.match(name)
+            if m:
+                run_id = m.group("run")
+                ap = int(m.group("ap"))
+                seg_id = m.group("seg")
+                if ap not in enabled_aps:
+                    continue
+                if seg_id not in segs_by_ap.get(ap, set()):
+                    warnings.append(
+                        f"Found SM18 segment file not defined in FDIs table: ap={ap} seg='{seg_id}' ({p.name})"
+                    )
+                    continue
 
-            # If multiple files for the same key, prefer:
-            # 1) .bin over .txt/.csv
-            # 2) non-generic over generic
-            prev = segment_files.get(key)
-            if prev is None:
-                segment_files[key] = p
-            else:
-                prev_ext = prev.suffix.lower()
-                new_ext = p.suffix.lower()
-                prev_is_bin = prev_ext == ".bin"
-                new_is_bin = new_ext == ".bin"
-                prev_is_generic = ("_generic_corr_sigs_" in prev.name.lower())
-                new_is_generic = ("_generic_corr_sigs_" in p.name.lower())
+                key = (run_id, ap, seg_id)
 
-                choose_new = False
-                if (not prev_is_bin) and new_is_bin:
-                    choose_new = True
-                elif prev_is_bin == new_is_bin:
-                    # same "bin-ness": prefer non-generic
-                    if prev_is_generic and (not new_is_generic):
-                        choose_new = True
-
-                if choose_new:
+                prev = segment_files.get(key)
+                if prev is None:
                     segment_files[key] = p
+                else:
+                    # Prefer .bin, then non-generic over generic
+                    prev_ext = prev.suffix.lower()
+                    new_ext = p.suffix.lower()
+                    prev_is_bin = prev_ext == ".bin"
+                    new_is_bin = new_ext == ".bin"
+                    prev_is_generic = ("_generic_corr_sigs_" in prev.name.lower())
+                    new_is_generic = ("_generic_corr_sigs_" in p.name.lower())
 
-            run_ids.add(run_id)
+                    choose_new = False
+                    if (not prev_is_bin) and new_is_bin:
+                        choose_new = True
+                    elif prev_is_bin == new_is_bin:
+                        if prev_is_generic and (not new_is_generic):
+                            choose_new = True
+                    if choose_new:
+                        segment_files[key] = p
+                continue
 
-        runs = sorted(run_ids)
+            m2 = pat_mba.match(name)
+            if m2:
+                base = m2.group("base")
+                seg_id = m2.group("seg")
+                # determine aperture: prefer folder hint if multiple apertures enabled
+                ap = 1
+                if 2 in enabled_aps:
+                    lower_parts = [pp.name.lower() for pp in p.parents]
+                    if any("aperture2" in s for s in lower_parts) or any("ap_2" in s for s in lower_parts):
+                        ap = 2
 
-        # Strict: warn about files for segments not defined in Parameters (do not invent SegmentSpec).
-        defined = {(s.aperture_id, s.segment_id) for s in segments}
-        extras = []
-        for (run_id, ap, seg_id), p in segment_files.items():
-            if (ap, seg_id) not in defined:
-                extras.append((run_id, ap, seg_id, p.name))
-        if extras:
-            warnings.append("Found segment files not defined in Parameters.AP*.FDIs (ignored by UI selection):")
-            for run_id, ap, seg_id, name in extras[:20]:
-                warnings.append(f"  run={run_id} ap={ap} seg={seg_id} file={name}")
+                if ap not in enabled_aps:
+                    continue
+                if seg_id not in segs_by_ap.get(ap, set()):
+                    warnings.append(
+                        f"Found MBA raw file with segment='{seg_id}' not defined in FDIs table (ignored): {p.name}"
+                    )
+                    continue
 
-        # Sort segments
-        segments = sorted(segments, key=lambda s: (s.aperture_id, _segment_sort_key(s.segment_id)))
+                key = (base, ap, seg_id)
+                # store the first (lowest step) file as representative; reader will concatenate all
+                prev = segment_files.get(key)
+                if prev is None:
+                    segment_files[key] = p
+                else:
+                    # keep the one with the smallest step number for determinism
+                    def step_of(path: Path) -> int:
+                        mm = pat_mba.match(path.name)
+                        return int(mm.group("step")) if mm else 10**9
+                    if step_of(p) < step_of(prev):
+                        segment_files[key] = p
+                continue
+
+        # Runs present in discovered files
+        runs = sorted({k[0] for k in segment_files.keys()})
+
+        # Sanity: warn about missing files for defined segments
+        for ap in enabled_aps:
+            for seg_id in sorted(segs_by_ap.get(ap, set())):
+                present = any((run, ap, seg_id) in segment_files for run in runs)
+                if runs and not present:
+                    warnings.append(f"No files discovered for ap={ap} seg='{seg_id}' in this folder.")
 
         return MeasurementCatalog(
             root_dir=selected,
             parameters_path=parameters_path,
             parameters_root=parameters_root,
-            samples_per_turn=int(samples_per_turn),
-            shaft_speed_rpm=float(shaft_speed_rpm),
-            enabled_apertures=enabled_aps,
-            segments=segments,
-            runs=runs,
+            samples_per_turn=samples_per_turn,
+            shaft_speed_rpm=shaft_speed_rpm,
+            enabled_apertures=tuple(enabled_aps),
+            segments=tuple(segments),
+            runs=tuple(runs),
             segment_files=segment_files,
             warnings=tuple(warnings),
         )

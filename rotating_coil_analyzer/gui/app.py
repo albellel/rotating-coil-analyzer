@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 
 from rotating_coil_analyzer.ingest.discovery import MeasurementDiscovery
 from rotating_coil_analyzer.ingest.readers_sm18 import Sm18CorrSigsReader, Sm18ReaderConfig
+from rotating_coil_analyzer.ingest.readers_mba import MbaRawMeasurementReader, MbaReaderConfig
 
 
 # Keep a single active GUI instance per kernel to avoid duplicated callbacks / stacked widgets.
@@ -204,16 +205,28 @@ def build_catalog_gui() -> w.Widget:
         fpath = cat.get_segment_file(run_id, ap_ui, seg_id)
         ap_phys = cat.resolve_aperture(ap_ui)
 
-        cfg = Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5)
-        reader = Sm18CorrSigsReader(cfg)
-        seg_frame = reader.read(
-            fpath,
-            run_id=run_id,
-            segment=str(seg_id),
-            samples_per_turn=cat.samples_per_turn,
-            shaft_speed_rpm=cat.shaft_speed_rpm,
-            aperture_id=ap_phys,
-        )
+        # Choose reader by filename family
+        if fpath.name.lower().endswith("_raw_measurement_data.txt"):
+            cfg = MbaReaderConfig(align_time=True, strict_time=True)
+            reader = MbaRawMeasurementReader(cfg)
+            seg_frame = reader.read(
+                fpath,
+                run_id=run_id,
+                segment=str(seg_id),
+                samples_per_turn=cat.samples_per_turn,
+                aperture_id=ap_phys,
+            )
+        else:
+            cfg = Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5)
+            reader = Sm18CorrSigsReader(cfg)
+            seg_frame = reader.read(
+                fpath,
+                run_id=run_id,
+                segment=str(seg_id),
+                samples_per_turn=cat.samples_per_turn,
+                shaft_speed_rpm=cat.shaft_speed_rpm,
+                aperture_id=ap_phys,
+            )
         return cat, fpath, seg_frame
 
     def _on_preview(_):
