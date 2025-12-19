@@ -198,9 +198,17 @@ class MeasurementDiscovery:
 
         # Typical filename:
         #   <run_id>_corr_sigs_Ap_<ap>_Seg<seg>.bin
-        pat = re.compile(r"^(?P<run>.+?)_corr_sigs_Ap_(?P<ap>\d+)_Seg(?P<seg>[^.]+)\.bin$", re.IGNORECASE)
+        # Some exports can be ASCII (txt/csv). Accept those too.
+        pat = re.compile(
+            r"^(?P<run>.+?)_corr_sigs_Ap_(?P<ap>\d+)_Seg(?P<seg>[^.]+)\.(?P<ext>bin|txt|csv)$",
+            re.IGNORECASE,
+        )
 
-        for p in root.rglob("*.bin"):
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() not in {".bin", ".txt", ".csv"}:
+                continue
             m = pat.match(p.name)
             if not m:
                 continue
@@ -212,10 +220,23 @@ class MeasurementDiscovery:
             run_ids.add(run_id)
             segment_files[(run_id, seg)] = p
 
+        # If Parameters.txt did not list some segments (e.g. generic corr_sigs),
+        # still expose them in the GUI by augmenting the segments list.
+        seg_ids_from_params = {s.segment_id for s in segments}
+        seg_ids_from_files = {seg for (_run, seg) in segment_files.keys()}
+        missing = sorted(seg_ids_from_files - seg_ids_from_params)
+        for seg_id in missing:
+            segments.append(SegmentSpec(segment_id=seg_id, fdi_abs=None, fdi_cmp=None, length_m=None))
+
+        # Keep a deterministic order
+        segments = sorted(segments, key=lambda s: (str(s.segment_id)))
+
         runs = sorted(run_ids)
 
         if not runs and self.strict:
-            raise FileNotFoundError("Strict mode: no *_corr_sigs_*.bin files found under the selected folder.")
+            raise FileNotFoundError(
+                "Strict mode: no *_corr_sigs_*.(bin|txt|csv) files found under the selected folder."
+            )
 
         return MeasurementCatalog(
             root_dir=root,

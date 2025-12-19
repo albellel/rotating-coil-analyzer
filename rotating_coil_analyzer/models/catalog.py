@@ -16,8 +16,10 @@ class SegmentSpec:
     length_m: optional segment length (if present in Parameters file), else None
     """
     segment_id: str
-    fdi_abs: int
-    fdi_cmp: int
+    # Some datasets (e.g. "generic" corr_sigs) may not expose FDI mapping in Parameters.txt.
+    # Keep these optional to allow building a catalog from discovered files alone.
+    fdi_abs: Optional[int]
+    fdi_cmp: Optional[int]
     length_m: Optional[float] = None
 
 

@@ -57,19 +57,63 @@ class Sm18CorrSigsReader:
         if Ns <= 0:
             raise ValueError("samples_per_turn must be > 0")
 
-        best = self._infer_and_load(path, Ns=Ns, shaft_speed_rpm=float(shaft_speed_rpm))
-        mat, ncols, warnings = best
-
-        # Columns: t, df_abs, df_cmp, currents...
-        t = mat[:, 0]
-        df_abs = mat[:, 1]
-        df_cmp = mat[:, 2]
-        if ncols >= 4:
-            I = mat[:, 3]
+        # Support both binary and ASCII exports.
+        if path.suffix.lower() in {".txt", ".csv"}:
+            mat, ncols, warnings = self._load_ascii(path)
         else:
-            I = np.full_like(t, np.nan, dtype=np.float64)
+            mat, ncols, warnings = self._infer_and_load(path, Ns=Ns, shaft_speed_rpm=float(shaft_speed_rpm))
 
-        df = pd.DataFrame({"t": t, "df_abs": df_abs, "df_cmp": df_cmp, "I": I})
+        # Column semantics (per SM18 scripts):
+        #   col0: time [s]
+        #   col1: abs flux (or related)
+        #   col2: compensated flux (or related)
+        #   col3..: one or more current traces (potentially from different sources)
+        t = mat[:, 0]
+        df_abs = mat[:, 1] if ncols >= 2 else np.full((len(t),), np.nan, dtype=np.float64)
+        df_cmp = mat[:, 2] if ncols >= 3 else np.full((len(t),), np.nan, dtype=np.float64)
+
+        # Collect current candidates and select a "main" current.
+        I_main = np.full((len(t),), np.nan, dtype=np.float64)
+        curr_cols = []
+        if ncols >= 4:
+            curr_cols = list(range(3, ncols))
+            curr_mat = mat[:, 3:ncols]
+
+            # Robust dynamic range (avoid being fooled by a few spikes).
+            ranges = []
+            for k in range(curr_mat.shape[1]):
+                c = curr_mat[:, k]
+                finite = np.isfinite(c)
+                if finite.sum() < max(10, int(0.9 * len(c))):
+                    ranges.append((float("-inf"), k))
+                    continue
+                lo = float(np.nanpercentile(c, 0.5))
+                hi = float(np.nanpercentile(c, 99.5))
+                ranges.append((hi - lo, k))
+
+            ranges_sorted = sorted(ranges, reverse=True)
+            best_k = ranges_sorted[0][1] if ranges_sorted else 0
+            I_main = curr_mat[:, best_k]
+
+            # Emit a short mapping summary.
+            abs_r = float(np.nanpercentile(df_abs, 99.5) - np.nanpercentile(df_abs, 0.5))
+            cmp_r = float(np.nanpercentile(df_cmp, 99.5) - np.nanpercentile(df_cmp, 0.5))
+            warnings.append(
+                f"column map: t=0, df_abs=1, df_cmp=2, current cols=3..{ncols-1}"
+            )
+            warnings.append(f"flux ranges (p99.5-p0.5): abs={abs_r:.6g}, cmp={cmp_r:.6g}")
+            # Report current candidates in physical-ish units without assuming units.
+            rng_txt = ", ".join([f"col{3+k}:{r:.6g}" for r, k in ranges_sorted if np.isfinite(r)])
+            warnings.append(f"current candidate ranges (p99.5-p0.5): {rng_txt}")
+            warnings.append(
+                f"selected main current: col{3+best_k} (as df['I']) by largest robust range"
+            )
+
+        df = pd.DataFrame({"t": t, "df_abs": df_abs, "df_cmp": df_cmp, "I": I_main})
+
+        # Preserve all current traces (if present) for debugging/selection downstream.
+        for j, col_idx in enumerate(curr_cols):
+            df[f"I{j}"] = mat[:, col_idx]
 
         n_turns = int(len(df) // Ns)
 
@@ -148,6 +192,45 @@ class Sm18CorrSigsReader:
             raise ValueError(msg)
 
         return best
+
+    def _load_ascii(self, path: Path) -> Tuple[np.ndarray, int, List[str]]:
+        """Load whitespace- or comma-separated numeric exports.
+
+        This is intended for Phase-1 exploration: it makes minimal
+        assumptions and returns a dense float64 matrix.
+
+        Supported:
+        - whitespace/tab-separated text files
+        - comma-separated CSV files (headerless preferred)
+        """
+
+        # Sniff delimiter from the first non-empty, non-comment line.
+        delim = None
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s:
+                        continue
+                    if s.startswith("#") or s.startswith("%") or s.startswith("//"):
+                        continue
+                    if ";" in s and "," not in s:
+                        delim = ";"
+                    elif "," in s:
+                        delim = ","
+                    break
+        except OSError:
+            delim = None
+
+        if delim in {",", ";"}:
+            df = pd.read_csv(path, comment="#", header=None, sep=delim, engine="python")
+        else:
+            df = pd.read_csv(path, comment="#", header=None, sep=r"\s+", engine="python")
+
+        df = df.dropna(axis=1, how="all")
+        mat = df.to_numpy(dtype=np.float64)
+        warnings = [f"Selected text format: ncols={mat.shape[1]} ({path.suffix.lower()})"]
+        return mat, int(mat.shape[1]), warnings
 
     def _validate_candidate(
         self,
