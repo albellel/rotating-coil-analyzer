@@ -207,7 +207,7 @@ def build_catalog_gui() -> w.Widget:
 
         # Choose reader by filename family
         if fpath.name.lower().endswith("_raw_measurement_data.txt"):
-            cfg = MbaReaderConfig(align_time=True, strict_time=True)
+            cfg = MbaReaderConfig()
             reader = MbaRawMeasurementReader(cfg)
             seg_frame = reader.read(
                 fpath,
