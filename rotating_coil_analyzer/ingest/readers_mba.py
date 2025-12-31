@@ -171,9 +171,15 @@ class MbaRawMeasurementReader:
                         "(expected for MBA; time is kept raw by design)"
                     )
 
-            # Intra-plateau dt diagnostics (warning-level only).
+            # Intra-plateau time diagnostics (warning-level only; no correction).
             if t.size >= 3:
+                n_bad_t = int(np.sum(~np.isfinite(t)))
+                if n_bad_t:
+                    warnings.append(f"non-finite time values within plateau file {f.name}: {n_bad_t} samples")
                 dt = np.diff(t)
+                n_bad_dt = int(np.sum(~np.isfinite(dt)))
+                if n_bad_dt:
+                    warnings.append(f"non-finite dt values within plateau file {f.name}: {n_bad_dt} intervals")
                 dt_f = dt[np.isfinite(dt)]
                 if dt_f.size:
                     dt_med = float(np.median(dt_f))
@@ -181,17 +187,19 @@ class MbaRawMeasurementReader:
                     n_nonpos = int(np.sum(dt_f <= 0))
                     if n_nonpos:
                         warnings.append(
-                            f"non-increasing time within plateau file {f.name}: {n_nonpos} non-positive dt values"
+                            f"non-increasing time within plateau file {f.name}: {n_nonpos} non-positive finite dt values"
                         )
                     if dt_med > 0 and (dt_max / dt_med) > 10.0:
                         warnings.append(
                             f"large dt spread within plateau file {f.name}: median={dt_med:.6g}, max={dt_max:.6g}"
                         )
                 else:
-                    warnings.append(f"non-finite dt encountered within plateau file {f.name}")
+                    warnings.append(f"all dt are non-finite within plateau file {f.name}")
             else:
+                n_bad_t = int(np.sum(~np.isfinite(t)))
+                if n_bad_t:
+                    warnings.append(f"non-finite time values within short plateau file {f.name}: {n_bad_t} samples")
                 warnings.append(f"short time vector in plateau file {f.name}: n={t.size}")
-
             # Plateau-safe trimming: do not allow turns to cross plateau boundaries.
             n_rows = int(mat.shape[0])
             n_keep = (n_rows // Ns) * Ns
