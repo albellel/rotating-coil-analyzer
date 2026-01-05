@@ -54,6 +54,7 @@ class Sm18CorrSigsReader:
         samples_per_turn: int,
         shaft_speed_rpm: float,
         aperture_id: Optional[int] = None,
+        magnet_order: Optional[int] = None,
     ) -> SegmentFrame:
         path = Path(file_path).expanduser().resolve()
         if not path.exists():
@@ -157,6 +158,7 @@ class Sm18CorrSigsReader:
             df=df.astype(np.float64, copy=False),
             warnings=tuple(warnings),
             aperture_id=aperture_id,
+            magnet_order=magnet_order,
         )
 
     def _infer_and_load(

@@ -122,6 +122,7 @@ class MbaRawMeasurementReader:
         segment: str,
         samples_per_turn: int,
         aperture_id: Optional[int] = None,
+        magnet_order: Optional[int] = None,
     ) -> SegmentFrame:
         if self.config.align_time or self.config.strict_time:
             raise ValueError(
@@ -312,4 +313,5 @@ class MbaRawMeasurementReader:
             df=df.astype(np.float64, copy=False),
             warnings=tuple(warnings),
             aperture_id=aperture_id,
+            magnet_order=magnet_order,
         )

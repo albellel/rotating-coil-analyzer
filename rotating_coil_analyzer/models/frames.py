@@ -26,6 +26,10 @@ class SegmentFrame:
     warnings: Tuple[str, ...] = ()
     aperture_id: Optional[int] = None
 
+    # Main field order (legacy 'magnetOrder') used for phase-referenced multipole conventions.
+    # None means unknown / not provided in Parameters.txt.
+    magnet_order: Optional[int] = None
+
     @property
     def n_samples(self) -> int:
         return int(len(self.df))

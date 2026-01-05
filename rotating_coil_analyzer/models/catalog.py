@@ -45,6 +45,10 @@ class MeasurementCatalog:
     runs: List[str]
 
     segment_files: Dict[Tuple[str, int, str], Path]
+
+    # Main field order (legacy 'magnetOrder') used for phase-referenced multipole conventions.
+    # None means unknown / not provided in Parameters.txt.
+    magnet_order: Optional[int] = None
     warnings: Tuple[str, ...] = ()
 
     @property

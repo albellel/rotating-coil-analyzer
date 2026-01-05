@@ -179,6 +179,16 @@ class MeasurementDiscovery:
         samples_per_turn = _parse_int(params.get("Parameters.Measurement.samples"), default=512)
         shaft_speed_rpm = _parse_float(params.get("Parameters.Measurement.v"), default=60.0)
 
+        # Main field order used for phase-referenced multipole conventions (legacy 'magnetOrder').
+        magnet_order_raw = _parse_int(params.get("Parameters.magnetAnalyzer.magnetOrder"), default=0)
+        magnet_order: Optional[int] = None
+        if magnet_order_raw is not None and int(magnet_order_raw) > 0:
+            magnet_order = int(magnet_order_raw)
+        else:
+            warnings.append(
+                "Parameters.magnetAnalyzer.magnetOrder not provided or <=0; defaulting to m=1 for phase reference (can be overridden in GUI)."
+            )
+
         enabled_aps: List[int] = []
         # If keys missing: default AP1 enabled, AP2 disabled.
         ap1_en = _parse_bool(params.get("Measurement.AP1.enabled"), default=True)
@@ -326,6 +336,7 @@ class MeasurementDiscovery:
             parameters_root=parameters_root,
             samples_per_turn=samples_per_turn,
             shaft_speed_rpm=shaft_speed_rpm,
+            magnet_order=magnet_order,
             enabled_apertures=tuple(enabled_aps),
             segments=tuple(segments),
             runs=tuple(runs),

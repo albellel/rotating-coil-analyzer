@@ -88,14 +88,52 @@ def _ensure_full_turns(segf: SegmentFrame) -> tuple[SegmentFrame, int]:
         df=df2,
         warnings=tuple(segf.warnings) + (f"analysis trim: removed tail remainder={rem} samples",),
         aperture_id=segf.aperture_id,
+        magnet_order=getattr(segf, "magnet_order", None),
     )
     return segf2, rem
 
 
-def _phase_reference_from(H_ref, n_ref: int = 1) -> np.ndarray:
-    orders = np.asarray(H_ref.orders)
-    j = int(np.where(orders == n_ref)[0][0])
-    return np.angle(H_ref.coeff[:, j])
+def _phase_zero_from_main_harmonic(H_ref, main_order: int) -> tuple[np.ndarray, np.ndarray]:
+    """Compute per-turn phase zero Φ_out consistent with the legacy C++ rotation.
+
+    Legacy convention (MatlabAnalyzerRotCoil.cpp):
+      - Let m = magnetOrder (main field order).
+      - Compute SignalPhase = arg(C_abs[m-1]) (after internal scaling; scaling does not affect phase).
+      - Apply a π-wrap into [-π/2, +π/2] to stabilize the choice.
+      - Define Φ_out = SignalPhase / m.
+      - Rotate each harmonic n by exp(-i n Φ_out).
+
+    Here we replicate the same idea using the reference coefficient in H_ref at order m.
+    Returns:
+      phi_out: shape (n_turns,), the per-turn Φ_out
+      bad: boolean mask (True where reference harmonic is tiny or non-finite and Φ_out was forced to 0)
+    """
+    m = int(main_order)
+    if m <= 0:
+        raise ValueError(f"main_order must be > 0, got {m}")
+
+    orders = np.asarray(H_ref.orders, dtype=int)
+    idx = np.where(orders == m)[0]
+    if idx.size == 0:
+        raise ValueError(f"Reference harmonic m={m} not available. Increase N_max.")
+    j = int(idx[0])
+
+    c_m = np.asarray(H_ref.coeff)[:, j]
+    mag = np.abs(c_m)
+    phi = np.angle(c_m)
+
+    # Replicate the C++ phase wrap: keep main phase in [-π/2, +π/2] by shifting by π if needed.
+    phi_wrapped = np.array(phi, copy=True)
+    phi_wrapped[phi_wrapped > (np.pi / 2.0)] -= np.pi
+    phi_wrapped[phi_wrapped < (-np.pi / 2.0)] += np.pi
+
+    bad = (~np.isfinite(phi_wrapped)) | (~np.isfinite(mag)) | (mag < 1e-20)
+
+    phi_out = phi_wrapped / float(m)
+    if np.any(bad):
+        phi_out = np.array(phi_out, copy=True)
+        phi_out[bad] = 0.0
+    return phi_out, bad
 
 
 def _rotate_harmonics(H, phi_ref: np.ndarray) -> np.ndarray:
@@ -106,16 +144,25 @@ def _rotate_harmonics(H, phi_ref: np.ndarray) -> np.ndarray:
     return C
 
 
-def _normal_skew_from_rotated(C_rot: np.ndarray, orders: Sequence[int], prefix: str) -> pd.DataFrame:
+def _ba_from_rotated(C_rot: np.ndarray, orders: Sequence[int], prefix: str) -> pd.DataFrame:
+    """Compute legacy-compatible (B/A) coefficients from rotated complex harmonics.
+
+    With the internal convention C_n = FFT/Ns, the legacy magnet-style coefficient is M_n = 2*C_n for n>=1.
+    After rotation, we report:
+      B_n = Re(M_n) = 2*Re(C_n)
+      A_n = Im(M_n) = 2*Im(C_n)
+
+    Column naming uses B/A to match the legacy C++ outputs (bn/an).
+    """
     out: Dict[str, Any] = {}
     orders = [int(x) for x in orders]
     for j, n in enumerate(orders):
         if n == 0:
-            out[f"{prefix}N0"] = np.real(C_rot[:, j])
-            out[f"{prefix}S0"] = 0.0 * np.real(C_rot[:, j])
+            out[f"{prefix}B0"] = np.real(C_rot[:, j])
+            out[f"{prefix}A0"] = 0.0 * np.real(C_rot[:, j])
         else:
-            out[f"{prefix}N{n}"] = 2.0 * np.real(C_rot[:, j])
-            out[f"{prefix}S{n}"] = -2.0 * np.imag(C_rot[:, j])
+            out[f"{prefix}B{n}"] = 2.0 * np.real(C_rot[:, j])
+            out[f"{prefix}A{n}"] = 2.0 * np.imag(C_rot[:, j])
     return pd.DataFrame(out)
 
 
@@ -129,6 +176,17 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
         value=default_n_max, min=1, max=200, step=1, description="N_max",
         layout=w.Layout(width="190px"),
     )
+
+    main_order = w.BoundedIntText(
+        value=1, min=1, max=50, step=1, description="Main m",
+        layout=w.Layout(width="190px"),
+    )
+
+    integrate_to_flux = w.Checkbox(
+        value=True, description="Integrate df→flux (C++ style)", indent=False, layout=w.Layout(width="230px")
+    )
+    drift_correction = w.Checkbox(value=False, description="Drift corr (dri)", indent=False, layout=w.Layout(width="150px"))
+
     require_finite_t = w.Checkbox(value=True, description="Drop turns with non-finite t", indent=False)
 
     append_log = w.Checkbox(value=False, description="Append output", indent=False, layout=w.Layout(width="140px"))
@@ -150,7 +208,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     btn_plot_amp = w.Button(description="Plot |C_n| vs current", layout=w.Layout(width="180px"))
 
     dd_plateau = w.Dropdown(options=[], description="plateau_id", layout=w.Layout(width="220px"))
-    btn_plot_ns = w.Button(description="Plot Normal/Skew bars", layout=w.Layout(width="190px"))
+    btn_plot_ns = w.Button(description="Plot Normal/Skew (B/A) bars", layout=w.Layout(width="210px"))
 
     save_plot_fmt = w.Dropdown(
         options=[("SVG (vector)", "svg"), ("PDF (vector)", "pdf")],
@@ -278,6 +336,15 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
 
             state.segf = segf2
 
+            # Default main field order (magnetOrder) from Parameters.txt if available.
+            if getattr(segf2, "magnet_order", None) is not None and int(segf2.magnet_order) > 0:
+                main_order.value = int(segf2.magnet_order)
+                with out_log:
+                    print(f"Phase reference: using magnetOrder m={int(segf2.magnet_order)} from Parameters.txt")
+            else:
+                with out_log:
+                    print(f"Phase reference: magnetOrder not available; using GUI value m={int(main_order.value)}")
+
             tb = split_into_turns(segf2)
             state.tb = tb
 
@@ -302,10 +369,32 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             cmp_turns = tb.df_cmp[valid_turn, :]
             I_turns = tb.I[valid_turn, :]
 
+            if integrate_to_flux.value:
+                if drift_correction.value:
+                    # C++ option "dri": flux = cumsum(df - mean(df)) - mean(cumsum(df))
+                    abs0 = abs_turns - np.mean(abs_turns, axis=1, keepdims=True)
+                    cmp0 = cmp_turns - np.mean(cmp_turns, axis=1, keepdims=True)
+                    flux_abs = np.cumsum(abs0, axis=1) - np.mean(np.cumsum(abs_turns, axis=1), axis=1, keepdims=True)
+                    flux_cmp = np.cumsum(cmp0, axis=1) - np.mean(np.cumsum(cmp_turns, axis=1), axis=1, keepdims=True)
+                    with out_log:
+                        print("FFT input: flux = cumsum(df) with drift correction (dri)")
+                else:
+                    flux_abs = np.cumsum(abs_turns, axis=1)
+                    flux_cmp = np.cumsum(cmp_turns, axis=1)
+                    with out_log:
+                        print("FFT input: flux = cumsum(df) (C++ style)")
+                sig_abs = flux_abs
+                sig_cmp = flux_cmp
+            else:
+                sig_abs = abs_turns
+                sig_cmp = cmp_turns
+                with out_log:
+                    print("FFT input: raw df (no integration)")
+
             with out_log:
                 print(f"Running FFT up to N_max={int(nmax.value)}…")
-            H_abs = dft_per_turn(abs_turns, n_max=int(nmax.value))
-            H_cmp = dft_per_turn(cmp_turns, n_max=int(nmax.value))
+            H_abs = dft_per_turn(sig_abs, n_max=int(nmax.value))
+            H_cmp = dft_per_turn(sig_cmp, n_max=int(nmax.value))
             state.H_abs, state.H_cmp = H_abs, H_cmp
 
             turn_idx = np.arange(H_cmp.coeff.shape[0], dtype=int)
@@ -341,14 +430,26 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 state.df_out_mean = df_out.mean(numeric_only=True).to_frame().T
                 state.df_out_std = df_out.std(numeric_only=True).to_frame().T
 
-            phi_ref = _phase_reference_from(H_cmp, n_ref=1)
-            C_cmp_rot = _rotate_harmonics(H_cmp, phi_ref)
-            df_ns_cmp = _normal_skew_from_rotated(C_cmp_rot, H_cmp.orders, prefix="cmp_")
+            m = int(main_order.value)
+            phi_out, bad_phi = _phase_zero_from_main_harmonic(H_abs, m)
+            if int(np.sum(bad_phi)):
+                with out_log:
+                    print(
+                        f"WARNING: reference harmonic m={m} is tiny/non-finite for {int(np.sum(bad_phi))} turns; "
+                        "using Φ_out=0 for those turns."
+                    )
+
+            C_abs_rot = _rotate_harmonics(H_abs, phi_out)
+            C_cmp_rot = _rotate_harmonics(H_cmp, phi_out)
+
+            df_ba_abs = _ba_from_rotated(C_abs_rot, H_abs.orders, prefix="abs_")
+            df_ba_cmp = _ba_from_rotated(C_cmp_rot, H_cmp.orders, prefix="cmp_")
 
             df_ns = pd.concat(
                 [
                     df_out[[c for c in ["plateau_id", "I_mean", "plateau_I_hint", "plateau_step"] if c in df_out.columns]].reset_index(drop=True),
-                    df_ns_cmp.reset_index(drop=True),
+                    df_ba_abs.reset_index(drop=True),
+                    df_ba_cmp.reset_index(drop=True),
                 ],
                 axis=1,
             )
@@ -447,15 +548,15 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             row = state.mean_ns.loc[pid]
             nmax_eff = int(nmax.value)
             n = np.arange(1, nmax_eff + 1)
-            N_vals = np.array([row.get(f"cmp_N{k}", np.nan) for k in n])
-            S_vals = np.array([row.get(f"cmp_S{k}", np.nan) for k in n])
+            B_vals = np.array([row.get(f"cmp_B{k}", np.nan) for k in n])
+            A_vals = np.array([row.get(f"cmp_A{k}", np.nan) for k in n])
 
             wbar = 0.4
-            ax.bar(n - wbar / 2, N_vals, width=wbar, label="Normal (cos)")
-            ax.bar(n + wbar / 2, S_vals, width=wbar, label="Skew (sin)")
+            ax.bar(n - wbar / 2, B_vals, width=wbar, label="Normal B (cos)")
+            ax.bar(n + wbar / 2, A_vals, width=wbar, label="Skew A (sin)")
             ax.set_xlabel("harmonic order n")
-            ax.set_ylabel("cmp component (phase-referenced to n=1)")
-            ax.set_title(f"Normal/Skew bars (cmp), plateau_id={pid}")
+            ax.set_ylabel(f"cmp component (phase-referenced to main order m={int(main_order.value)})")
+            ax.set_title(f"Normal/Skew (B/A) bars (cmp), plateau_id={pid}")
             ax.legend()
 
             _redraw()
@@ -568,7 +669,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     _init_plot_once()
 
     # Layout
-    row1 = w.HBox([nmax, require_finite_t, btn_compute, append_log])
+    row1 = w.HBox([nmax, main_order, integrate_to_flux, drift_correction, require_finite_t, btn_compute, append_log])
     row2 = w.HBox([dd_channel, dd_harm, btn_plot_amp, dd_plateau, btn_plot_ns])
     row3 = w.HBox([save_plot_fmt, btn_save_plot, table_choice, btn_save_table, btn_show_head])
 

@@ -244,6 +244,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
                 segment=str(seg_id),
                 samples_per_turn=cat.samples_per_turn,
                 aperture_id=ap_phys,
+                magnet_order=cat.magnet_order,
             )
         else:
             reader = Sm18CorrSigsReader(Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5))
@@ -254,6 +255,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
                 samples_per_turn=cat.samples_per_turn,
                 shaft_speed_rpm=cat.shaft_speed_rpm,
                 aperture_id=ap_phys,
+                magnet_order=cat.magnet_order,
             )
 
         st.seg_path = fpath
