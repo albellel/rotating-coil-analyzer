@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import numpy as np
+import pandas as pd
 import ipywidgets as w
 import matplotlib.pyplot as plt
 
@@ -12,33 +13,42 @@ from rotating_coil_analyzer.ingest.discovery import MeasurementDiscovery
 from rotating_coil_analyzer.ingest.readers_sm18 import Sm18CorrSigsReader, Sm18ReaderConfig
 from rotating_coil_analyzer.ingest.readers_mba import MbaRawMeasurementReader, MbaReaderConfig
 
+# IMPORTANT: your repo defines MeasurementCatalog (not Catalog)
+from rotating_coil_analyzer.models.catalog import MeasurementCatalog
+from rotating_coil_analyzer.models.frames import SegmentFrame
+
 from rotating_coil_analyzer.gui.phase2 import build_phase2_panel
 
 
-@dataclass
-class GuiState:
-    root: Optional[Path] = None
-    catalog: Optional[object] = None
-    # Current selection
-    run_id: Optional[str] = None
-    ap_ui: Optional[object] = None
-    seg_id: Optional[object] = None
-    file_path: Optional[Path] = None
-    # Loaded data
-    segf: Optional[object] = None
-
-
+# Keep a single active GUI instance per kernel (prevents multiple live instances).
 _ACTIVE_GUI: Optional[w.Widget] = None
-_ACTIVE_STATE: Optional[GuiState] = None
 
 
-def _browse_directory_dialog(initial: Optional[str] = None) -> Optional[str]:
-    """
-    Open a native OS directory chooser (Windows Explorer on Windows) and return the selected path.
+def _close_all_figures() -> None:
+    try:
+        plt.close("all")
+    except Exception:
+        pass
 
-    Uses tkinter (standard library on typical Windows Python installs).
-    Returns None if tkinter is unavailable/headless or if the user cancels.
-    """
+
+def _df_head_to_html(df: pd.DataFrame, n: int = 12, title: str = "") -> str:
+    import html as _html
+    if df is None:
+        return "<div style='color:#b00;'>No data.</div>"
+    head = df.head(n)
+    s = head.to_string(max_rows=n, max_cols=None)
+    s = _html.escape(s)
+    ttl = f"<b>{_html.escape(title)}</b><br/>" if title else ""
+    return (
+        "<div style='font-family:monospace;'>"
+        f"{ttl}"
+        f"<pre style='white-space:pre; overflow:auto; max-height:280px; border:1px solid #ddd; padding:8px;'>{s}</pre>"
+        "</div>"
+    )
+
+
+def _browse_for_folder() -> Optional[str]:
+    """Native folder chooser (tkinter). Returns None if unavailable/cancelled."""
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -53,15 +63,8 @@ def _browse_directory_dialog(initial: Optional[str] = None) -> Optional[str]:
             root.attributes("-topmost", True)
         except Exception:
             pass
-
-        path = filedialog.askdirectory(
-            initialdir=initial if initial else None,
-            title="Select dataset root folder (contains Parameters.txt)",
-            mustexist=True,
-        )
-        if not path:
-            return None
-        return str(path)
+        p = filedialog.askdirectory(title="Select measurement folder")
+        return str(p) if p else None
     finally:
         try:
             if root is not None:
@@ -70,249 +73,355 @@ def _browse_directory_dialog(initial: Optional[str] = None) -> Optional[str]:
             pass
 
 
-def build_catalog_gui() -> w.Widget:
-    """
-    Phase I GUI: catalog + preview/diagnostics + segment loading.
-    Use build_gui() to get Phase II analysis in a second tab.
-    """
-    global _ACTIVE_GUI, _ACTIVE_STATE
+@dataclass
+class Phase1State:
+    cat: Optional[MeasurementCatalog] = None
+    segf: Optional[SegmentFrame] = None
+    seg_path: Optional[Path] = None
+    run_id: Optional[str] = None
+    ap_ui: Optional[int] = None
+    seg_id: Optional[str] = None
 
-    # Reuse existing instance if present (prevents widget multiplication when re-importing)
-    if _ACTIVE_GUI is not None and _ACTIVE_STATE is not None:
-        return _ACTIVE_GUI
+    fig: Optional[Any] = None
+    ax: Optional[Any] = None
 
-    state = GuiState()
-    _ACTIVE_STATE = state
+
+def _init_plot_once(state: Phase1State, plot_slot: w.Box) -> None:
+    if state.fig is not None and state.ax is not None:
+        return
+
+    was_interactive = plt.isinteractive()
+    try:
+        plt.ioff()
+        fig, ax = plt.subplots()
+    finally:
+        if was_interactive:
+            plt.ion()
+
+    ax.set_title("Phase I plot")
+    ax.set_xlabel("t (s)")
+    ax.set_ylabel("signal")
+    state.fig, state.ax = fig, ax
+
+    if isinstance(fig.canvas, w.Widget):
+        plot_slot.children = (fig.canvas,)
+    else:
+        plot_slot.children = (w.HTML("Non-interactive backend. In the first cell run: %matplotlib widget (ipympl)."),)
+
+
+def _redraw(fig) -> None:
+    if fig is None:
+        return
+    if hasattr(fig.canvas, "draw_idle"):
+        fig.canvas.draw_idle()
+    else:
+        fig.canvas.draw()
+
+
+def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
+    """
+    Phase I panel (catalog discovery + segment load + preview/diagnostics).
+    Stores the loaded SegmentFrame into shared["segment_frame"] for Phase II.
+    """
+    st = Phase1State()
 
     folder = w.Text(
-        value="",
         description="Folder",
-        placeholder=r"C:\path\to\dataset_root",
-        layout=w.Layout(width="520px"),
+        placeholder="Select any folder inside the run (Parameters.txt may be above)",
+        layout=w.Layout(width="78%"),
     )
-    btn_browse = w.Button(description="Browse…")
-    btn_load_catalog = w.Button(description="Load catalog", button_style="primary")
+    btn_browse = w.Button(description="Browse…", layout=w.Layout(width="120px"))
+    btn_load_cat = w.Button(description="Load catalog", button_style="primary", layout=w.Layout(width="140px"))
 
-    dd_run = w.Dropdown(options=[], description="Run", layout=w.Layout(width="260px"))
+    dd_run = w.Dropdown(options=[], description="Run", layout=w.Layout(width="360px"))
     dd_ap = w.Dropdown(options=[], description="Aperture", layout=w.Layout(width="220px"))
-    dd_segment = w.Dropdown(options=[], description="Segment", layout=w.Layout(width="220px"))
+    dd_seg = w.Dropdown(options=[], description="Segment", layout=w.Layout(width="220px"))
 
     mode_dd = w.Dropdown(
-        options=[("auto", "auto"), ("MBA", "mba"), ("SM18", "sm18")],
-        value="auto",
         description="Mode",
-        layout=w.Layout(width="220px"),
+        options=[("abs", "abs"), ("cmp", "cmp")],
+        value="abs",
+        layout=w.Layout(width="160px"),
     )
 
-    btn_load_segment = w.Button(description="Load segment")
-    btn_preview = w.Button(description="Preview")
-    btn_diag = w.Button(description="Diagnostics")
+    btn_load_seg = w.Button(description="Load segment", button_style="success", layout=w.Layout(width="140px"))
+    btn_preview = w.Button(description="Preview", layout=w.Layout(width="110px"))
+    btn_diag = w.Button(description="Diagnostics", button_style="warning", layout=w.Layout(width="120px"))
 
-    append_output = w.Checkbox(
-        value=False,
-        description="Append output",
-        indent=False,
-        layout=w.Layout(width="140px"),
-    )
+    append_log = w.Checkbox(value=False, description="Append output", indent=False, layout=w.Layout(width="140px"))
+    status = w.HTML(value="<b>Status:</b> idle")
 
-    out = w.Output()
+    out_log = w.Output(layout=w.Layout(border="1px solid #ddd", padding="8px"))
+    table_html = w.HTML(value="<div style='color:#666;'>No segment loaded.</div>")
+    plot_slot = w.Box(layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%"))
 
-    def _start_action():
-        """
-        Apply the output policy:
-        - If append_output is False: clear output + close figures
-        - If append_output is True: keep previous output and figures
-        """
-        if not append_output.value:
-            out.clear_output()
-            plt.close("all")
+    _init_plot_once(st, plot_slot)
 
-    def _set_segments_for_current_ap():
-        """
-        Populate Segment dropdown based on the currently selected logical aperture.
-        IMPORTANT: dd_ap.value may legitimately be None (single-aperture datasets).
-        """
-        cat = state.catalog
-        if cat is None:
-            dd_segment.options = []
-            dd_segment.value = None
-            return
+    def _log(msg: str) -> None:
+        with out_log:
+            print(msg)
 
-        if not dd_ap.options:
-            dd_segment.options = []
-            dd_segment.value = None
-            return
+    def _start(msg: str) -> None:
+        status.value = f"<b>Status:</b> {msg}"
+        if not append_log.value:
+            out_log.clear_output(wait=True)
+        _log(msg)
 
-        ap_ui = dd_ap.value  # can be None and still valid
-        segs = cat.segments_for_aperture(ap_ui)
-        seg_ids = [s.segment_id for s in segs]
-
-        dd_segment.options = seg_ids
-        dd_segment.value = seg_ids[0] if seg_ids else None
+    def _done(msg: str = "idle") -> None:
+        status.value = f"<b>Status:</b> {msg}"
 
     def _on_browse(_):
-        _start_action()
-        with out:
-            initial = folder.value.strip() or None
-            chosen = _browse_directory_dialog(initial=initial)
-            if chosen is None:
-                print("Folder browse not available (tkinter missing/headless) or cancelled.")
-                print("You can still paste the folder path into the Folder field.")
-                return
-            folder.value = chosen
-            print("Selected folder:", chosen)
+        p = _browse_for_folder()
+        if p:
+            folder.value = p
+
+    def _update_segments():
+        cat = st.cat
+        if cat is None:
+            dd_seg.options = []
+            dd_seg.value = None
+            return
+        segs = cat.segments_for_aperture(dd_ap.value)
+        opts = [(str(s.segment_id), str(s.segment_id)) for s in segs]
+        dd_seg.options = opts
+        dd_seg.value = opts[0][1] if opts else None
 
     def _on_load_catalog(_):
-        _start_action()
-        with out:
-            p = Path(folder.value).expanduser()
-            if not p.exists():
-                print("Folder does not exist:", p)
-                return
+        try:
+            _start("Loading catalog…")
+            root = Path(folder.value).expanduser().resolve()
+            cat = MeasurementDiscovery(strict=True).build_catalog(root)
+            st.cat = cat
+            shared["catalog"] = cat
 
-            state.root = p
-            cat = MeasurementDiscovery(strict=True).build_catalog(p)
-            state.catalog = cat
-
-            dd_run.options = list(cat.runs)
+            dd_run.options = [(r, r) for r in cat.runs]
             dd_run.value = cat.runs[0] if cat.runs else None
 
-            dd_ap.options = list(cat.logical_apertures)
+            dd_ap.options = [(str(a), a) for a in cat.logical_apertures]
             dd_ap.value = cat.logical_apertures[0] if cat.logical_apertures else None
 
-            _set_segments_for_current_ap()
+            _update_segments()
 
-            print("Catalog loaded.")
-            print("runs:", cat.runs)
-            print("aps:", cat.logical_apertures)
-            print("segments:", [(s.aperture_id, s.segment_id) for s in cat.segments])
-            print("segment dropdown options now:", list(dd_segment.options))
+            st.segf = None
+            st.seg_path = None
+            shared["segment_frame"] = None
+            shared["segment_path"] = None
 
-    def _on_selection_change(_=None):
-        # Keep silent; do not spam output when the user only changes dropdowns.
-        if state.catalog is None:
-            return
-        if dd_run.value is None:
-            return
-        _set_segments_for_current_ap()
+            table_html.value = "<div style='color:#666;'>Catalog loaded. Select run/aperture/segment, then “Load segment”.</div>"
 
-    dd_run.observe(lambda c: _on_selection_change(), names="value")
-    dd_ap.observe(lambda c: _on_selection_change(), names="value")
+            if cat.warnings:
+                _log("WARNINGS:")
+                for m in cat.warnings:
+                    _log(f" - {m}")
+
+            _done("catalog ready")
+        except Exception as e:
+            _log(f"ERROR: {repr(e)}")
+            _done("error")
+
+    def _on_ap_change(_change):
+        _update_segments()
+
+    dd_ap.observe(_on_ap_change, names="value")
+
+    def _read_selected_segment() -> SegmentFrame:
+        cat = st.cat
+        if cat is None:
+            raise RuntimeError("No catalog loaded.")
+        run_id = dd_run.value
+        ap_ui = dd_ap.value
+        seg_id = dd_seg.value
+        if run_id is None or seg_id is None:
+            raise RuntimeError("Select run and segment first.")
+        fpath = cat.get_segment_file(run_id, ap_ui, seg_id)
+        ap_phys = cat.resolve_aperture(ap_ui)
+
+        if fpath.name.lower().endswith("_raw_measurement_data.txt"):
+            reader = MbaRawMeasurementReader(MbaReaderConfig())
+            segf = reader.read(
+                fpath,
+                run_id=run_id,
+                segment=str(seg_id),
+                samples_per_turn=cat.samples_per_turn,
+                aperture_id=ap_phys,
+            )
+        else:
+            reader = Sm18CorrSigsReader(Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5))
+            segf = reader.read(
+                fpath,
+                run_id=run_id,
+                segment=str(seg_id),
+                samples_per_turn=cat.samples_per_turn,
+                shaft_speed_rpm=cat.shaft_speed_rpm,
+                aperture_id=ap_phys,
+            )
+
+        st.seg_path = fpath
+        st.run_id = run_id
+        st.ap_ui = ap_ui
+        st.seg_id = str(seg_id)
+        st.segf = segf
+
+        shared["segment_frame"] = segf
+        shared["segment_path"] = fpath
+        return segf
+
+    def _plot_first_turns(segf: SegmentFrame, ycol: str, title: str):
+        Ns = int(segf.samples_per_turn)
+        n_show_turns = min(3, int(segf.n_turns))
+        n = n_show_turns * Ns
+
+        t = segf.df["t"].to_numpy()[:n]
+        y = segf.df[ycol].to_numpy()[:n]
+
+        ax = st.ax
+        ax.clear()
+        ax.plot(t, y, "-", linewidth=1.0)
+        ax.set_title(title)
+        ax.set_xlabel("t (s)")
+        ax.set_ylabel(ycol)
+        _redraw(st.fig)
 
     def _on_load_segment(_):
-        _start_action()
-        with out:
-            cat = state.catalog
-            if cat is None:
-                print("Load catalog first.")
-                return
-            if dd_run.value is None or dd_segment.value is None:
-                print("Select run and segment.")
-                return
-
-            state.run_id = dd_run.value
-            state.ap_ui = dd_ap.value  # can be None and still valid
-            state.seg_id = dd_segment.value
-
-            f = cat.get_segment_file(state.run_id, state.ap_ui, state.seg_id)
-            state.file_path = f
-            ap_phys = cat.resolve_aperture(state.ap_ui)
-
-            if mode_dd.value == "mba" or (mode_dd.value == "auto" and f.name.lower().endswith("_raw_measurement_data.txt")):
-                segf = MbaRawMeasurementReader(MbaReaderConfig()).read(
-                    f,
-                    run_id=state.run_id,
-                    segment=str(state.seg_id),
-                    samples_per_turn=cat.samples_per_turn,
-                    aperture_id=ap_phys,
-                )
-            else:
-                segf = Sm18CorrSigsReader(Sm18ReaderConfig(strict_time=True)).read(
-                    f,
-                    run_id=state.run_id,
-                    segment=str(state.seg_id),
-                    samples_per_turn=cat.samples_per_turn,
-                    shaft_speed_rpm=cat.shaft_speed_rpm,
-                    aperture_id=ap_phys,
-                )
-
-            state.segf = segf
-
-            print("Loaded:", f)
-            print("n_turns:", segf.n_turns, "Ns:", segf.samples_per_turn, "n_samples:", len(segf.df))
-            if getattr(segf, "warnings", None):
-                print("warnings:")
-                for wmsg in segf.warnings:
-                    print(" -", wmsg)
+        try:
+            _start("Loading segment (this can take a few seconds)…")
+            segf = _read_selected_segment()
+            _log(f"Loaded: {st.seg_path}")
+            _log(f"n_turns={segf.n_turns}  Ns={segf.samples_per_turn}  n_samples={len(segf.df)}")
+            for m in segf.warnings:
+                _log(f"CHECK: {m}")
+            table_html.value = _df_head_to_html(segf.df, n=12, title="SegmentFrame.df head(12)")
+            _done("segment loaded (Phase II ready)")
+        except Exception as e:
+            _log(f"ERROR: {repr(e)}")
+            _done("error")
 
     def _on_preview(_):
-        _start_action()
-        with out:
-            if state.segf is None:
-                print("Load a segment first.")
+        try:
+            _start("Preview…")
+            if st.segf is None:
+                _log("No segment loaded yet. Click “Load segment” first.")
+                _done("no segment")
                 return
-
-            df = state.segf.df
-            Ns = int(state.segf.samples_per_turn)
-            n = min(len(df), 10 * Ns)
-
-            x = np.arange(n)
-            plt.figure()
-            plt.plot(x, df["df_cmp"].to_numpy()[:n], label="df_cmp")
-            plt.plot(x, df["df_abs"].to_numpy()[:n], label="df_abs")
-            plt.xlabel("sample index k (not time)")
-            plt.ylabel("flux (arb.)")
-            plt.title("Preview (first 10 turns)")
-            plt.legend()
-            plt.show()
+            segf = st.segf
+            ycol = "df_abs" if mode_dd.value == "abs" else "df_cmp"
+            title = f"Preview: run={st.run_id}  ap={segf.aperture_id}  seg={st.seg_id}  mode={mode_dd.value}"
+            table_html.value = _df_head_to_html(segf.df, n=12, title="SegmentFrame.df head(12)")
+            _plot_first_turns(segf, ycol=ycol, title=title)
+            _done("preview ready")
+        except Exception as e:
+            _log(f"ERROR: {repr(e)}")
+            _done("error")
 
     def _on_diag(_):
-        _start_action()
-        with out:
-            if state.segf is None:
-                print("Load a segment first.")
+        try:
+            _start("Diagnostics…")
+            if st.segf is None:
+                _log("No segment loaded yet. Click “Load segment” first.")
+                _done("no segment")
                 return
+            segf = st.segf
+            df = segf.df
 
-            df = state.segf.df
             t = df["t"].to_numpy()
             dt = np.diff(t)
-            finite = np.isfinite(dt)
+            dt_f = dt[np.isfinite(dt)]
 
-            print("dt stats (finite only):")
-            if np.any(finite):
-                print("  min   :", float(np.min(dt[finite])))
-                print("  median:", float(np.median(dt[finite])))
-                print("  max   :", float(np.max(dt[finite])))
-                print("  non-finite dt:", int(np.sum(~finite)))
+            _log("=== DIAGNOSTICS ===")
+            _log(f"file: {st.seg_path}")
+            _log(f"rows: {len(df)}   Ns: {segf.samples_per_turn}   n_turns: {segf.n_turns}")
+            _log(f"t finite: {int(np.sum(np.isfinite(t)))} / {len(t)}")
+            _log(f"dt finite: {int(np.sum(np.isfinite(dt)))} / {len(dt)}")
+            if dt_f.size:
+                _log(f"dt min/median/max: {dt_f.min():.6g} / {np.median(dt_f):.6g} / {dt_f.max():.6g}")
+                _log(f"n dt < 0: {int(np.sum(dt_f < 0))}")
             else:
-                print("  all dt are non-finite (time contains NaNs/Infs).")
+                _log("dt stats: no finite dt values")
+
+            for m in segf.warnings:
+                _log(f"CHECK: {m}")
+
+            for col in ["df_abs", "df_cmp", "I"]:
+                if col in df.columns:
+                    _log(f"{col} finite: {int(np.sum(np.isfinite(df[col].to_numpy())))} / {len(df)}")
+
+            _done("diagnostics ready")
+        except Exception as e:
+            _log(f"ERROR: {repr(e)}")
+            _done("error")
 
     btn_browse.on_click(_on_browse)
-    btn_load_catalog.on_click(_on_load_catalog)
-    btn_load_segment.on_click(_on_load_segment)
+    btn_load_cat.on_click(_on_load_catalog)
+    btn_load_seg.on_click(_on_load_segment)
     btn_preview.on_click(_on_preview)
     btn_diag.on_click(_on_diag)
 
-    top = w.HBox([folder, btn_browse, btn_load_catalog, append_output])
-    mid = w.HBox([dd_run, dd_ap, dd_segment, mode_dd, btn_load_segment, btn_preview, btn_diag])
-    gui = w.VBox([top, mid, out])
+    top = w.HBox([folder, btn_browse, btn_load_cat])
+    mid = w.HBox([dd_run, dd_ap, dd_seg, mode_dd, btn_load_seg, btn_preview, btn_diag, append_log])
 
-    _ACTIVE_GUI = gui
-    return gui
+    plot_box = w.VBox([w.HTML("<b>Plot</b>"), plot_slot])
+    table_box = w.VBox([w.HTML("<b>Table preview</b>"), table_html])
+    log_box = w.VBox([w.HTML("<b>Log</b>"), out_log])
+
+    return w.VBox([top, mid, status, plot_box, table_box, log_box])
 
 
-def build_gui() -> w.Widget:
-    """Combined GUI with Phase I and Phase II in tabs."""
-    global _ACTIVE_STATE
+def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
+    """
+    Combined Phase I + Phase II GUI (two tabs).
 
-    phase1 = build_catalog_gui()
+    VS Code notebook rule:
+      If you re-run the launch cell without clearing the cell output, you may end up with
+      multiple renderings. One click then updates all renderings -> repeated outputs.
+    """
+    global _ACTIVE_GUI
 
-    def _get_segf():
-        return _ACTIVE_STATE.segf if _ACTIVE_STATE is not None else None
+    # Clear the launch-cell output so the GUI doesn't stack visually.
+    if clear_cell_output:
+        try:
+            from IPython.display import clear_output
+            clear_output(wait=True)
+        except Exception:
+            pass
 
-    phase2 = build_phase2_panel(_get_segf)
+    # Close previous GUI instance from this module.
+    if _ACTIVE_GUI is not None:
+        try:
+            _ACTIVE_GUI.close()
+        except Exception:
+            pass
+        _ACTIVE_GUI = None
+
+    _close_all_figures()
+
+    shared: Dict[str, Any] = {
+        "catalog": None,
+        "segment_frame": None,
+        "segment_path": None,
+    }
+
+    phase1 = _build_phase1_panel(shared)
+    phase2 = build_phase2_panel(lambda: shared.get("segment_frame"))
 
     tabs = w.Tab(children=[phase1, phase2])
     tabs.set_title(0, "Phase I — Catalog")
     tabs.set_title(1, "Phase II — FFT")
+
+    _ACTIVE_GUI = tabs
     return tabs
+
+
+def build_catalog_gui() -> w.Widget:
+    """Return only the Phase I panel (catalog/preview/diagnostics)."""
+    shared: Dict[str, Any] = {"catalog": None, "segment_frame": None, "segment_path": None}
+    return _build_phase1_panel(shared)
+
+
+if __name__ == "__main__":
+    # Running this file in a terminal will not show the ipywidgets GUI.
+    # This message prevents confusion when executing `python .../gui/app.py`.
+    print("This module provides an ipywidgets GUI for Jupyter/VS Code notebooks.")
+    print("Use it in a notebook cell:")
+    print("  %matplotlib widget")
+    print("  from rotating_coil_analyzer.gui.app import build_gui")
+    print("  build_gui()")
