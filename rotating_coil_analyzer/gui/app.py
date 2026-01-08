@@ -161,7 +161,42 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
         with out_log:
             print(msg)
 
+
+    def _refresh_enabled() -> None:
+        """Enable/disable widgets based on current state (catalog/segment loaded)."""
+        cat_loaded = st.cat is not None
+        seg_loaded = st.segf is not None
+
+        btn_browse.disabled = False
+        btn_load_cat.disabled = False
+
+        dd_run.disabled = not cat_loaded
+        dd_ap.disabled = not cat_loaded
+        dd_seg.disabled = not cat_loaded
+        btn_load_seg.disabled = not cat_loaded
+
+        btn_preview.disabled = not seg_loaded
+        btn_diag.disabled = not seg_loaded
+
+    def _set_busy(busy: bool) -> None:
+        """Disable all interactive controls while a long action is running."""
+        if busy:
+            for wdg in [
+                btn_browse,
+                btn_load_cat,
+                dd_run,
+                dd_ap,
+                dd_seg,
+                btn_load_seg,
+                btn_preview,
+                btn_diag,
+            ]:
+                wdg.disabled = True
+        else:
+            _refresh_enabled()
+
     def _start(msg: str) -> None:
+        _set_busy(True)
         status.value = f"<b>Status:</b> {msg}"
         if not append_log.value:
             out_log.clear_output(wait=True)
@@ -169,6 +204,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
 
     def _done(msg: str = "idle") -> None:
         status.value = f"<b>Status:</b> {msg}"
+        _set_busy(False)
 
     def _on_browse(_):
         p = _browse_for_folder()
@@ -364,6 +400,8 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
     plot_box = w.VBox([w.HTML("<b>Plot</b>"), plot_slot])
     table_box = w.VBox([w.HTML("<b>Table preview</b>"), table_html])
     log_box = w.VBox([w.HTML("<b>Log</b>"), out_log])
+
+    _refresh_enabled()
 
     return w.VBox([top, mid, status, plot_box, table_box, log_box])
 

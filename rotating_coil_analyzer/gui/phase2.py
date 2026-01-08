@@ -18,6 +18,10 @@ class Phase2State:
     segf: Optional[SegmentFrame] = None
     tb: Any = None
     valid_turn: Optional[np.ndarray] = None
+    # QC approval workflow (Option B): preview QC actions, then apply before FFT
+    qc_plan: Optional[dict] = None
+    qc_plan_cfg: Optional[tuple] = None
+    qc_source: Optional[str] = None
     ok_t: Optional[np.ndarray] = None
     ok_abs: Optional[np.ndarray] = None
     ok_cmp: Optional[np.ndarray] = None
@@ -192,11 +196,18 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     append_log = w.Checkbox(value=False, description="Append output", indent=False, layout=w.Layout(width="140px"))
     status = w.HTML(value="<b>Status:</b> idle")
 
-    btn_compute = w.Button(
-        description="Compute FFT (per turn)",
-        button_style="primary",
-        layout=w.Layout(width="210px"),
+    btn_preview_qc = w.Button(
+        description="Preview QC actions",
+        button_style="warning",
+        layout=w.Layout(width="190px"),
     )
+
+    btn_apply_qc = w.Button(
+        description="Apply QC + Compute FFT",
+        button_style="primary",
+        layout=w.Layout(width="220px"),
+    )
+    btn_apply_qc.disabled = True
 
     dd_channel = w.Dropdown(
         options=[("compensated (df_cmp)", "cmp"), ("absolute (df_abs)", "abs")],
@@ -256,7 +267,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             out_log.clear_output(wait=True)
         _set_status(msg)
         _set_enabled(
-            [btn_compute, btn_plot_amp, btn_plot_ns, btn_save_plot, btn_save_table, btn_show_head],
+            [btn_preview_qc, btn_apply_qc, btn_plot_amp, btn_plot_ns, btn_save_plot, btn_save_table, btn_show_head],
             False,
         )
         with out_log:
@@ -264,10 +275,11 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
 
     def _end_action(ok: bool = True, msg: str = "idle"):
         _set_enabled(
-            [btn_compute, btn_plot_amp, btn_plot_ns, btn_save_plot, btn_save_table, btn_show_head],
+            [btn_preview_qc, btn_apply_qc, btn_plot_amp, btn_plot_ns, btn_save_plot, btn_save_table, btn_show_head],
             True,
         )
         _set_status(msg if ok else f"ERROR: {msg}")
+        _refresh_qc_buttons()
 
     def _refresh_plateau_dropdown(df_out: pd.DataFrame):
         if "plateau_id" in df_out.columns:
@@ -314,27 +326,190 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     # ---------------------------
     # Actions
     # ---------------------------
-    def _compute(_):
+    def _qc_cfg() -> tuple:
+        # QC plan depends only on whether time is required to be finite/monotonic.
+        return (bool(require_finite_t.value),)
+
+    def _current_source() -> Optional[str]:
+        segf_cur = get_segmentframe_callable()
+        if segf_cur is None:
+            return None
+        return str(segf_cur.source_path)
+
+    def _format_turn_list(idxs0: np.ndarray, *, max_show: int = 12) -> str:
+        if idxs0.size == 0:
+            return "(none)"
+        idxs1 = (idxs0.astype(int) + 1).tolist()  # user-facing 1-based turn numbers
+        if len(idxs1) > max_show:
+            head = ", ".join(str(x) for x in idxs1[:max_show])
+            return f"{head}, … (+{len(idxs1) - max_show} more)"
+        return ", ".join(str(x) for x in idxs1)
+
+    def _refresh_qc_buttons() -> None:
+        src = _current_source()
+        ok = (
+            state.qc_plan is not None
+            and state.qc_source == src
+            and state.qc_plan_cfg == _qc_cfg()
+        )
+        btn_apply_qc.disabled = not ok
+
+    def _preview_qc(_):
         try:
-            _start_action("Computing turn-QC + per-turn FFT…")
+            _start_action("Previewing QC actions…")
             _init_plot_once()
 
             segf = get_segmentframe_callable()
             if segf is None:
                 with out_log:
                     print("No SegmentFrame loaded yet. In Phase I, click 'Load segment' first.")
+                state.qc_plan = None
+                state.qc_plan_cfg = None
+                state.qc_source = None
                 _end_action(ok=False, msg="no segment loaded")
                 return
 
+            # Invalidate any prior FFT tables if the source changed.
+            src = str(segf.source_path)
+            if state.qc_source is not None and state.qc_source != src:
+                state.df_out = None
+                state.df_out_mean = None
+                state.df_out_std = None
+                state.df_ns = None
+                state.mean_ns = None
+                state.std_ns = None
+
             segf2, rem = _ensure_full_turns(segf)
+            tb = split_into_turns(segf2)
+
+            # Per-turn validity masks
+            ok_abs = np.all(np.isfinite(tb.df_abs), axis=1)
+            ok_cmp = np.all(np.isfinite(tb.df_cmp), axis=1)
+            ok_I = np.all(np.isfinite(tb.I), axis=1)
+            finite_t = np.all(np.isfinite(tb.t), axis=1)
+            mono_t = finite_t & np.all(np.diff(tb.t, axis=1) > 0.0, axis=1)
+
+            if require_finite_t.value:
+                ok_t = mono_t
+            else:
+                ok_t = np.ones(tb.n_turns, dtype=bool)
+
+            valid_turn = ok_abs & ok_cmp & ok_I & ok_t
+
+            # Reason breakdown (always reported, even if require_finite_t=False)
+            bad_abs = np.where(~ok_abs)[0]
+            bad_cmp = np.where(~ok_cmp)[0]
+            bad_I = np.where(~ok_I)[0]
+            bad_t_nonfinite = np.where(~finite_t)[0]
+            bad_t_nonmono = np.where(finite_t & ~np.all(np.diff(tb.t, axis=1) > 0.0, axis=1))[0]
+            dropped = np.where(~valid_turn)[0]
+
+            # Store QC plan (not yet applied) for the follow-up 'Apply QC + Compute FFT' step.
+            state.qc_plan = {
+                "segf_trimmed": segf2,
+                "rem_samples": int(rem),
+                "tb": tb,
+                "valid_turn": valid_turn,
+                "ok_abs": ok_abs,
+                "ok_cmp": ok_cmp,
+                "ok_I": ok_I,
+                "finite_t": finite_t,
+                "mono_t": mono_t,
+            }
+            state.qc_plan_cfg = _qc_cfg()
+            state.qc_source = src
+
+            # Display a user-facing QC preview summary.
+            n_total = int(tb.n_turns)
+            n_keep = int(np.sum(valid_turn))
+            n_drop = int(n_total - n_keep)
+
+            with out_log:
+                print("QC PREVIEW (no changes applied yet)")
+                print(f" - Source: {src}")
+                if rem != 0:
+                    print(f" - Tail remainder: {int(rem)} samples would be trimmed to reach full turns.")
+                else:
+                    print(" - Tail remainder: none (already full turns).")
+
+                print(f" - Turns: total={n_total}, keep={n_keep}, drop={n_drop}")
+                print(" - Drop rule set:")
+                print(f"    * abs finite: required (bad turns: {bad_abs.size})")
+                print(f"    * cmp finite: required (bad turns: {bad_cmp.size})")
+                print(f"    * I   finite: required (bad turns: {bad_I.size})")
+                if require_finite_t.value:
+                    print(f"    * t finite + strictly increasing within turn: required (bad non-finite: {bad_t_nonfinite.size}, bad non-monotonic: {bad_t_nonmono.size})")
+                else:
+                    print(f"    * t finite/monotonic: NOT required for dropping (detected non-finite: {bad_t_nonfinite.size}, non-monotonic: {bad_t_nonmono.size})")
+
+                print(" - Turn indices (1-based) by reason (first items):")
+                print(f"    * abs non-finite: { _format_turn_list(bad_abs) }")
+                print(f"    * cmp non-finite: { _format_turn_list(bad_cmp) }")
+                print(f"    * I non-finite:   { _format_turn_list(bad_I) }")
+                print(f"    * t non-finite:   { _format_turn_list(bad_t_nonfinite) }")
+                print(f"    * t non-monotonic:{ _format_turn_list(bad_t_nonmono) }")
+                print(f"    * total dropped:  { _format_turn_list(dropped) }")
+
+                if getattr(tb, "plateau_id", None) is not None:
+                    uniq = np.unique(tb.plateau_id)
+                    print(" - Plateau summary (keep/total):")
+                    for pid in uniq[:20]:
+                        mask = (tb.plateau_id == pid)
+                        kk = int(np.sum(valid_turn[mask]))
+                        tt = int(np.sum(mask))
+                        print(f"    * plateau_id={int(pid)}: {kk}/{tt}")
+                    if uniq.size > 20:
+                        print(f"    ... ({int(uniq.size - 20)} more plateaus)")
+
+                print("ACTION REQUIRED: If you agree with these QC actions, click 'Apply QC + Compute FFT'.")
+
+            _end_action(ok=True, msg="QC preview ready")
+            _refresh_qc_buttons()
+
+        except Exception as e:
+            with out_log:
+                print("Exception:", repr(e))
+            state.qc_plan = None
+            state.qc_plan_cfg = None
+            state.qc_source = None
+            _end_action(ok=False, msg=str(e))
+            _refresh_qc_buttons()
+
+    def _apply_qc_and_compute(_):
+        try:
+            _start_action("Applying QC + computing per-turn FFT…")
+            _init_plot_once()
+
+            if state.qc_plan is None or state.qc_source != _current_source() or state.qc_plan_cfg != _qc_cfg():
+                with out_log:
+                    print("No valid QC plan is available (or it is stale). Click 'Preview QC actions' first.")
+                _end_action(ok=False, msg="QC not approved")
+                _refresh_qc_buttons()
+                return
+
+            plan = state.qc_plan
+            segf2 = plan["segf_trimmed"]
+            rem = int(plan["rem_samples"])
+            tb = plan["tb"]
+            valid_turn = plan["valid_turn"]
+
+            # Apply the approved plan into the Phase II state (Phase I data stays untouched).
+            state.segf = segf2
+            state.tb = tb
+            state.valid_turn = valid_turn
+            state.ok_abs = plan.get("ok_abs")
+            state.ok_cmp = plan.get("ok_cmp")
+            state.ok_t = plan.get("mono_t") if require_finite_t.value else np.ones(tb.n_turns, dtype=bool)
+
             if rem != 0:
                 with out_log:
-                    print(f"INCOMPLETE TURN DETECTED: trimmed tail remainder={rem} samples before analysis.")
-            else:
-                with out_log:
-                    print(f"Full-turn length OK: total samples={len(segf2.df)} is n_turns*Ns ({segf2.n_turns}*{segf2.samples_per_turn}).")
+                    print(f"APPLY: trimming tail remainder={rem} samples to reach full turns.")
 
-            state.segf = segf2
+            n_total = int(tb.n_turns)
+            n_keep = int(np.sum(valid_turn))
+            n_drop = int(n_total - n_keep)
+            with out_log:
+                print(f"APPLY: turns keep={n_keep} / total={n_total} (drop={n_drop})")
 
             # Default main field order (magnetOrder) from Parameters.txt if available.
             if getattr(segf2, "magnet_order", None) is not None and int(segf2.magnet_order) > 0:
@@ -345,26 +520,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 with out_log:
                     print(f"Phase reference: magnetOrder not available; using GUI value m={int(main_order.value)}")
 
-            tb = split_into_turns(segf2)
-            state.tb = tb
-
-            ok_abs = np.all(np.isfinite(tb.df_abs), axis=1)
-            ok_cmp = np.all(np.isfinite(tb.df_cmp), axis=1)
-            ok_t = np.all(np.isfinite(tb.t), axis=1) if require_finite_t.value else np.ones(tb.df_abs.shape[0], dtype=bool)
-            valid_turn = ok_t & ok_abs & ok_cmp
-
-            state.ok_t, state.ok_abs, state.ok_cmp = ok_t, ok_abs, ok_cmp
-            state.valid_turn = valid_turn
-
-            with out_log:
-                print("TURN QC REPORT")
-                print("  total turns:", int(tb.df_abs.shape[0]))
-                print("  keep turns :", int(np.sum(valid_turn)))
-                print("  drop turns :", int(np.sum(~valid_turn)))
-                print("   - drop (non-finite t)      :", int(np.sum(~ok_t)))
-                print("   - drop (finite t, bad abs) :", int(np.sum(ok_t & ~ok_abs)))
-                print("   - drop (finite t+abs, bad cmp):", int(np.sum(ok_t & ok_abs & ~ok_cmp)))
-
+            # Turn matrices for FFT (approved subset).
             abs_turns = tb.df_abs[valid_turn, :]
             cmp_turns = tb.df_cmp[valid_turn, :]
             I_turns = tb.I[valid_turn, :]
@@ -456,25 +612,25 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             state.df_ns = df_ns
 
             if "plateau_id" in df_ns.columns:
-                gn = df_ns.groupby("plateau_id", sort=True)
-                state.mean_ns = gn.mean(numeric_only=True)
-                state.std_ns = gn.std(numeric_only=True)
+                g2 = df_ns.groupby("plateau_id", sort=True)
+                state.mean_ns = g2.mean(numeric_only=True)
+                state.std_ns = g2.std(numeric_only=True)
             else:
                 state.mean_ns = df_ns.mean(numeric_only=True).to_frame().T
                 state.std_ns = df_ns.std(numeric_only=True).to_frame().T
 
             with out_log:
-                print("Computed tables ready.")
+                print("DONE: FFT computed.")
+                print("Tip: you can change N_max or plotting options and recompute without redoing QC if the QC plan remains valid.")
 
-            # Clear table pane on compute (keeps UI tidy)
-            out_table.clear_output(wait=True)
+            _end_action(ok=True, msg="FFT computed")
+            _refresh_qc_buttons()
 
-            _end_action(ok=True, msg="FFT ready")
         except Exception as e:
             with out_log:
                 print("Exception:", repr(e))
             _end_action(ok=False, msg=str(e))
-
+            _refresh_qc_buttons()
     def _plot_amp(_):
         try:
             _start_action("Updating amplitude plot…")
@@ -482,7 +638,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
 
             if state.df_out is None:
                 with out_log:
-                    print("Nothing computed yet. Click 'Compute FFT (per turn)' first.")
+                    print("Nothing computed yet. Click 'Apply QC + Compute FFT' first (after 'Preview QC actions').")
                 _end_action(ok=False, msg="no FFT yet")
                 return
 
@@ -531,7 +687,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
 
             if state.mean_ns is None:
                 with out_log:
-                    print("Nothing computed yet. Click 'Compute FFT (per turn)' first.")
+                    print("Nothing computed yet. Click 'Apply QC + Compute FFT' first (after 'Preview QC actions').")
                 _end_action(ok=False, msg="no FFT yet")
                 return
 
@@ -658,7 +814,8 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             _end_action(ok=False, msg=str(e))
 
     # Wire callbacks
-    btn_compute.on_click(_compute)
+    btn_preview_qc.on_click(_preview_qc)
+    btn_apply_qc.on_click(_apply_qc_and_compute)
     btn_plot_amp.on_click(_plot_amp)
     btn_plot_ns.on_click(_plot_ns)
     btn_save_plot.on_click(_save_plot)
@@ -669,7 +826,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     _init_plot_once()
 
     # Layout
-    row1 = w.HBox([nmax, main_order, integrate_to_flux, drift_correction, require_finite_t, btn_compute, append_log])
+    row1 = w.HBox([nmax, main_order, integrate_to_flux, drift_correction, require_finite_t, btn_preview_qc, btn_apply_qc, append_log])
     row2 = w.HBox([dd_channel, dd_harm, btn_plot_amp, dd_plateau, btn_plot_ns])
     row3 = w.HBox([save_plot_fmt, btn_save_plot, table_choice, btn_save_table, btn_show_head])
 

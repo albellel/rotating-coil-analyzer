@@ -40,7 +40,7 @@ class HarmonicsSummary:
 
 
 def dft_per_turn(signal_turns: np.ndarray, *, n_max: Optional[int] = None) -> HarmonicsPerTurn:
-    """Compute discrete Fourier coefficients per turn.
+    r"""Compute discrete Fourier coefficients per turn.
 
     Parameters
     ----------
