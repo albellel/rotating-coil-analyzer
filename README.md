@@ -1,105 +1,85 @@
-# Rotating Coil Analyzer (Python) — Phase 1
+# Rotating Coil Analyzer
 
-This repository is an **offline Python analyzer** for rotating-coil magnetic measurements, inspired by CERN MMM / FFMM workflows.
+Python tooling to ingest rotating-coil acquisition files (SM18 binary and MBA plateau text formats), split measurements into turns using a strict time policy, and compute per-turn Fourier harmonics with a simple two-tab GUI.
 
-Phase-1 scope is intentionally limited to:
-
-- **Discovery / cataloging** of a measurement folder
-- Parsing `Parameters.txt` (including `TABLE{...}` payloads with escaped `\t` / `\n`)
-- **Locating segment files** (SM18 `corr_sigs` and `generic_corr_sigs`)
-- Reading segment files (`.bin`, `.txt`, `.csv`) into a clean `pandas.DataFrame`
-- Emitting **sanity checks** and convenient **debug plots** (GUI)
-
-No FFT/multipoles/TurnQC/Kn calculations are part of Phase-1.
+This project is designed for accelerator-magnet rotating-coil measurements, with a strong emphasis on **data integrity** and **traceability**.
 
 ---
 
-## Installation (editable)
+## Key principles (non-negotiable)
 
-From the repo root (same directory as `pyproject.toml`):
+### No synthetic time
+The software **never creates synthetic time**.
 
+- Time must come from acquisition columns in the input file(s).
+- If time is missing or non-finite in a tail region, the affected samples/turns are **dropped**, not “fixed” by regenerating or aligning time.
+- All trimming / dropping actions are **reported** to the user and require an explicit “preview → apply” step in the GUI.
+
+---
+
+## Current capabilities
+
+### Supported input formats
+- **SM18 binary** (`*.bin`): “corr/generic” variants supported via `Parameters.txt` FDIs table mapping.
+- **MBA plateau text** (`*_raw_measurement_data.txt`): multi-file plateau sequences concatenated in correct order, with plateau metadata propagated per turn.
+
+### Data model
+- A discovered measurement folder is represented as a **MeasurementCatalog** (core API).
+- A loaded segment is represented as a **SegmentFrame** (core API), holding:
+  - the raw sample table (`SegmentFrame.df`)
+  - metadata including `samples_per_turn`, `n_turns`, `aperture_id`, and (when available) `magnet_order`.
+
+### Turn splitting and QC
+- Turns are defined by `samples_per_turn` (no index pulse is assumed at present).
+- Data-quality actions are *previewed* and then *applied*:
+  - tail trimming to reach an integer number of turns
+  - dropping turns with non-finite signals
+  - enforcing time validity (optionally requiring strictly increasing time within each turn)
+
+### Fourier harmonics (Phase II)
+- Per-turn DFT up to a chosen maximum order.
+- Optional **integrate differential signal → flux** (legacy convention).
+- Optional **drift correction** (use only when needed).
+- Phase reference uses the **main field order** (from `Parameters.txt` if available, otherwise user-selected).
+- Normal/skew plots are shown per selected plateau (with plateau ID and mean current).
+
+### Export
+- Plot export: SVG or PDF.
+- Table export: CSV.
+
+---
+
+## GUI overview
+
+The GUI has two tabs:
+
+### Phase I — Catalog
+1. Select a measurement folder.
+2. Discover runs/segments via `Parameters.txt` and FDIs table mapping.
+3. Load a selected segment and inspect diagnostics.
+
+If the measurement has only one aperture, the GUI shows **“single aperture measurement”** (not “none”).
+
+### Phase II — Harmonics (FFT)
+Workflow is explicit and safe:
+
+1. **Preview data-quality cuts**
+   - Shows what will be trimmed/dropped and why.
+2. **Apply cuts and compute harmonics (FFT)**
+   - Applies only what was previewed.
+3. Plotting views:
+   - **View 1:** Amplitude versus current for a selected harmonic and channel.
+   - **View 2:** Normal/skew versus harmonic order for a selected plateau.
+
+---
+
+## Installation
+
+### Requirements
+- Python 3.10+ recommended
+- Common scientific stack: `numpy`, `pandas`, `matplotlib`, `ipywidgets`
+- Jupyter environment (recommended for the GUI notebooks)
+
+### Install (editable)
 ```bash
-python -m pip install -U pip
-python -m pip install -e .
-```
-
-Recommended for notebooks:
-
-```python
-%load_ext autoreload
-%autoreload 2
-```
-
----
-
-## Expected file naming patterns (Phase-1)
-
-Discovery supports both patterns:
-
-- `<run_id>_corr_sigs_Ap_<ap>_Seg<seg>.bin`
-- `<run_id>_generic_corr_sigs_Ap_<ap>_Seg<seg>.bin`
-
-Also accepts `.txt` and `.csv` instead of `.bin`.
-
-Where:
-- `ap` is a **physical aperture id** (e.g., `1` or `2`)
-- `seg` can be numeric (`3`) or string (`CS`, `NCS`, ...)
-
----
-
-## Parameters.txt handling
-
-Phase-1 searches for `Parameters.txt` in the selected folder **or up to 2 parent folders above**.
-
-Required keys:
-- `Parameters.Measurement.samples`
-- `Parameters.Measurement.v`
-- `Measurement.AP1.enabled`, `Measurement.AP2.enabled` (AP2 optional)
-- `Measurement.AP1.FDIs` and `Measurement.AP2.FDIs` for enabled apertures
-
-Strict policy: **no degraded mode**. If Parameters parsing fails, discovery fails loudly.
-
----
-
-## Running the GUI (Jupyter / VS Code notebook)
-
-In a notebook cell:
-
-```python
-from rotating_coil_analyzer.gui.app import build_catalog_gui
-gui = build_catalog_gui()
-gui
-```
-
-Notes:
-- If you re-run the cell and see “duplicated GUI outputs”, use the notebook UI **Clear Outputs** for that cell.
-- If you edit code but the kernel keeps using old imports, restart the kernel (or use autoreload).
-
----
-
-## Sanity checks shown in the GUI
-
-The reader emits `SegmentFrame.warnings`, including:
-- selected binary format (dtype + number of columns)
-- flux column assignment (abs/cmp)
-- dt nominal check (from |v| and samples_per_turn)
-- current candidate dynamic ranges
-- duplicate current detection (`I1 == I2`, etc.)
-
----
-
-## Tests (minimal ROI set)
-
-Tests are in `rotating_coil_analyzer/tests` and use the standard library `unittest`.
-
-Run from repo root:
-
-```bash
-python -m unittest discover -s rotating_coil_analyzer/tests -v
-```
-
-Covers:
-- discovery filename regex: `corr_sigs` + `generic_corr_sigs`
-- two-aperture collision prevention (segment_files key includes aperture)
-- Parameters TABLE parsing with escaped sequences
-- binary inference sanity (dt nominal check)
+pip install -e .
