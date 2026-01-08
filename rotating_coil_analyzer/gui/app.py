@@ -7,6 +7,8 @@ from typing import Optional, Dict, Any
 import numpy as np
 import pandas as pd
 import ipywidgets as w
+
+from rotating_coil_analyzer.gui.log_view import HtmlLog
 import matplotlib.pyplot as plt
 
 from rotating_coil_analyzer.ingest.discovery import MeasurementDiscovery
@@ -151,16 +153,21 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
     append_log = w.Checkbox(value=False, description="Append output", indent=False, layout=w.Layout(width="140px"))
     status = w.HTML(value="<b>Status:</b> idle")
 
-    out_log = w.Output(layout=w.Layout(border="1px solid #ddd", padding="8px"))
+    log = HtmlLog(height_px=220)
+
     table_html = w.HTML(value="<div style='color:#666;'>No segment loaded.</div>")
     plot_slot = w.Box(layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%"))
 
     _init_plot_once(st, plot_slot)
 
     def _log(msg: str) -> None:
-        with out_log:
-            print(msg)
-
+        s = "" if msg is None else str(msg)
+        if s.startswith("ERROR:"):
+            log.error(s)
+        elif s.startswith("WARN") or s.startswith("WARNING") or s.startswith("CHECK:") or s.startswith("Warning"):
+            log.warning(s)
+        else:
+            log.info(s)
 
     def _refresh_enabled() -> None:
         """Enable/disable widgets based on current state (catalog/segment loaded)."""
@@ -199,7 +206,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
         _set_busy(True)
         status.value = f"<b>Status:</b> {msg}"
         if not append_log.value:
-            out_log.clear_output(wait=True)
+            log.clear()
         _log(msg)
 
     def _done(msg: str = "idle") -> None:
@@ -255,7 +262,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
             if cat.warnings:
                 _log("WARNINGS:")
                 for m in cat.warnings:
-                    _log(f" - {m}")
+                    _log(f"WARNING: {m}")
 
             _done("catalog ready")
         except Exception as e:
@@ -345,7 +352,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
         try:
             _start("Preview…")
             if st.segf is None:
-                _log("No segment loaded yet. Click “Load segment” first.")
+                _log("WARNING: No segment loaded yet. Click “Load segment” first.")
                 _done("no segment")
                 return
             segf = st.segf
@@ -362,7 +369,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
         try:
             _start("Diagnostics…")
             if st.segf is None:
-                _log("No segment loaded yet. Click “Load segment” first.")
+                _log("WARNING: No segment loaded yet. Click “Load segment” first.")
                 _done("no segment")
                 return
             segf = st.segf
@@ -395,6 +402,15 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
             _log(f"ERROR: {repr(e)}")
             _done("error")
 
+    def _clear_button_handlers(btn: w.Button) -> None:
+        try:
+            btn._click_handlers.callbacks.clear()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    for b in [btn_browse, btn_load_cat, btn_load_seg, btn_preview, btn_diag]:
+        _clear_button_handlers(b)
+
     btn_browse.on_click(_on_browse)
     btn_load_cat.on_click(_on_load_catalog)
     btn_load_seg.on_click(_on_load_segment)
@@ -406,7 +422,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
 
     plot_box = w.VBox([w.HTML("<b>Plot</b>"), plot_slot])
     table_box = w.VBox([w.HTML("<b>Table preview</b>"), table_html])
-    log_box = w.VBox([w.HTML("<b>Log</b>"), out_log])
+    log_box = w.VBox([w.HTML("<b>Log</b>"), log.widget])
 
     _refresh_enabled()
 

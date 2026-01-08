@@ -4,10 +4,13 @@ from dataclasses import dataclass
 from typing import Any, Optional, Sequence, Dict
 
 import time
+import html
 
 import numpy as np
 import pandas as pd
 import ipywidgets as w
+
+from rotating_coil_analyzer.gui.log_view import HtmlLog
 import matplotlib.pyplot as plt
 
 from rotating_coil_analyzer.models.frames import SegmentFrame
@@ -390,8 +393,9 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
 
     status = w.HTML(value="<b>Status:</b> idle")
 
-    out_log = w.Output(layout=w.Layout(border="1px solid #ddd", padding="8px", height="220px", overflow_y="auto"))
-    out_table = w.Output(layout=w.Layout(border="1px solid #ddd", padding="8px", height="260px", overflow_y="auto"))
+    log = HtmlLog(height_px=220)
+    out_log = log.output_proxy()
+    table_html = w.HTML(value="<div style='color:#666;'>Table is empty.</div>")
 
     plot_slot = w.Box(layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%"))
 
@@ -1002,10 +1006,14 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 _end_action(ok=False, msg="no table")
                 return
 
-            out_table.clear_output(wait=True)
-            with out_table:
-                print(f"First rows of: {key}")
-                print(df.head(15))
+            txt = df.head(15).to_string()
+            esc = html.escape(txt)
+            table_html.value = (
+                "<div style='border:1px solid #ddd; padding:8px; height:260px; overflow-y:auto; background:#fff;'>"
+                f"<div style='margin-bottom:6px; color:#444;'><b>First rows of:</b> {html.escape(key)}</div>"
+                f"<pre style='margin:0; white-space:pre; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace;'>{esc}</pre>"
+                "</div>"
+            )
             _end_action(ok=True, msg="table shown")
         except Exception as e:
             with out_log:
@@ -1079,7 +1087,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             view2_box,
             export_box,
             w.HTML("<b>Log</b>"),
-            out_log,
+            log.widget,
         ],
         layout=w.Layout(width="48%", min_width="560px"),
     )
@@ -1090,7 +1098,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             w.HTML("<b>Plot</b>"),
             plot_slot,
             w.HTML("<b>Table</b>"),
-            out_table,
+            table_html,
         ],
         layout=w.Layout(width="52%"),
     )
