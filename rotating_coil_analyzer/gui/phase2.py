@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence, Dict, Iterable
+from typing import Any, Optional, Sequence, Dict
+
+import time
 
 import numpy as np
 import pandas as pd
@@ -13,37 +15,57 @@ from rotating_coil_analyzer.analysis.turns import split_into_turns
 from rotating_coil_analyzer.analysis.fourier import dft_per_turn
 
 
+# Keep a single active Phase II panel per kernel (defensive: prevents stacked live instances).
+_ACTIVE_PHASE2_PANEL: Optional[w.Widget] = None
+
+
 @dataclass
 class Phase2State:
     segf: Optional[SegmentFrame] = None
     tb: Any = None
     valid_turn: Optional[np.ndarray] = None
-    # QC approval workflow (Option B): preview QC actions, then apply before FFT
-    qc_plan: Optional[dict] = None
-    qc_plan_cfg: Optional[tuple] = None
-    qc_source: Optional[str] = None
-    ok_t: Optional[np.ndarray] = None
-    ok_abs: Optional[np.ndarray] = None
-    ok_cmp: Optional[np.ndarray] = None
 
+    # Two-step workflow: preview cuts, then apply before computing harmonics
+    dq_plan: Optional[dict] = None
+    dq_plan_cfg: Optional[tuple] = None
+    dq_source: Optional[str] = None
+
+    # FFT results
     H_abs: Any = None
     H_cmp: Any = None
 
     # Tables
-    df_out: Optional[pd.DataFrame] = None
-    df_out_mean: Optional[pd.DataFrame] = None
-    df_out_std: Optional[pd.DataFrame] = None
+    df_out: Optional[pd.DataFrame] = None           # per turn (amplitude/phase)
+    df_out_mean: Optional[pd.DataFrame] = None      # per plateau mean
+    df_out_std: Optional[pd.DataFrame] = None       # per plateau std
 
-    df_ns: Optional[pd.DataFrame] = None
-    mean_ns: Optional[pd.DataFrame] = None
-    std_ns: Optional[pd.DataFrame] = None
+    df_ba: Optional[pd.DataFrame] = None            # normal/skew per turn (phase referenced)
+    mean_ba: Optional[pd.DataFrame] = None          # normal/skew per plateau mean
+    std_ba: Optional[pd.DataFrame] = None           # normal/skew per plateau std
 
-    # One persistent plot
+    # Plateau mapping for UI (plateau_id -> mean current)
+    plateau_current_map: Optional[Dict[int, float]] = None
+
+    # Persistent plot
     fig: Optional[Any] = None
     ax: Optional[Any] = None
 
+    # Prevent accidental re-entrancy
+    busy: bool = False
 
-def _saveas_dialog(initialfile: str, defaultextension: str, filetypes: list[tuple[str, str]]) -> Optional[str]:
+    # Debounce repeated clicks (defensive)
+    last_action_key: Optional[str] = None
+    last_action_t: float = 0.0
+
+
+def _saveas_dialog(
+    *,
+    initialfile: str,
+    defaultextension: str,
+    filetypes: list[tuple[str, str]],
+    title: str = "Save file",
+) -> Optional[str]:
+    """Open a native Save-As dialog (best effort). Returns None if tkinter is unavailable."""
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -60,7 +82,7 @@ def _saveas_dialog(initialfile: str, defaultextension: str, filetypes: list[tupl
             pass
 
         path = filedialog.asksaveasfilename(
-            title="Save file",
+            title=title,
             initialfile=initialfile,
             defaultextension=defaultextension,
             filetypes=filetypes,
@@ -75,6 +97,10 @@ def _saveas_dialog(initialfile: str, defaultextension: str, filetypes: list[tupl
 
 
 def _ensure_full_turns(segf: SegmentFrame) -> tuple[SegmentFrame, int]:
+    """Trim tail samples so that len(df) == n_turns * samples_per_turn.
+
+    Removes partial tail data (cannot form a full turn). Does not modify time values.
+    """
     Ns = int(segf.samples_per_turn)
     n = len(segf.df)
     rem = n % Ns
@@ -97,159 +123,276 @@ def _ensure_full_turns(segf: SegmentFrame) -> tuple[SegmentFrame, int]:
     return segf2, rem
 
 
-def _phase_zero_from_main_harmonic(H_ref, main_order: int) -> tuple[np.ndarray, np.ndarray]:
-    """Compute per-turn phase zero Φ_out consistent with the legacy C++ rotation.
+def _wrap_arg_to_pm_pi_over_2(phi: np.ndarray) -> np.ndarray:
+    """Wrap angles into [-pi/2, +pi/2] by adding/subtracting pi (legacy convention)."""
+    out = np.asarray(phi, dtype=float).copy()
+    out[out > (np.pi / 2.0)] -= np.pi
+    out[out < (-np.pi / 2.0)] += np.pi
+    return out
 
-    Legacy convention (MatlabAnalyzerRotCoil.cpp):
-      - Let m = magnetOrder (main field order).
-      - Compute SignalPhase = arg(C_abs[m-1]) (after internal scaling; scaling does not affect phase).
-      - Apply a π-wrap into [-π/2, +π/2] to stabilize the choice.
-      - Define Φ_out = SignalPhase / m.
-      - Rotate each harmonic n by exp(-i n Φ_out).
 
-    Here we replicate the same idea using the reference coefficient in H_ref at order m.
-    Returns:
-      phi_out: shape (n_turns,), the per-turn Φ_out
-      bad: boolean mask (True where reference harmonic is tiny or non-finite and Φ_out was forced to 0)
+def _phase_zero_from_main_harmonic(H_ref, main_order: int, *, eps: float = 1e-20) -> tuple[np.ndarray, np.ndarray]:
+    """Compute per-turn phase zero Φ_out from the main field order m (legacy compatible).
+
+    Using stored coefficients C_n (FFT/Ns):
+
+      Φ_out = wrap(arg(C_m)) / m
+
+    Then each harmonic n is rotated by exp(-i*n*Φ_out).
     """
     m = int(main_order)
     if m <= 0:
-        raise ValueError(f"main_order must be > 0, got {m}")
+        raise ValueError(f"Main field order must be > 0, got {m}")
 
     orders = np.asarray(H_ref.orders, dtype=int)
     idx = np.where(orders == m)[0]
     if idx.size == 0:
-        raise ValueError(f"Reference harmonic m={m} not available. Increase N_max.")
+        raise ValueError(f"Main field order m={m} is not available. Increase the maximum harmonic order.")
     j = int(idx[0])
 
-    c_m = np.asarray(H_ref.coeff)[:, j]
+    c_m = np.asarray(H_ref.coeff[:, j], dtype=complex)
     mag = np.abs(c_m)
-    phi = np.angle(c_m)
+    arg = np.angle(c_m)
 
-    # Replicate the C++ phase wrap: keep main phase in [-π/2, +π/2] by shifting by π if needed.
-    phi_wrapped = np.array(phi, copy=True)
-    phi_wrapped[phi_wrapped > (np.pi / 2.0)] -= np.pi
-    phi_wrapped[phi_wrapped < (-np.pi / 2.0)] += np.pi
+    bad = (~np.isfinite(mag)) | (mag < eps) | (~np.isfinite(arg))
 
-    bad = (~np.isfinite(phi_wrapped)) | (~np.isfinite(mag)) | (mag < 1e-20)
-
-    phi_out = phi_wrapped / float(m)
+    arg_wrapped = _wrap_arg_to_pm_pi_over_2(arg)
+    phi_out = arg_wrapped / float(m)
     if np.any(bad):
         phi_out = np.array(phi_out, copy=True)
         phi_out[bad] = 0.0
     return phi_out, bad
 
 
-def _rotate_harmonics(H, phi_ref: np.ndarray) -> np.ndarray:
-    orders = np.asarray(H.orders)
-    C = np.array(H.coeff, copy=True)
+def _rotate_harmonics(H, phi_out: np.ndarray) -> np.ndarray:
+    """Rotate harmonics by exp(-i*n*Φ_out) per turn."""
+    C = np.array(H.coeff, dtype=complex, copy=True)
+    orders = np.asarray(H.orders, dtype=int)
     for j, n in enumerate(orders):
-        C[:, j] = C[:, j] * np.exp(-1j * float(n) * phi_ref)
+        C[:, j] = C[:, j] * np.exp(-1j * float(n) * phi_out)
     return C
 
 
 def _ba_from_rotated(C_rot: np.ndarray, orders: Sequence[int], prefix: str) -> pd.DataFrame:
-    """Compute legacy-compatible (B/A) coefficients from rotated complex harmonics.
+    """Compute legacy-compatible normal/skew (B/A) from rotated complex harmonics.
 
-    With the internal convention C_n = FFT/Ns, the legacy magnet-style coefficient is M_n = 2*C_n for n>=1.
-    After rotation, we report:
-      B_n = Re(M_n) = 2*Re(C_n)
-      A_n = Im(M_n) = 2*Im(C_n)
+    Internal convention: C_n = FFT/Ns.
+    Legacy magnet convention: M_n = 2*C_n for n>=1.
 
-    Column naming uses B/A to match the legacy C++ outputs (bn/an).
+      normal_Bn = Re(M_n),  skew_An = Im(M_n)
+
+    For n=0, scale=1.0 (no factor 2).
     """
-    out: Dict[str, Any] = {}
-    orders = [int(x) for x in orders]
-    for j, n in enumerate(orders):
-        if n == 0:
-            out[f"{prefix}B0"] = np.real(C_rot[:, j])
-            out[f"{prefix}A0"] = 0.0 * np.real(C_rot[:, j])
+    cols: Dict[str, np.ndarray] = {}
+    for j, n in enumerate([int(x) for x in orders]):
+        scale = 1.0 if n == 0 else 2.0
+        M = scale * C_rot[:, j]
+        cols[f"{prefix}normal_B{n}"] = np.real(M)
+        cols[f"{prefix}skew_A{n}"] = np.imag(M)
+    return pd.DataFrame(cols)
+
+
+def _pick_current_column_name(df: pd.DataFrame) -> str:
+    """Backward-compatible current column lookup."""
+    if "mean_current_A" in df.columns:
+        return "mean_current_A"
+    if "I_mean" in df.columns:
+        return "I_mean"
+    raise KeyError("No mean-current column found (expected 'mean_current_A' or legacy 'I_mean').")
+
+
+def _wrap_title(text: str, width: int = 44) -> str:
+    """Wrap a plot title by inserting newlines (matplotlib does not auto-wrap titles reliably)."""
+    s = " ".join(str(text).split())
+    if len(s) <= width:
+        return s
+    words = s.split(" ")
+    lines: list[str] = []
+    cur: list[str] = []
+    ncur = 0
+    for w0 in words:
+        add = len(w0) + (1 if cur else 0)
+        if ncur + add > width and cur:
+            lines.append(" ".join(cur))
+            cur = [w0]
+            ncur = len(w0)
         else:
-            out[f"{prefix}B{n}"] = 2.0 * np.real(C_rot[:, j])
-            out[f"{prefix}A{n}"] = 2.0 * np.imag(C_rot[:, j])
-    return pd.DataFrame(out)
+            cur.append(w0)
+            ncur += add
+    if cur:
+        lines.append(" ".join(cur))
+    return "\n".join(lines)
+
+
+def _clear_button_handlers(btn: w.Button) -> None:
+    """Defensive: remove any accumulated click handlers (avoids duplicated logs if widgets stack)."""
+    try:
+        btn._click_handlers.callbacks.clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) -> w.Widget:
+    global _ACTIVE_PHASE2_PANEL
+
+    # Close any previous Phase II panel (defensive against stacked live instances).
+    if _ACTIVE_PHASE2_PANEL is not None:
+        try:
+            _ACTIVE_PHASE2_PANEL.close()
+        except Exception:
+            pass
+        _ACTIVE_PHASE2_PANEL = None
+
     state = Phase2State()
 
-    # ---------------------------
-    # Controls (with explicit widths so labels don't truncate)
-    # ---------------------------
-    nmax = w.BoundedIntText(
-        value=default_n_max, min=1, max=200, step=1, description="N_max",
-        layout=w.Layout(width="190px"),
-    )
+    STYLE_WIDE = {"description_width": "190px"}
+    STYLE_MED = {"description_width": "150px"}
 
+    # ---------------------------
+    # Step 1 — preview/apply
+    # ---------------------------
+    max_harm = w.BoundedIntText(
+        value=default_n_max, min=1, max=200, step=1,
+        description="Maximum harmonic order",
+        layout=w.Layout(width="420px"),
+        style=STYLE_WIDE,
+    )
     main_order = w.BoundedIntText(
-        value=1, min=1, max=50, step=1, description="Main m",
-        layout=w.Layout(width="190px"),
+        value=1, min=1, max=50, step=1,
+        description="Main field order",
+        layout=w.Layout(width="320px"),
+        style=STYLE_MED,
     )
 
     integrate_to_flux = w.Checkbox(
-        value=True, description="Integrate df→flux (C++ style)", indent=False, layout=w.Layout(width="230px")
+        value=True,
+        description="Integrate differential signal to flux (legacy convention)",
+        indent=False,
+        layout=w.Layout(width="650px"),
     )
-    drift_correction = w.Checkbox(value=False, description="Drift corr (dri)", indent=False, layout=w.Layout(width="150px"))
+    drift_correction = w.Checkbox(
+        value=False,
+        description="Apply drift correction (recommended only if needed)",
+        indent=False,
+        layout=w.Layout(width="650px"),
+    )
+    require_valid_time = w.Checkbox(
+        value=True,
+        description="Require valid time (finite and strictly increasing within each turn)",
+        indent=False,
+        layout=w.Layout(width="750px"),
+    )
 
-    require_finite_t = w.Checkbox(value=True, description="Drop turns with non-finite t", indent=False)
+    append_log = w.Checkbox(value=False, description="Append output", indent=False, layout=w.Layout(width="160px"))
 
-    append_log = w.Checkbox(value=False, description="Append output", indent=False, layout=w.Layout(width="140px"))
-    status = w.HTML(value="<b>Status:</b> idle")
-
-    btn_preview_qc = w.Button(
-        description="Preview QC actions",
+    btn_preview_dq = w.Button(
+        description="Preview data-quality cuts",
         button_style="warning",
-        layout=w.Layout(width="190px"),
+        layout=w.Layout(width="300px", height="46px"),
     )
-
-    btn_apply_qc = w.Button(
-        description="Apply QC + Compute FFT",
+    btn_apply_and_compute = w.Button(
+        description="Apply cuts and compute harmonics (FFT)",
         button_style="primary",
-        layout=w.Layout(width="220px"),
+        layout=w.Layout(width="420px", height="46px"),
     )
-    btn_apply_qc.disabled = True
+    btn_apply_and_compute.disabled = True
 
+    help_text = w.HTML(
+        value=(
+            "<div style='color:#444; line-height:1.35;'>"
+            "<b>Signal preparation for the spectrum</b><br>"
+            "<ul style='margin-top:6px;'>"
+            "<li><b>Integrate differential signal to flux</b>: compute the spectrum on "
+            "<i>flux</i> (cumulative sum of the measured differential signal over a turn). "
+            "This matches the legacy analyzer and is the default.</li>"
+            "<li><b>Drift correction</b>: removes per-turn offset and recenters the integrated flux "
+            "to reduce spurious low-order leakage. Use only if you observe obvious drift or a large baseline.</li>"
+            "</ul>"
+            "</div>"
+        )
+    )
+
+    # ---------------------------
+    # View 1 — amplitude versus current
+    # ---------------------------
     dd_channel = w.Dropdown(
-        options=[("compensated (df_cmp)", "cmp"), ("absolute (df_abs)", "abs")],
+        options=[("Compensated channel", "cmp"), ("Absolute channel", "abs")],
         value="cmp",
-        description="Channel",
-        layout=w.Layout(width="320px"),
+        description="Signal channel",
+        layout=w.Layout(width="420px"),
+        style=STYLE_MED,
     )
-    dd_harm = w.BoundedIntText(value=1, min=1, max=200, step=1, description="Harm n", layout=w.Layout(width="190px"))
-    btn_plot_amp = w.Button(description="Plot |C_n| vs current", layout=w.Layout(width="180px"))
+    harm_order = w.BoundedIntText(
+        value=1, min=1, max=200, step=1,
+        description="Harmonic order",
+        layout=w.Layout(width="300px"),
+        style=STYLE_MED,
+    )
+    btn_plot_amp = w.Button(
+        description="Plot amplitude versus current",
+        layout=w.Layout(width="360px", height="46px"),
+    )
 
-    dd_plateau = w.Dropdown(options=[], description="plateau_id", layout=w.Layout(width="220px"))
-    btn_plot_ns = w.Button(description="Plot Normal/Skew (B/A) bars", layout=w.Layout(width="210px"))
+    # ---------------------------
+    # View 2 — normal/skew versus harmonic order
+    # ---------------------------
+    dd_plateau = w.Dropdown(
+        options=[],
+        value=None,
+        description="Plateau selection",
+        layout=w.Layout(width="720px"),
+        style={"description_width": "190px"},
+        disabled=True,
+    )
+    plateau_info = w.HTML(value="<div style='color:#666;'>No plateau information loaded.</div>")
 
+    hide_main_in_ns = w.Checkbox(
+        value=True,
+        description="Hide main field order in this plot (recommended to view smaller components)",
+        indent=False,
+        layout=w.Layout(width="750px"),
+    )
+
+    btn_plot_ns = w.Button(
+        description="Plot normal and skew versus harmonic order",
+        layout=w.Layout(width="420px", height="46px"),
+        disabled=True,
+    )
+
+    # ---------------------------
+    # Export
+    # ---------------------------
     save_plot_fmt = w.Dropdown(
-        options=[("SVG (vector)", "svg"), ("PDF (vector)", "pdf")],
+        options=[("SVG", "svg"), ("PDF", "pdf")],
         value="svg",
-        description="Plot",
-        layout=w.Layout(width="240px"),
+        description="Plot format",
+        layout=w.Layout(width="260px"),
+        style=STYLE_MED,
     )
-    btn_save_plot = w.Button(description="Save plot…", layout=w.Layout(width="120px"))
+    btn_save_plot = w.Button(description="Save plot…", layout=w.Layout(width="200px", height="46px"))
 
     table_choice = w.Dropdown(
         options=[
-            ("Per-turn table (df_out)", "df_out"),
-            ("Per-plateau mean (df_out_mean)", "df_out_mean"),
-            ("Per-plateau std (df_out_std)", "df_out_std"),
-            ("Per-turn Normal/Skew (df_ns)", "df_ns"),
-            ("Per-plateau mean Normal/Skew (mean_ns)", "mean_ns"),
-            ("Per-plateau std Normal/Skew (std_ns)", "std_ns"),
+            ("Per turn (amplitude and phase)", "df_out"),
+            ("Per plateau (mean)", "df_out_mean"),
+            ("Per plateau (standard deviation)", "df_out_std"),
+            ("Normal/skew per turn (phase referenced)", "df_ba"),
+            ("Normal/skew per plateau (mean)", "mean_ba"),
+            ("Normal/skew per plateau (standard deviation)", "std_ba"),
         ],
         value="df_out",
-        description="Table",
-        layout=w.Layout(width="420px"),
+        description="Data table",
+        layout=w.Layout(width="520px"),
+        style=STYLE_MED,
     )
-    btn_save_table = w.Button(description="Save table (CSV)…", layout=w.Layout(width="150px"))
-    btn_show_head = w.Button(description="Show table head", layout=w.Layout(width="140px"))
+    btn_save_table = w.Button(description="Save table…", layout=w.Layout(width="200px", height="46px"))
+    btn_show_head = w.Button(description="Show first rows", layout=w.Layout(width="200px", height="46px"))
 
-    # Outputs
-    out_log = w.Output()
-    out_table = w.Output()  # dedicated table pane (prevents duplicated prints)
+    status = w.HTML(value="<b>Status:</b> idle")
 
-    # Plot slot (single persistent canvas)
+    out_log = w.Output(layout=w.Layout(border="1px solid #ddd", padding="8px", height="220px", overflow_y="auto"))
+    out_table = w.Output(layout=w.Layout(border="1px solid #ddd", padding="8px", height="260px", overflow_y="auto"))
+
     plot_slot = w.Box(layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%"))
 
     # ---------------------------
@@ -258,38 +401,6 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     def _set_status(msg: str):
         status.value = f"<b>Status:</b> {msg}"
 
-    def _set_enabled(btns: Iterable[w.Button], enabled: bool):
-        for b in btns:
-            b.disabled = not enabled
-
-    def _start_action(msg: str):
-        if not append_log.value:
-            out_log.clear_output(wait=True)
-        _set_status(msg)
-        _set_enabled(
-            [btn_preview_qc, btn_apply_qc, btn_plot_amp, btn_plot_ns, btn_save_plot, btn_save_table, btn_show_head],
-            False,
-        )
-        with out_log:
-            print(msg)
-
-    def _end_action(ok: bool = True, msg: str = "idle"):
-        _set_enabled(
-            [btn_preview_qc, btn_apply_qc, btn_plot_amp, btn_plot_ns, btn_save_plot, btn_save_table, btn_show_head],
-            True,
-        )
-        _set_status(msg if ok else f"ERROR: {msg}")
-        _refresh_qc_buttons()
-
-    def _refresh_plateau_dropdown(df_out: pd.DataFrame):
-        if "plateau_id" in df_out.columns:
-            pids = sorted(pd.unique(df_out["plateau_id"]))
-            dd_plateau.options = [(str(p), float(p)) for p in pids]
-            dd_plateau.value = float(pids[0]) if pids else None
-        else:
-            dd_plateau.options = []
-            dd_plateau.value = None
-
     def _init_plot_once():
         if state.fig is not None and state.ax is not None:
             return
@@ -297,24 +408,26 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
         was_interactive = plt.isinteractive()
         try:
             plt.ioff()
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(figsize=(7.4, 5.0), constrained_layout=True)
         finally:
             if was_interactive:
                 plt.ion()
 
-        ax.set_title("Phase II plot")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
         state.fig, state.ax = fig, ax
+        plot_slot.children = (fig.canvas,)
 
-        if isinstance(fig.canvas, w.Widget):
-            plot_slot.children = (fig.canvas,)
-        else:
-            plot_slot.children = (w.HTML("Non-interactive backend. In the first cell run: %matplotlib widget (ipympl)."),)
+    def _clear_ax():
+        if state.ax is not None:
+            state.ax.clear()
 
-    def _redraw():
+    def _draw():
         if state.fig is None:
             return
+        # Reserve extra top margin for wrapped titles (defensive).
+        try:
+            state.fig.subplots_adjust(top=0.86)
+        except Exception:
+            pass
         if hasattr(state.fig.canvas, "draw_idle"):
             state.fig.canvas.draw_idle()
         else:
@@ -323,260 +436,272 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     def _get_table(key: str) -> Optional[pd.DataFrame]:
         return getattr(state, key, None)
 
+    def _current_source() -> Optional[str]:
+        segf_cur = get_segmentframe_callable()
+        return str(segf_cur.source_path) if segf_cur is not None else None
+
+    def _dq_cfg() -> tuple:
+        return (bool(require_valid_time.value),)
+
+    def _refresh_apply_button() -> None:
+        src = _current_source()
+        ok = (
+            state.dq_plan is not None
+            and state.dq_source == src
+            and state.dq_plan_cfg == _dq_cfg()
+        )
+        btn_apply_and_compute.disabled = not ok
+
+    def _set_plateau_controls_enabled(enabled: bool, message: str) -> None:
+        dd_plateau.disabled = not enabled
+        btn_plot_ns.disabled = not enabled
+        plateau_info.value = message
+
+    def _refresh_plateau_dropdown_from_df(df_out: pd.DataFrame) -> None:
+        if df_out is None or "plateau_id" not in df_out.columns:
+            state.plateau_current_map = None
+            dd_plateau.options = []
+            dd_plateau.value = None
+            _set_plateau_controls_enabled(False, "<div style='color:#666;'>This measurement has no plateau information.</div>")
+            return
+
+        current_col = _pick_current_column_name(df_out)
+        g = df_out.groupby("plateau_id", sort=True)[current_col].mean()
+
+        plateau_current_map: Dict[int, float] = {int(pid): float(I) for pid, I in g.items()}
+        state.plateau_current_map = plateau_current_map
+
+        opts: list[tuple[str, int]] = []
+        for pid in sorted(plateau_current_map.keys()):
+            I = plateau_current_map[pid]
+            opts.append((f"Plateau {pid} — mean current {I:.6g} A", pid))
+
+        dd_plateau.options = opts
+        dd_plateau.value = opts[0][1] if opts else None
+
+        if dd_plateau.value is None:
+            _set_plateau_controls_enabled(False, "<div style='color:#666;'>No plateau steps found.</div>")
+        else:
+            _set_plateau_controls_enabled(True, "<div style='color:#444;'>Select a plateau to plot normal and skew.</div>")
+
+    def _update_plateau_info(*_):
+        if dd_plateau.value is None or state.plateau_current_map is None:
+            plateau_info.value = "<div style='color:#666;'>No plateau selected.</div>"
+            return
+        pid = int(dd_plateau.value)
+        I = state.plateau_current_map.get(pid, float("nan"))
+        if np.isfinite(I):
+            plateau_info.value = (
+                f"<div style='color:#444;'>Selected: <b>Plateau {pid}</b> — "
+                f"mean current <b>{I:.6g} A</b></div>"
+            )
+        else:
+            plateau_info.value = f"<div style='color:#444;'>Selected: <b>Plateau {pid}</b></div>"
+
+    dd_plateau.observe(_update_plateau_info, names="value")
+
+    def _start_action(key: str, msg: str) -> bool:
+        # Debounce identical action triggers (defensive against multi-event clicks).
+        now = time.monotonic()
+        if state.last_action_key == key and (now - state.last_action_t) < 0.25:
+            return False
+        state.last_action_key = key
+        state.last_action_t = now
+
+        # Return False if already busy (prevents duplicate runs and duplicate logs).
+        if state.busy:
+            return False
+        state.busy = True
+
+        if not append_log.value:
+            out_log.clear_output(wait=True)
+
+        _set_status(msg)
+
+        # Disable UI during the action
+        btn_preview_dq.disabled = True
+        btn_apply_and_compute.disabled = True
+        btn_plot_amp.disabled = True
+        btn_plot_ns.disabled = True
+        btn_save_plot.disabled = True
+        btn_save_table.disabled = True
+        btn_show_head.disabled = True
+
+        with out_log:
+            print(msg)
+        return True
+
+    def _end_action(ok: bool = True, msg: str = "idle"):
+        btn_preview_dq.disabled = False
+        btn_plot_amp.disabled = False
+        btn_save_plot.disabled = False
+        btn_save_table.disabled = False
+        btn_show_head.disabled = False
+
+        # Plateau plot button stays disabled unless plateau info exists
+        btn_plot_ns.disabled = dd_plateau.disabled
+
+        _set_status(msg if ok else f"ERROR: {msg}")
+        state.busy = False
+        _refresh_apply_button()
+
     # ---------------------------
     # Actions
     # ---------------------------
-    def _qc_cfg() -> tuple:
-        # QC plan depends only on whether time is required to be finite/monotonic.
-        return (bool(require_finite_t.value),)
-
-    def _current_source() -> Optional[str]:
-        segf_cur = get_segmentframe_callable()
-        if segf_cur is None:
-            return None
-        return str(segf_cur.source_path)
-
-    def _format_turn_list(idxs0: np.ndarray, *, max_show: int = 12) -> str:
-        if idxs0.size == 0:
-            return "(none)"
-        idxs1 = (idxs0.astype(int) + 1).tolist()  # user-facing 1-based turn numbers
-        if len(idxs1) > max_show:
-            head = ", ".join(str(x) for x in idxs1[:max_show])
-            return f"{head}, … (+{len(idxs1) - max_show} more)"
-        return ", ".join(str(x) for x in idxs1)
-
-    def _refresh_qc_buttons() -> None:
-        src = _current_source()
-        ok = (
-            state.qc_plan is not None
-            and state.qc_source == src
-            and state.qc_plan_cfg == _qc_cfg()
-        )
-        btn_apply_qc.disabled = not ok
-
-    def _preview_qc(_):
+    def _preview_data_quality(_):
+        if not _start_action("preview", "Previewing data-quality cuts…"):
+            return
         try:
-            _start_action("Previewing QC actions…")
             _init_plot_once()
 
             segf = get_segmentframe_callable()
             if segf is None:
                 with out_log:
-                    print("No SegmentFrame loaded yet. In Phase I, click 'Load segment' first.")
-                state.qc_plan = None
-                state.qc_plan_cfg = None
-                state.qc_source = None
+                    print("No segment is loaded yet. In Phase I, click 'Load segment' first.")
+                state.dq_plan = None
+                state.dq_plan_cfg = None
+                state.dq_source = None
                 _end_action(ok=False, msg="no segment loaded")
                 return
 
-            # Invalidate any prior FFT tables if the source changed.
             src = str(segf.source_path)
-            if state.qc_source is not None and state.qc_source != src:
-                state.df_out = None
-                state.df_out_mean = None
-                state.df_out_std = None
-                state.df_ns = None
-                state.mean_ns = None
-                state.std_ns = None
 
             segf2, rem = _ensure_full_turns(segf)
             tb = split_into_turns(segf2)
 
-            # Per-turn validity masks
             ok_abs = np.all(np.isfinite(tb.df_abs), axis=1)
             ok_cmp = np.all(np.isfinite(tb.df_cmp), axis=1)
             ok_I = np.all(np.isfinite(tb.I), axis=1)
+
             finite_t = np.all(np.isfinite(tb.t), axis=1)
-            mono_t = finite_t & np.all(np.diff(tb.t, axis=1) > 0.0, axis=1)
+            strict_inc = finite_t & np.all(np.diff(tb.t, axis=1) > 0.0, axis=1)
 
-            if require_finite_t.value:
-                ok_t = mono_t
-            else:
-                ok_t = np.ones(tb.n_turns, dtype=bool)
-
+            ok_t = strict_inc if require_valid_time.value else np.ones(tb.n_turns, dtype=bool)
             valid_turn = ok_abs & ok_cmp & ok_I & ok_t
 
-            # Reason breakdown (always reported, even if require_finite_t=False)
-            bad_abs = np.where(~ok_abs)[0]
-            bad_cmp = np.where(~ok_cmp)[0]
-            bad_I = np.where(~ok_I)[0]
-            bad_t_nonfinite = np.where(~finite_t)[0]
-            bad_t_nonmono = np.where(finite_t & ~np.all(np.diff(tb.t, axis=1) > 0.0, axis=1))[0]
-            dropped = np.where(~valid_turn)[0]
-
-            # Store QC plan (not yet applied) for the follow-up 'Apply QC + Compute FFT' step.
-            state.qc_plan = {
+            state.dq_plan = {
                 "segf_trimmed": segf2,
                 "rem_samples": int(rem),
                 "tb": tb,
                 "valid_turn": valid_turn,
-                "ok_abs": ok_abs,
-                "ok_cmp": ok_cmp,
-                "ok_I": ok_I,
-                "finite_t": finite_t,
-                "mono_t": mono_t,
             }
-            state.qc_plan_cfg = _qc_cfg()
-            state.qc_source = src
+            state.dq_plan_cfg = _dq_cfg()
+            state.dq_source = src
 
-            # Display a user-facing QC preview summary.
             n_total = int(tb.n_turns)
             n_keep = int(np.sum(valid_turn))
             n_drop = int(n_total - n_keep)
 
             with out_log:
-                print("QC PREVIEW (no changes applied yet)")
+                print("DATA-QUALITY PREVIEW (no cuts applied yet)")
                 print(f" - Source: {src}")
-                if rem != 0:
-                    print(f" - Tail remainder: {int(rem)} samples would be trimmed to reach full turns.")
-                else:
-                    print(" - Tail remainder: none (already full turns).")
-
+                print(f" - Tail samples to trim for full turns: {int(rem)}")
                 print(f" - Turns: total={n_total}, keep={n_keep}, drop={n_drop}")
-                print(" - Drop rule set:")
-                print(f"    * abs finite: required (bad turns: {bad_abs.size})")
-                print(f"    * cmp finite: required (bad turns: {bad_cmp.size})")
-                print(f"    * I   finite: required (bad turns: {bad_I.size})")
-                if require_finite_t.value:
-                    print(f"    * t finite + strictly increasing within turn: required (bad non-finite: {bad_t_nonfinite.size}, bad non-monotonic: {bad_t_nonmono.size})")
-                else:
-                    print(f"    * t finite/monotonic: NOT required for dropping (detected non-finite: {bad_t_nonfinite.size}, non-monotonic: {bad_t_nonmono.size})")
-
-                print(" - Turn indices (1-based) by reason (first items):")
-                print(f"    * abs non-finite: { _format_turn_list(bad_abs) }")
-                print(f"    * cmp non-finite: { _format_turn_list(bad_cmp) }")
-                print(f"    * I non-finite:   { _format_turn_list(bad_I) }")
-                print(f"    * t non-finite:   { _format_turn_list(bad_t_nonfinite) }")
-                print(f"    * t non-monotonic:{ _format_turn_list(bad_t_nonmono) }")
-                print(f"    * total dropped:  { _format_turn_list(dropped) }")
-
-                if getattr(tb, "plateau_id", None) is not None:
-                    uniq = np.unique(tb.plateau_id)
-                    print(" - Plateau summary (keep/total):")
-                    for pid in uniq[:20]:
-                        mask = (tb.plateau_id == pid)
-                        kk = int(np.sum(valid_turn[mask]))
-                        tt = int(np.sum(mask))
-                        print(f"    * plateau_id={int(pid)}: {kk}/{tt}")
-                    if uniq.size > 20:
-                        print(f"    ... ({int(uniq.size - 20)} more plateaus)")
-
-                print("ACTION REQUIRED: If you agree with these QC actions, click 'Apply QC + Compute FFT'.")
-
-            _end_action(ok=True, msg="QC preview ready")
-            _refresh_qc_buttons()
+                print("Next step: if you agree, click 'Apply cuts and compute harmonics (FFT)'.")
+            _end_action(ok=True, msg="preview ready")
 
         except Exception as e:
             with out_log:
                 print("Exception:", repr(e))
-            state.qc_plan = None
-            state.qc_plan_cfg = None
-            state.qc_source = None
+            state.dq_plan = None
+            state.dq_plan_cfg = None
+            state.dq_source = None
             _end_action(ok=False, msg=str(e))
-            _refresh_qc_buttons()
 
-    def _apply_qc_and_compute(_):
+    def _apply_and_compute(_):
+        if not _start_action("apply", "Applying cuts and computing harmonics (FFT)…"):
+            return
         try:
-            _start_action("Applying QC + computing per-turn FFT…")
-            _init_plot_once()
-
-            if state.qc_plan is None or state.qc_source != _current_source() or state.qc_plan_cfg != _qc_cfg():
+            if state.dq_plan is None or state.dq_source != _current_source() or state.dq_plan_cfg != _dq_cfg():
                 with out_log:
-                    print("No valid QC plan is available (or it is stale). Click 'Preview QC actions' first.")
-                _end_action(ok=False, msg="QC not approved")
-                _refresh_qc_buttons()
+                    print("No valid data-quality preview is available (or it is stale). Click 'Preview data-quality cuts' first.")
+                _end_action(ok=False, msg="preview required")
                 return
 
-            plan = state.qc_plan
+            plan = state.dq_plan
             segf2 = plan["segf_trimmed"]
             rem = int(plan["rem_samples"])
             tb = plan["tb"]
             valid_turn = plan["valid_turn"]
 
-            # Apply the approved plan into the Phase II state (Phase I data stays untouched).
             state.segf = segf2
             state.tb = tb
             state.valid_turn = valid_turn
-            state.ok_abs = plan.get("ok_abs")
-            state.ok_cmp = plan.get("ok_cmp")
-            state.ok_t = plan.get("mono_t") if require_finite_t.value else np.ones(tb.n_turns, dtype=bool)
 
             if rem != 0:
                 with out_log:
-                    print(f"APPLY: trimming tail remainder={rem} samples to reach full turns.")
+                    print(f"Applied tail trimming: removed {rem} sample(s) to reach full turns.")
 
             n_total = int(tb.n_turns)
             n_keep = int(np.sum(valid_turn))
             n_drop = int(n_total - n_keep)
             with out_log:
-                print(f"APPLY: turns keep={n_keep} / total={n_total} (drop={n_drop})")
+                print(f"Applied turn dropping: kept {n_keep}/{n_total} turn(s), dropped {n_drop}.")
 
-            # Default main field order (magnetOrder) from Parameters.txt if available.
             if getattr(segf2, "magnet_order", None) is not None and int(segf2.magnet_order) > 0:
                 main_order.value = int(segf2.magnet_order)
                 with out_log:
-                    print(f"Phase reference: using magnetOrder m={int(segf2.magnet_order)} from Parameters.txt")
+                    print(f"Phase reference: using main field order {int(segf2.magnet_order)} from Parameters.")
             else:
                 with out_log:
-                    print(f"Phase reference: magnetOrder not available; using GUI value m={int(main_order.value)}")
+                    print(f"Phase reference: using GUI main field order {int(main_order.value)}.")
 
-            # Turn matrices for FFT (approved subset).
             abs_turns = tb.df_abs[valid_turn, :]
             cmp_turns = tb.df_cmp[valid_turn, :]
             I_turns = tb.I[valid_turn, :]
 
             if integrate_to_flux.value:
                 if drift_correction.value:
-                    # C++ option "dri": flux = cumsum(df - mean(df)) - mean(cumsum(df))
                     abs0 = abs_turns - np.mean(abs_turns, axis=1, keepdims=True)
                     cmp0 = cmp_turns - np.mean(cmp_turns, axis=1, keepdims=True)
                     flux_abs = np.cumsum(abs0, axis=1) - np.mean(np.cumsum(abs_turns, axis=1), axis=1, keepdims=True)
                     flux_cmp = np.cumsum(cmp0, axis=1) - np.mean(np.cumsum(cmp_turns, axis=1), axis=1, keepdims=True)
                     with out_log:
-                        print("FFT input: flux = cumsum(df) with drift correction (dri)")
+                        print("Signal used for spectrum: integrated flux with drift correction.")
                 else:
                     flux_abs = np.cumsum(abs_turns, axis=1)
                     flux_cmp = np.cumsum(cmp_turns, axis=1)
                     with out_log:
-                        print("FFT input: flux = cumsum(df) (C++ style)")
+                        print("Signal used for spectrum: integrated flux (legacy convention).")
                 sig_abs = flux_abs
                 sig_cmp = flux_cmp
             else:
                 sig_abs = abs_turns
                 sig_cmp = cmp_turns
                 with out_log:
-                    print("FFT input: raw df (no integration)")
+                    print("Signal used for spectrum: raw differential signal (no integration).")
 
             with out_log:
-                print(f"Running FFT up to N_max={int(nmax.value)}…")
-            H_abs = dft_per_turn(sig_abs, n_max=int(nmax.value))
-            H_cmp = dft_per_turn(sig_cmp, n_max=int(nmax.value))
+                print(f"Computing harmonics up to order {int(max_harm.value)}…")
+
+            H_abs = dft_per_turn(sig_abs, n_max=int(max_harm.value))
+            H_cmp = dft_per_turn(sig_cmp, n_max=int(max_harm.value))
             state.H_abs, state.H_cmp = H_abs, H_cmp
 
             turn_idx = np.arange(H_cmp.coeff.shape[0], dtype=int)
 
-            def coeff_table(H, prefix: str):
+            def per_turn_amp_phase(H, prefix: str) -> pd.DataFrame:
                 C = H.coeff
                 orders = [int(x) for x in H.orders]
-                cols = {}
+                cols: Dict[str, Any] = {}
                 for jj, nn in enumerate(orders):
-                    cols[f"{prefix}A{nn}"] = np.abs(C[:, jj])
-                    cols[f"{prefix}phi{nn}"] = np.angle(C[:, jj])
+                    cols[f"{prefix}amplitude_C{nn}"] = np.abs(C[:, jj])
+                    cols[f"{prefix}phase_C{nn}"] = np.angle(C[:, jj])
                 return pd.DataFrame(cols, index=turn_idx)
 
-            df_h = pd.concat([coeff_table(H_abs, "abs_"), coeff_table(H_cmp, "cmp_")], axis=1)
-
-            meta = {"I_mean": np.mean(I_turns, axis=1)}
+            meta: Dict[str, Any] = {"mean_current_A": np.mean(I_turns, axis=1)}
             if getattr(tb, "plateau_id", None) is not None:
-                meta["plateau_id"] = tb.plateau_id[valid_turn]
-            if getattr(tb, "plateau_step", None) is not None:
-                meta["plateau_step"] = tb.plateau_step[valid_turn]
-            if getattr(tb, "plateau_I_hint", None) is not None:
-                meta["plateau_I_hint"] = tb.plateau_I_hint[valid_turn]
+                meta["plateau_id"] = np.asarray(tb.plateau_id[valid_turn]).astype(int)
 
-            df_out = pd.concat([pd.DataFrame(meta, index=turn_idx), df_h], axis=1)
+            df_out = pd.concat(
+                [
+                    pd.DataFrame(meta, index=turn_idx),
+                    per_turn_amp_phase(H_abs, "absolute_"),
+                    per_turn_amp_phase(H_cmp, "compensated_"),
+                ],
+                axis=1,
+            )
             state.df_out = df_out
-            _refresh_plateau_dropdown(df_out)
 
             if "plateau_id" in df_out.columns:
                 g = df_out.groupby("plateau_id", sort=True)
@@ -591,169 +716,243 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             if int(np.sum(bad_phi)):
                 with out_log:
                     print(
-                        f"WARNING: reference harmonic m={m} is tiny/non-finite for {int(np.sum(bad_phi))} turns; "
-                        "using Φ_out=0 for those turns."
+                        f"Warning: main harmonic (order {m}) is too small or non-finite in {int(np.sum(bad_phi))} turn(s). "
+                        "For those turns, the phase reference is set to 0."
                     )
 
             C_abs_rot = _rotate_harmonics(H_abs, phi_out)
             C_cmp_rot = _rotate_harmonics(H_cmp, phi_out)
 
-            df_ba_abs = _ba_from_rotated(C_abs_rot, H_abs.orders, prefix="abs_")
-            df_ba_cmp = _ba_from_rotated(C_cmp_rot, H_cmp.orders, prefix="cmp_")
+            df_ba_abs = _ba_from_rotated(C_abs_rot, H_abs.orders, prefix="absolute_")
+            df_ba_cmp = _ba_from_rotated(C_cmp_rot, H_cmp.orders, prefix="compensated_")
 
-            df_ns = pd.concat(
-                [
-                    df_out[[c for c in ["plateau_id", "I_mean", "plateau_I_hint", "plateau_step"] if c in df_out.columns]].reset_index(drop=True),
-                    df_ba_abs.reset_index(drop=True),
-                    df_ba_cmp.reset_index(drop=True),
-                ],
-                axis=1,
-            )
-            state.df_ns = df_ns
-
-            if "plateau_id" in df_ns.columns:
-                g2 = df_ns.groupby("plateau_id", sort=True)
-                state.mean_ns = g2.mean(numeric_only=True)
-                state.std_ns = g2.std(numeric_only=True)
+            if "plateau_id" in df_out.columns:
+                df_ba = pd.concat(
+                    [df_out[["plateau_id", "mean_current_A"]].reset_index(drop=True), df_ba_abs, df_ba_cmp],
+                    axis=1,
+                )
             else:
-                state.mean_ns = df_ns.mean(numeric_only=True).to_frame().T
-                state.std_ns = df_ns.std(numeric_only=True).to_frame().T
+                df_ba = pd.concat([df_out[["mean_current_A"]].reset_index(drop=True), df_ba_abs, df_ba_cmp], axis=1)
+
+            state.df_ba = df_ba
+
+            if "plateau_id" in df_ba.columns:
+                g2 = df_ba.groupby("plateau_id", sort=True)
+                state.mean_ba = g2.mean(numeric_only=True)
+                state.std_ba = g2.std(numeric_only=True)
+            else:
+                state.mean_ba = df_ba.mean(numeric_only=True).to_frame().T
+                state.std_ba = df_ba.std(numeric_only=True).to_frame().T
+
+            _refresh_plateau_dropdown_from_df(df_out)
+            _update_plateau_info()
 
             with out_log:
-                print("DONE: FFT computed.")
-                print("Tip: you can change N_max or plotting options and recompute without redoing QC if the QC plan remains valid.")
-
-            _end_action(ok=True, msg="FFT computed")
-            _refresh_qc_buttons()
+                print("Done.")
+            _end_action(ok=True, msg="harmonics computed")
 
         except Exception as e:
             with out_log:
                 print("Exception:", repr(e))
             _end_action(ok=False, msg=str(e))
-            _refresh_qc_buttons()
-    def _plot_amp(_):
+
+    def _plot_amplitude_vs_current(_):
+        if not _start_action("plot_amp", "Updating amplitude-versus-current plot…"):
+            return
         try:
-            _start_action("Updating amplitude plot…")
             _init_plot_once()
 
             if state.df_out is None:
                 with out_log:
-                    print("Nothing computed yet. Click 'Apply QC + Compute FFT' first (after 'Preview QC actions').")
-                _end_action(ok=False, msg="no FFT yet")
+                    print("No results available yet. Run: Preview → Apply cuts and compute harmonics (FFT).")
+                _end_action(ok=False, msg="no results")
                 return
 
             df = state.df_out
-            ch = dd_channel.value
-            nn = int(dd_harm.value)
-            col = f"{ch}_A{nn}"
-            if col not in df.columns:
+            n = int(harm_order.value)
+
+            if dd_channel.value == "cmp":
+                amp_col = f"compensated_amplitude_C{n}"
+                title_chan = "compensated"
+            else:
+                amp_col = f"absolute_amplitude_C{n}"
+                title_chan = "absolute"
+
+            if amp_col not in df.columns:
                 with out_log:
-                    print(f"Missing column {col}. Increase N_max or choose a smaller n.")
+                    print("This harmonic order is not available. Increase the maximum harmonic order and recompute.")
                 _end_action(ok=False, msg="missing harmonic")
                 return
 
-            ax = state.ax
-            ax.clear()
+            current_col = _pick_current_column_name(df)
 
-            x_turn = df["I_mean"].to_numpy()
-            y_turn = df[col].to_numpy()
-            ax.plot(x_turn, y_turn, ".", label="per-turn")
+            _clear_ax()
 
             if "plateau_id" in df.columns:
                 g = df.groupby("plateau_id", sort=True)
-                mean = g.mean(numeric_only=True)
-                std = g.std(numeric_only=True)
-                x_plateau = mean["I_mean"].to_numpy()
-                y_mean = mean[col].to_numpy()
-                y_std = std[col].to_numpy()
-                ax.errorbar(x_plateau, y_mean, yerr=y_std, fmt="o", label="per-plateau mean ± std")
+                x = g[current_col].mean().values
+                y = g[amp_col].mean().values
+                yerr = g[amp_col].std().values
+                state.ax.errorbar(x, y, yerr=yerr, fmt="o", capsize=3)
+                ttl = f"Amplitude versus current — order {n} ({title_chan} channel) — plateau mean ± standard deviation"
+            else:
+                x = df[current_col].values
+                y = df[amp_col].values
+                state.ax.plot(x, y, marker="o", linestyle="None")
+                ttl = f"Amplitude versus current — order {n} ({title_chan} channel)"
 
-            ax.set_xlabel("current (A)")
-            ax.set_ylabel(f"{ch} |C_{nn}|")
-            ax.set_title(f"Harmonic amplitude vs current ({ch}, n={nn})")
-            ax.legend()
+            t = state.ax.set_title(_wrap_title(ttl, width=44), fontsize=11, pad=10)
+            try:
+                t.set_wrap(True)
+            except Exception:
+                pass
 
-            _redraw()
-            _end_action(ok=True, msg="plot ready")
+            state.ax.set_xlabel("Mean current [A]")
+            state.ax.set_ylabel(f"Amplitude |C_{n}| (internal units)")
+            state.ax.grid(True)
+            _draw()
+
+            _end_action(ok=True, msg="plot updated")
         except Exception as e:
             with out_log:
                 print("Exception:", repr(e))
             _end_action(ok=False, msg=str(e))
 
-    def _plot_ns(_):
+    def _plot_normal_skew_vs_harmonic(_):
+        if not _start_action("plot_ns", "Updating normal/skew versus harmonic order…"):
+            return
         try:
-            _start_action("Updating Normal/Skew bars…")
             _init_plot_once()
 
-            if state.mean_ns is None:
+            if state.mean_ba is None or state.std_ba is None:
                 with out_log:
-                    print("Nothing computed yet. Click 'Apply QC + Compute FFT' first (after 'Preview QC actions').")
-                _end_action(ok=False, msg="no FFT yet")
+                    print("No normal/skew results available yet. Run: Preview → Apply cuts and compute harmonics (FFT).")
+                _end_action(ok=False, msg="no results")
                 return
 
-            pid = dd_plateau.value
-            if pid is None or pid not in state.mean_ns.index:
+            if dd_plateau.value is None:
                 with out_log:
-                    print("Select a valid plateau_id first.")
-                _end_action(ok=False, msg="invalid plateau_id")
+                    print("Select a plateau first.")
+                _end_action(ok=False, msg="no plateau selected")
                 return
 
-            ax = state.ax
-            ax.clear()
+            pid = int(dd_plateau.value)
 
-            row = state.mean_ns.loc[pid]
-            nmax_eff = int(nmax.value)
-            n = np.arange(1, nmax_eff + 1)
-            B_vals = np.array([row.get(f"cmp_B{k}", np.nan) for k in n])
-            A_vals = np.array([row.get(f"cmp_A{k}", np.nan) for k in n])
+            dfm = state.mean_ba
+            dfs = state.std_ba
+            if pid not in dfm.index:
+                with out_log:
+                    print("The selected plateau is not present in the computed results.")
+                _end_action(ok=False, msg="plateau missing")
+                return
 
-            wbar = 0.4
-            ax.bar(n - wbar / 2, B_vals, width=wbar, label="Normal B (cos)")
-            ax.bar(n + wbar / 2, A_vals, width=wbar, label="Skew A (sin)")
-            ax.set_xlabel("harmonic order n")
-            ax.set_ylabel(f"cmp component (phase-referenced to main order m={int(main_order.value)})")
-            ax.set_title(f"Normal/Skew (B/A) bars (cmp), plateau_id={pid}")
-            ax.legend()
+            prefix = "compensated_" if dd_channel.value == "cmp" else "absolute_"
+            title_chan = "compensated" if dd_channel.value == "cmp" else "absolute"
 
-            _redraw()
-            _end_action(ok=True, msg="bars ready")
+            Nmax = int(max_harm.value)
+            orders = np.arange(1, Nmax + 1, dtype=int)
+
+            if hide_main_in_ns.value:
+                m = int(main_order.value)
+                orders = orders[orders != m]
+
+            B = np.full(orders.shape, np.nan, dtype=float)
+            A = np.full(orders.shape, np.nan, dtype=float)
+            sB = np.full(orders.shape, np.nan, dtype=float)
+            sA = np.full(orders.shape, np.nan, dtype=float)
+
+            for i, n in enumerate(orders):
+                colB = f"{prefix}normal_B{n}"
+                colA = f"{prefix}skew_A{n}"
+                if colB in dfm.columns:
+                    B[i] = float(dfm.loc[pid, colB])
+                if colA in dfm.columns:
+                    A[i] = float(dfm.loc[pid, colA])
+                if colB in dfs.columns:
+                    sB[i] = float(dfs.loc[pid, colB])
+                if colA in dfs.columns:
+                    sA[i] = float(dfs.loc[pid, colA])
+
+            keep = np.isfinite(B) | np.isfinite(A)
+            orders = orders[keep]
+            B = B[keep]
+            A = A[keep]
+            sB = sB[keep]
+            sA = sA[keep]
+
+            if orders.size == 0:
+                with out_log:
+                    print("No normal/skew harmonic columns were found for the selected channel. Increase maximum harmonic order and recompute.")
+                _end_action(ok=False, msg="no harmonic columns")
+                return
+
+            _clear_ax()
+
+            x = np.arange(orders.size, dtype=float)
+            width = 0.42
+
+            state.ax.bar(x - width / 2, B, width=width, label="Normal (B_n)")
+            state.ax.bar(x + width / 2, A, width=width, label="Skew (A_n)")
+
+            if np.any(np.isfinite(sB)):
+                state.ax.errorbar(x - width / 2, B, yerr=sB, fmt="none", capsize=3)
+            if np.any(np.isfinite(sA)):
+                state.ax.errorbar(x + width / 2, A, yerr=sA, fmt="none", capsize=3)
+
+            state.ax.set_xticks(x)
+            state.ax.set_xticklabels([str(int(n)) for n in orders])
+            state.ax.set_xlabel("Harmonic order n")
+            state.ax.set_ylabel("Normal / Skew (legacy convention)")
+
+            I = state.plateau_current_map.get(pid, float("nan")) if state.plateau_current_map else float("nan")
+            if np.isfinite(I):
+                ttl = f"Normal and skew versus harmonic order — {title_chan} channel — Plateau {pid} at {I:.6g} A"
+            else:
+                ttl = f"Normal and skew versus harmonic order — {title_chan} channel — Plateau {pid}"
+
+            if hide_main_in_ns.value:
+                ttl += f" (main field order {int(main_order.value)} hidden)"
+
+            t = state.ax.set_title(_wrap_title(ttl, width=44), fontsize=11, pad=10)
+            try:
+                t.set_wrap(True)
+            except Exception:
+                pass
+
+            state.ax.grid(True, axis="y")
+            state.ax.legend()
+            _draw()
+
+            _end_action(ok=True, msg="plot updated")
         except Exception as e:
             with out_log:
                 print("Exception:", repr(e))
             _end_action(ok=False, msg=str(e))
 
     def _save_plot(_):
+        if not _start_action("save_plot", "Saving plot…"):
+            return
         try:
-            _start_action("Saving plot…")
-            _init_plot_once()
-
             if state.fig is None:
                 with out_log:
-                    print("No plot exists.")
+                    print("No plot is available.")
                 _end_action(ok=False, msg="no plot")
                 return
 
-            fmt = str(save_plot_fmt.value).lower().strip()
-            if fmt not in ("svg", "pdf"):
-                with out_log:
-                    print("Unsupported format:", fmt)
-                _end_action(ok=False, msg="unsupported format")
-                return
-
-            if fmt == "svg":
-                path = _saveas_dialog("phase2_plot.svg", ".svg", [("SVG (vector)", "*.svg"), ("All files", "*.*")])
-            else:
-                path = _saveas_dialog("phase2_plot.pdf", ".pdf", [("PDF (vector)", "*.pdf"), ("All files", "*.*")])
-
+            fmt = str(save_plot_fmt.value)
+            path = _saveas_dialog(
+                title="Save plot",
+                initialfile=f"phase2_plot.{fmt}",
+                defaultextension=f".{fmt}",
+                filetypes=[(fmt.upper(), f"*.{fmt}")],
+            )
             if not path:
-                with out_log:
-                    print("Save cancelled.")
-                _end_action(ok=True, msg="idle")
+                _end_action(ok=True, msg="save cancelled")
                 return
 
-            state.fig.savefig(path)
+            state.fig.savefig(path, bbox_inches="tight")
             with out_log:
-                print("Saved:", path)
+                print(f"Saved plot to: {path}")
             _end_action(ok=True, msg="plot saved")
         except Exception as e:
             with out_log:
@@ -761,26 +960,30 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             _end_action(ok=False, msg=str(e))
 
     def _save_table(_):
+        if not _start_action("save_table", "Saving table…"):
+            return
         try:
-            _start_action("Saving table (CSV)…")
             key = str(table_choice.value)
             df = _get_table(key)
             if df is None:
                 with out_log:
-                    print(f"Table '{key}' is not available yet. Compute FFT first.")
+                    print("The selected table is not available yet.")
                 _end_action(ok=False, msg="no table")
                 return
 
-            path = _saveas_dialog(f"{key}.csv", ".csv", [("CSV", "*.csv"), ("All files", "*.*")])
+            path = _saveas_dialog(
+                title="Save table (comma-separated values)",
+                initialfile=f"{key}.csv",
+                defaultextension=".csv",
+                filetypes=[("CSV", "*.csv")],
+            )
             if not path:
-                with out_log:
-                    print("Save cancelled.")
-                _end_action(ok=True, msg="idle")
+                _end_action(ok=True, msg="save cancelled")
                 return
 
-            df.to_csv(path)
+            df.to_csv(path, index=True)
             with out_log:
-                print("Saved:", path)
+                print(f"Saved table to: {path}")
             _end_action(ok=True, msg="table saved")
         except Exception as e:
             with out_log:
@@ -788,50 +991,115 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             _end_action(ok=False, msg=str(e))
 
     def _show_head(_):
-        """
-        IMPORTANT: write into a dedicated Output pane (out_table), not the shared log,
-        and always clear first. This prevents the “printed 4 times” behavior in VS Code.
-        """
+        if not _start_action("show_head", "Showing table…"):
+            return
         try:
-            _start_action("Showing table head…")
             key = str(table_choice.value)
             df = _get_table(key)
             if df is None:
                 with out_log:
-                    print(f"Table '{key}' is not available yet. Compute FFT first.")
+                    print("The selected table is not available yet.")
                 _end_action(ok=False, msg="no table")
                 return
 
             out_table.clear_output(wait=True)
             with out_table:
-                print(f"Head of {key}:")
+                print(f"First rows of: {key}")
                 print(df.head(15))
-
-            _end_action(ok=True, msg="shown")
+            _end_action(ok=True, msg="table shown")
         except Exception as e:
             with out_log:
                 print("Exception:", repr(e))
             _end_action(ok=False, msg=str(e))
 
-    # Wire callbacks
-    btn_preview_qc.on_click(_preview_qc)
-    btn_apply_qc.on_click(_apply_qc_and_compute)
-    btn_plot_amp.on_click(_plot_amp)
-    btn_plot_ns.on_click(_plot_ns)
+    # Defensive: clear click handlers before wiring callbacks (prevents handler accumulation).
+    for b in [btn_preview_dq, btn_apply_and_compute, btn_plot_amp, btn_plot_ns, btn_save_plot, btn_save_table, btn_show_head]:
+        _clear_button_handlers(b)
+
+    btn_preview_dq.on_click(_preview_data_quality)
+    btn_apply_and_compute.on_click(_apply_and_compute)
+    btn_plot_amp.on_click(_plot_amplitude_vs_current)
+    btn_plot_ns.on_click(_plot_normal_skew_vs_harmonic)
     btn_save_plot.on_click(_save_plot)
     btn_save_table.on_click(_save_table)
     btn_show_head.on_click(_show_head)
 
-    # Init plot once so “Plot” is always one canvas
     _init_plot_once()
 
-    # Layout
-    row1 = w.HBox([nmax, main_order, integrate_to_flux, drift_correction, require_finite_t, btn_preview_qc, btn_apply_qc, append_log])
-    row2 = w.HBox([dd_channel, dd_harm, btn_plot_amp, dd_plateau, btn_plot_ns])
-    row3 = w.HBox([save_plot_fmt, btn_save_plot, table_choice, btn_save_table, btn_show_head])
+    # ---------------------------
+    # Layout: two columns
+    # ---------------------------
+    compute_box = w.VBox(
+        [
+            w.HTML("<b>Step 1 — Preview and apply data-quality cuts</b>"),
+            w.HBox([max_harm, main_order]),
+            integrate_to_flux,
+            drift_correction,
+            require_valid_time,
+            w.HBox([btn_preview_dq, btn_apply_and_compute, append_log]),
+            help_text,
+        ],
+        layout=w.Layout(border="1px solid #ddd", padding="10px", width="100%"),
+    )
 
-    plot_box = w.VBox([w.HTML("<b>Plot</b>"), plot_slot])
-    table_box = w.VBox([w.HTML("<b>Table</b>"), out_table])
-    log_box = w.VBox([w.HTML("<b>Log</b>"), out_log])
+    # View 1: button on its own row (prevents clipping)
+    view1_box = w.VBox(
+        [
+            w.HTML("<b>View 1 — Amplitude versus current</b><div style='color:#666;'>This view ignores plateau selection.</div>"),
+            w.HBox([dd_channel, harm_order]),
+            btn_plot_amp,
+        ],
+        layout=w.Layout(border="1px solid #ddd", padding="10px", width="100%"),
+    )
 
-    return w.VBox([row1, row2, row3, status, plot_box, table_box, log_box])
+    view2_box = w.VBox(
+        [
+            w.HTML("<b>View 2 — Normal and skew components by plateau</b><div style='color:#666;'>This view plots harmonics versus harmonic order for the selected plateau.</div>"),
+            dd_plateau,
+            plateau_info,
+            hide_main_in_ns,
+            btn_plot_ns,
+        ],
+        layout=w.Layout(border="1px solid #ddd", padding="10px", width="100%"),
+    )
+
+    export_box = w.VBox(
+        [
+            w.HTML("<b>Export</b>"),
+            w.HBox([save_plot_fmt, btn_save_plot]),
+            w.HBox([table_choice, btn_save_table, btn_show_head]),
+        ],
+        layout=w.Layout(border="1px solid #ddd", padding="10px", width="100%"),
+    )
+
+    left_panel = w.VBox(
+        [
+            compute_box,
+            view1_box,
+            view2_box,
+            export_box,
+            w.HTML("<b>Log</b>"),
+            out_log,
+        ],
+        layout=w.Layout(width="48%", min_width="560px"),
+    )
+
+    right_panel = w.VBox(
+        [
+            status,
+            w.HTML("<b>Plot</b>"),
+            plot_slot,
+            w.HTML("<b>Table</b>"),
+            out_table,
+        ],
+        layout=w.Layout(width="52%"),
+    )
+
+    def _refresh_apply_button_outer():
+        _refresh_apply_button()
+
+    _refresh_apply_button_outer()
+
+    panel = w.HBox([left_panel, right_panel], layout=w.Layout(width="100%"))
+    _ACTIVE_PHASE2_PANEL = panel
+    return panel

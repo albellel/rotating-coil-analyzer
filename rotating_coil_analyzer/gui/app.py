@@ -233,8 +233,15 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
             dd_run.options = [(r, r) for r in cat.runs]
             dd_run.value = cat.runs[0] if cat.runs else None
 
-            dd_ap.options = [(str(a), a) for a in cat.logical_apertures]
-            dd_ap.value = cat.logical_apertures[0] if cat.logical_apertures else None
+            # If there is only one aperture, do not show "None" in the GUI.
+            ap_opts = []
+            for a in cat.logical_apertures:
+                if a is None:
+                    ap_opts.append(("Single aperture measurement", None))
+                else:
+                    ap_opts.append((f"Aperture {a}", a))
+            dd_ap.options = ap_opts
+            dd_ap.value = ap_opts[0][1] if ap_opts else None
 
             _update_segments()
 
