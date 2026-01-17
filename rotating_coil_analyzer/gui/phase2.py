@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from rotating_coil_analyzer.models.frames import SegmentFrame
 from rotating_coil_analyzer.analysis.turns import split_into_turns
 from rotating_coil_analyzer.analysis.fourier import dft_per_turn
+from rotating_coil_analyzer.analysis.preprocess import apply_di_dt_to_channels, integrate_to_flux as integrate_turns_to_flux
 
 
 # Keep a single active Phase II panel per kernel (defensive: prevents stacked live instances).
@@ -184,12 +185,16 @@ def _ba_from_rotated(C_rot: np.ndarray, orders: Sequence[int], prefix: str) -> p
 
       normal_Bn = Re(M_n),  skew_An = Im(M_n)
 
-    For n=0, scale=1.0 (no factor 2).
+    Important:
+    ---------
+    The DC component (n=0) is treated as diagnostic only and is excluded from
+    the main harmonic outputs.
     """
     cols: Dict[str, np.ndarray] = {}
     for j, n in enumerate([int(x) for x in orders]):
-        scale = 1.0 if n == 0 else 2.0
-        M = scale * C_rot[:, j]
+        if n == 0:
+            continue
+        M = 2.0 * C_rot[:, j]
         cols[f"{prefix}normal_B{n}"] = np.real(M)
         cols[f"{prefix}skew_A{n}"] = np.imag(M)
     return pd.DataFrame(cols)
@@ -279,6 +284,26 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
         indent=False,
         layout=w.Layout(width="650px"),
     )
+
+
+    di_dt_correction = w.Checkbox(
+        value=False,
+        description="Apply di/dt correction (legacy current-ramp correction)",
+        indent=False,
+        layout=w.Layout(width="650px"),
+    )
+
+    drift_mode = w.Dropdown(
+        options=[
+            ("Legacy (C++) — uniform Δt", "legacy"),
+            ("Bottura/Pentella — Δt-weighted", "weighted"),
+        ],
+        value="legacy",
+        description="Drift mode",
+        layout=w.Layout(width="420px"),
+        style=STYLE_MED,
+        disabled=True,
+    )
     require_valid_time = w.Checkbox(
         value=True,
         description="Require valid time (finite and strictly increasing within each turn)",
@@ -310,10 +335,20 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             "This matches the legacy analyzer and is the default.</li>"
             "<li><b>Drift correction</b>: removes per-turn offset and recenters the integrated flux "
             "to reduce spurious low-order leakage. Use only if you observe obvious drift or a large baseline.</li>"
+            "<li><b>di/dt correction</b>: applies the legacy current-ramp correction on the incremental signal "
+            "before integration/FFT when the current is ramping (rule: dI/dt &gt; 0.1 A/s and mean(I) &gt; 10 A).</li>"
             "</ul>"
             "</div>"
         )
     )
+
+    def _refresh_drift_mode_enabled(*_):
+        # Drift mode is meaningful only when integrating to flux AND drift correction is enabled.
+        drift_mode.disabled = not (bool(integrate_to_flux.value) and bool(drift_correction.value))
+
+    integrate_to_flux.observe(_refresh_drift_mode_enabled, names="value")
+    drift_correction.observe(_refresh_drift_mode_enabled, names="value")
+    _refresh_drift_mode_enabled()
 
     # ---------------------------
     # View 1 — amplitude versus current
@@ -653,20 +688,43 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             abs_turns = tb.df_abs[valid_turn, :]
             cmp_turns = tb.df_cmp[valid_turn, :]
             I_turns = tb.I[valid_turn, :]
+            t_turns = getattr(tb, "t", None)
+            t_turns = t_turns[valid_turn, :] if t_turns is not None else None
+
+            # Optional: legacy di/dt ("dit") correction, applied to the incremental signal BEFORE integration/FFT.
+            di_dt_res = None
+            if di_dt_correction.value:
+                if t_turns is None:
+                    with out_log:
+                        print("Warning: di/dt correction requested, but no time array is available; skipping di/dt correction.")
+                else:
+                    abs_turns, cmp_turns, di_dt_res = apply_di_dt_to_channels(abs_turns, cmp_turns, t_turns, I_turns)
+                    with out_log:
+                        n_app = int(np.sum(di_dt_res.applied))
+                        n_tot = int(di_dt_res.applied.size)
+                        print(
+                            f"di/dt correction enabled: applied to {n_app}/{n_tot} turn(s) "
+                            "(rule: dI/dt>0.1 A/s and mean(I)>10 A)."
+                        )
 
             if integrate_to_flux.value:
                 if drift_correction.value:
-                    abs0 = abs_turns - np.mean(abs_turns, axis=1, keepdims=True)
-                    cmp0 = cmp_turns - np.mean(cmp_turns, axis=1, keepdims=True)
-                    flux_abs = np.cumsum(abs0, axis=1) - np.mean(np.cumsum(abs_turns, axis=1), axis=1, keepdims=True)
-                    flux_cmp = np.cumsum(cmp0, axis=1) - np.mean(np.cumsum(cmp_turns, axis=1), axis=1, keepdims=True)
+                    mode = str(drift_mode.value)
+                    if mode == "weighted" and t_turns is None:
+                        raise ValueError("Δt-weighted drift correction requires a time array per turn.")
+
+                    flux_abs, _ = integrate_turns_to_flux(abs_turns, drift=True, drift_mode=mode, t_turns=t_turns)
+                    flux_cmp, _ = integrate_turns_to_flux(cmp_turns, drift=True, drift_mode=mode, t_turns=t_turns)
+
                     with out_log:
-                        print("Signal used for spectrum: integrated flux with drift correction.")
+                        label = "Legacy (C++)" if mode == "legacy" else "Bottura/Pentella (Δt-weighted)"
+                        print(f"Signal used for spectrum: integrated flux with drift correction ({label}).")
                 else:
-                    flux_abs = np.cumsum(abs_turns, axis=1)
-                    flux_cmp = np.cumsum(cmp_turns, axis=1)
+                    flux_abs, _ = integrate_turns_to_flux(abs_turns, drift=False)
+                    flux_cmp, _ = integrate_turns_to_flux(cmp_turns, drift=False)
                     with out_log:
                         print("Signal used for spectrum: integrated flux (legacy convention).")
+
                 sig_abs = flux_abs
                 sig_cmp = flux_cmp
             else:
@@ -689,6 +747,8 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 orders = [int(x) for x in H.orders]
                 cols: Dict[str, Any] = {}
                 for jj, nn in enumerate(orders):
+                    if int(nn) == 0:
+                        continue
                     cols[f"{prefix}amplitude_C{nn}"] = np.abs(C[:, jj])
                     cols[f"{prefix}phase_C{nn}"] = np.angle(C[:, jj])
                 return pd.DataFrame(cols, index=turn_idx)
@@ -715,6 +775,9 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 state.df_out_mean = df_out.mean(numeric_only=True).to_frame().T
                 state.df_out_std = df_out.std(numeric_only=True).to_frame().T
 
+            # NOTE (do not forget): the legacy C++ analyzer computes the rotation reference after applying k_n
+            # (k_n is complex and can shift the phase). Once k_n calibration is implemented, compute phi_out
+            # from the calibrated main harmonic (post-k_n), not from the raw FFT coefficient.
             m = int(main_order.value)
             phi_out, bad_phi = _phase_zero_from_main_harmonic(H_abs, m)
             if int(np.sum(bad_phi)):
@@ -1043,6 +1106,8 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             w.HBox([max_harm, main_order]),
             integrate_to_flux,
             drift_correction,
+            drift_mode,
+            di_dt_correction,
             require_valid_time,
             w.HBox([btn_preview_dq, btn_apply_and_compute, append_log]),
             help_text,

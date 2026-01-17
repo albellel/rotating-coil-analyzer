@@ -9,14 +9,39 @@ Project-wide hard constraint:
 
 Accordingly, analysis functions are expressed on the *sample/turn index* and the
 implicit angular grid per turn, not on any reconstructed time axis.
+
+Legacy parity notes
+-------------------
+The legacy analyzers apply some optional preprocessing steps *before* FFT:
+
+- ``dit`` / ``di/dt`` current-ramp correction (uses measured time + current)
+- Drift correction (legacy uniform-Δt or Bottura/Pentella Δt-weighted)
+
+These are implemented in :mod:`rotating_coil_analyzer.analysis.preprocess`.
 """
 
 from .turns import TurnBlock, split_into_turns
 from .fourier import dft_per_turn, summarize_harmonics
+from .preprocess import (
+    DriftMode,
+    DriftResult,
+    DiDtResult,
+    estimate_linear_slope_per_turn,
+    di_dt_weights,
+    apply_di_dt_to_channels,
+    integrate_to_flux,
+)
 
 __all__ = [
     "TurnBlock",
     "split_into_turns",
     "dft_per_turn",
     "summarize_harmonics",
+    "DriftMode",
+    "DriftResult",
+    "DiDtResult",
+    "estimate_linear_slope_per_turn",
+    "di_dt_weights",
+    "apply_di_dt_to_channels",
+    "integrate_to_flux",
 ]

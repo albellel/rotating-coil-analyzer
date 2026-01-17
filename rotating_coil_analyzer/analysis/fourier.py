@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 
@@ -86,6 +86,7 @@ def summarize_harmonics(
     harm: HarmonicsPerTurn,
     *,
     plateau_id_per_turn: Optional[np.ndarray] = None,
+    include_dc: bool = True,
 ) -> Dict[str, HarmonicsSummary]:
     """Compute mean/std of harmonics, optionally grouped by plateau id.
 
@@ -97,6 +98,9 @@ def summarize_harmonics(
         Optional array of shape ``(n_turns,)``. If provided, this function returns both:
         - overall mean/std across all turns
         - per-plateau mean/std
+    include_dc:
+        Whether to include the DC (order 0) component in the summaries. Legacy metrology
+        workflows typically treat order 0 as diagnostic only, and focus on orders >= 1.
 
     Returns
     -------
@@ -107,12 +111,24 @@ def summarize_harmonics(
     if coeff.ndim != 2:
         raise ValueError("harm.coeff must be 2D")
 
+    orders = np.asarray(harm.orders, dtype=int)
+    if orders.ndim != 1 or orders.size != coeff.shape[1]:
+        raise ValueError("harm.orders must be 1D and match harm.coeff second axis")
+
+    if include_dc:
+        sel = np.ones_like(orders, dtype=bool)
+    else:
+        sel = orders != 0
+
     out: Dict[str, HarmonicsSummary] = {}
 
-    mean_all = np.nanmean(coeff, axis=0)
-    std_all = np.nanstd(coeff, axis=0)
+    coeff_sel = coeff[:, sel]
+    orders_sel = orders[sel]
+
+    mean_all = np.nanmean(coeff_sel, axis=0)
+    std_all = np.nanstd(coeff_sel, axis=0)
     out["all"] = HarmonicsSummary(
-        orders=harm.orders,
+        orders=orders_sel,
         mean=mean_all,
         std=std_all,
         by_plateau=False,
@@ -129,18 +145,18 @@ def summarize_harmonics(
         uniq = np.unique(pid[np.isfinite(pid)])
         uniq = np.sort(uniq)
 
-        mean_p = np.full((len(uniq), coeff.shape[1]), np.nan, dtype=complex)
-        std_p = np.full((len(uniq), coeff.shape[1]), np.nan, dtype=complex)
+        mean_p = np.full((len(uniq), coeff_sel.shape[1]), np.nan, dtype=complex)
+        std_p = np.full((len(uniq), coeff_sel.shape[1]), np.nan, dtype=complex)
 
         for i, u in enumerate(uniq):
             mask = pid == u
             if not np.any(mask):
                 continue
-            mean_p[i, :] = np.nanmean(coeff[mask, :], axis=0)
-            std_p[i, :] = np.nanstd(coeff[mask, :], axis=0)
+            mean_p[i, :] = np.nanmean(coeff_sel[mask, :], axis=0)
+            std_p[i, :] = np.nanstd(coeff_sel[mask, :], axis=0)
 
         out["by_plateau"] = HarmonicsSummary(
-            orders=harm.orders,
+            orders=orders_sel,
             mean=mean_p,
             std=std_p,
             by_plateau=True,
