@@ -298,6 +298,108 @@ def provenance_columns(
     drift_abs: Optional[DriftResult],
     drift_cmp: Optional[DriftResult],
 ) -> Dict[str, Any]:
+    """Build per-turn provenance columns for exported harmonic tables.
+
+    This function is intentionally independent of the GUI so that it can be
+    unit-tested and re-used across export formats.
+
+    Parameters
+    ----------
+    n_turns:
+        Number of turns in the exported table.
+    di_dt_enabled:
+        Whether the di/dt option was enabled.
+    di_dt_res:
+        Diagnostics from :func:`apply_di_dt_to_channels`, if available.
+    integrate_to_flux_enabled:
+        Whether integration-to-flux was enabled.
+    drift_enabled:
+        Whether drift correction was enabled.
+    drift_mode:
+        The selected drift mode if drift_enabled, else None.
+    drift_abs, drift_cmp:
+        Drift diagnostics for the absolute and compensated channels.
+
+    Returns
+    -------
+    Dict[str, Any]
+        Mapping of column name to 1D array (length n_turns) or object array.
+    """
+
+    n = int(n_turns)
+    if n <= 0:
+        raise ValueError(f"n_turns must be positive, got {n_turns}")
+
+    cols: Dict[str, Any] = {}
+
+    # --- di/dt provenance ---
+    cols["preproc_di_dt_enabled"] = np.full(n, bool(di_dt_enabled), dtype=bool)
+
+    if di_dt_res is not None:
+        cols["preproc_di_dt_applied"] = np.asarray(di_dt_res.applied, dtype=bool)
+        cols["preproc_dI_dt_A_per_s"] = np.asarray(di_dt_res.dI_dt_A_per_s, dtype=float)
+        cols["preproc_di_dt_I_mean_A"] = np.asarray(di_dt_res.I_mean_A, dtype=float)
+        cols["preproc_di_dt_I_min_abs_A"] = np.asarray(di_dt_res.I_min_abs_A, dtype=float)
+    else:
+        cols["preproc_di_dt_applied"] = np.full(n, False, dtype=bool)
+        cols["preproc_dI_dt_A_per_s"] = np.full(n, np.nan, dtype=float)
+        cols["preproc_di_dt_I_mean_A"] = np.full(n, np.nan, dtype=float)
+        cols["preproc_di_dt_I_min_abs_A"] = np.full(n, np.nan, dtype=float)
+
+    # --- integration/drift provenance ---
+    cols["preproc_integrate_to_flux"] = np.full(n, bool(integrate_to_flux_enabled), dtype=bool)
+    cols["preproc_drift_enabled"] = np.full(n, bool(drift_enabled), dtype=bool)
+
+    mode_str = str(drift_mode) if (drift_enabled and drift_mode is not None) else ""
+    cols["preproc_drift_mode"] = np.array([mode_str] * n, dtype=object)
+
+    # Total time is meaningful only for weighted mode; offsets are channel-dependent.
+    total_time = None
+    if drift_abs is not None and drift_abs.total_time_s is not None:
+        total_time = drift_abs.total_time_s
+    elif drift_cmp is not None and drift_cmp.total_time_s is not None:
+        total_time = drift_cmp.total_time_s
+
+    if total_time is not None:
+        cols["preproc_drift_total_time_s"] = np.asarray(total_time, dtype=float)
+    else:
+        cols["preproc_drift_total_time_s"] = np.full(n, np.nan, dtype=float)
+
+    def _drift_applied(diag: Optional[DriftResult]) -> np.ndarray:
+        if diag is None:
+            return np.full(n, False, dtype=bool)
+        return np.asarray(diag.applied, dtype=bool)
+
+    def _drift_offset(diag: Optional[DriftResult]) -> np.ndarray:
+        if diag is None or diag.offset_per_s is None:
+            return np.full(n, np.nan, dtype=float)
+        return np.asarray(diag.offset_per_s, dtype=float)
+
+    cols["absolute_preproc_drift_applied"] = _drift_applied(drift_abs)
+    cols["absolute_preproc_drift_offset_per_s"] = _drift_offset(drift_abs)
+
+    cols["compensated_preproc_drift_applied"] = _drift_applied(drift_cmp)
+    cols["compensated_preproc_drift_offset_per_s"] = _drift_offset(drift_cmp)
+
+    # Defensive: ensure all arrays have correct length.
+    for k, v in list(cols.items()):
+        if isinstance(v, np.ndarray) and v.shape[0] != n:
+            raise ValueError(f"Column {k!r} has wrong length {v.shape[0]} (expected {n})")
+
+    return cols
+
+
+def provenance_columns(
+    n_turns: int,
+    *,
+    di_dt_enabled: bool,
+    di_dt_res: Optional[DiDtResult],
+    integrate_to_flux_enabled: bool,
+    drift_enabled: bool,
+    drift_mode: Optional[DriftMode],
+    drift_abs: Optional[DriftResult],
+    drift_cmp: Optional[DriftResult],
+) -> Dict[str, Any]:
     """Build per-turn provenance columns for exported tables.
 
     This is a *traceability* helper: it does not change physics results.

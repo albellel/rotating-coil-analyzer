@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from rotating_coil_analyzer.models.frames import SegmentFrame
 from rotating_coil_analyzer.analysis.turns import split_into_turns
 from rotating_coil_analyzer.analysis.fourier import dft_per_turn
-from rotating_coil_analyzer.analysis.preprocess import apply_di_dt_to_channels, integrate_to_flux as integrate_turns_to_flux
+from rotating_coil_analyzer.analysis.preprocess import apply_di_dt_to_channels, integrate_to_flux as integrate_turns_to_flux, provenance_columns
 
 
 # Keep a single active Phase II panel per kernel (defensive: prevents stacked live instances).
@@ -707,21 +707,24 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                             "(rule: dI/dt>0.1 A/s and mean(I)>10 A)."
                         )
 
+            drift_abs = None
+            drift_cmp = None
+
             if integrate_to_flux.value:
                 if drift_correction.value:
                     mode = str(drift_mode.value)
                     if mode == "weighted" and t_turns is None:
                         raise ValueError("Δt-weighted drift correction requires a time array per turn.")
 
-                    flux_abs, _ = integrate_turns_to_flux(abs_turns, drift=True, drift_mode=mode, t_turns=t_turns)
-                    flux_cmp, _ = integrate_turns_to_flux(cmp_turns, drift=True, drift_mode=mode, t_turns=t_turns)
+                    flux_abs, drift_abs = integrate_turns_to_flux(abs_turns, drift=True, drift_mode=mode, t_turns=t_turns)
+                    flux_cmp, drift_cmp = integrate_turns_to_flux(cmp_turns, drift=True, drift_mode=mode, t_turns=t_turns)
 
                     with out_log:
                         label = "Legacy (C++)" if mode == "legacy" else "Bottura/Pentella (Δt-weighted)"
                         print(f"Signal used for spectrum: integrated flux with drift correction ({label}).")
                 else:
-                    flux_abs, _ = integrate_turns_to_flux(abs_turns, drift=False)
-                    flux_cmp, _ = integrate_turns_to_flux(cmp_turns, drift=False)
+                    flux_abs, drift_abs = integrate_turns_to_flux(abs_turns, drift=False)
+                    flux_cmp, drift_cmp = integrate_turns_to_flux(cmp_turns, drift=False)
                     with out_log:
                         print("Signal used for spectrum: integrated flux (legacy convention).")
 
@@ -753,7 +756,19 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                     cols[f"{prefix}phase_C{nn}"] = np.angle(C[:, jj])
                 return pd.DataFrame(cols, index=turn_idx)
 
+            prov = provenance_columns(
+                n_turns=int(I_turns.shape[0]),
+                di_dt_enabled=bool(di_dt_correction.value),
+                di_dt_res=di_dt_res,
+                integrate_to_flux_enabled=bool(integrate_to_flux.value),
+                drift_enabled=bool(integrate_to_flux.value and drift_correction.value),
+                drift_mode=(str(drift_mode.value) if (integrate_to_flux.value and drift_correction.value) else None),
+                drift_abs=drift_abs,
+                drift_cmp=drift_cmp,
+            )
+
             meta: Dict[str, Any] = {"mean_current_A": np.mean(I_turns, axis=1)}
+            meta.update(prov)
             if getattr(tb, "plateau_id", None) is not None:
                 meta["plateau_id"] = np.asarray(tb.plateau_id[valid_turn]).astype(int)
 
@@ -775,6 +790,22 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 state.df_out_mean = df_out.mean(numeric_only=True).to_frame().T
                 state.df_out_std = df_out.std(numeric_only=True).to_frame().T
 
+
+            # Add constant preprocessing descriptors (string/bool) to the summary tables.
+            # Note: per-turn provenance numeric columns (e.g. dI/dt, applied masks) are already
+            # included in the group-by mean/std computations via numeric_only=True.
+            summary_const = {
+                "preproc_di_dt_enabled": bool(di_dt_correction.value),
+                "preproc_integrate_to_flux": bool(integrate_to_flux.value),
+                "preproc_drift_enabled": bool(integrate_to_flux.value and drift_correction.value),
+                "preproc_drift_mode": str(drift_mode.value) if (integrate_to_flux.value and drift_correction.value) else "",
+            }
+            for k, v in summary_const.items():
+                if state.df_out_mean is not None:
+                    state.df_out_mean[k] = v
+                if state.df_out_std is not None:
+                    state.df_out_std[k] = v
+
             # NOTE (do not forget): the legacy C++ analyzer computes the rotation reference after applying k_n
             # (k_n is complex and can shift the phase). Once k_n calibration is implemented, compute phi_out
             # from the calibrated main harmonic (post-k_n), not from the raw FFT coefficient.
@@ -793,13 +824,22 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             df_ba_abs = _ba_from_rotated(C_abs_rot, H_abs.orders, prefix="absolute_")
             df_ba_cmp = _ba_from_rotated(C_cmp_rot, H_cmp.orders, prefix="compensated_")
 
+            prov_cols = [
+                c
+                for c in df_out.columns
+                if c.startswith("preproc_") or c.startswith("absolute_preproc_") or c.startswith("compensated_preproc_")
+            ]
+
+            front_cols: list[str] = []
             if "plateau_id" in df_out.columns:
-                df_ba = pd.concat(
-                    [df_out[["plateau_id", "mean_current_A"]].reset_index(drop=True), df_ba_abs, df_ba_cmp],
-                    axis=1,
-                )
-            else:
-                df_ba = pd.concat([df_out[["mean_current_A"]].reset_index(drop=True), df_ba_abs, df_ba_cmp], axis=1)
+                front_cols.append("plateau_id")
+            front_cols.append("mean_current_A")
+            front_cols.extend(prov_cols)
+
+            df_ba = pd.concat(
+                [df_out[front_cols].reset_index(drop=True), df_ba_abs, df_ba_cmp],
+                axis=1,
+            )
 
             state.df_ba = df_ba
 
@@ -810,6 +850,20 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             else:
                 state.mean_ba = df_ba.mean(numeric_only=True).to_frame().T
                 state.std_ba = df_ba.std(numeric_only=True).to_frame().T
+
+
+            # Add constant preprocessing descriptors to the normal/skew summary tables.
+            summary_const_ba = {
+                "preproc_di_dt_enabled": bool(di_dt_correction.value),
+                "preproc_integrate_to_flux": bool(integrate_to_flux.value),
+                "preproc_drift_enabled": bool(integrate_to_flux.value and drift_correction.value),
+                "preproc_drift_mode": str(drift_mode.value) if (integrate_to_flux.value and drift_correction.value) else "",
+            }
+            for k, v in summary_const_ba.items():
+                if state.mean_ba is not None:
+                    state.mean_ba[k] = v
+                if state.std_ba is not None:
+                    state.std_ba[k] = v
 
             _refresh_plateau_dropdown_from_df(df_out)
             _update_plateau_info()

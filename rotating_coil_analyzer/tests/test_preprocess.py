@@ -6,6 +6,7 @@ import pytest
 from rotating_coil_analyzer.analysis.preprocess import (
     di_dt_weights,
     integrate_to_flux,
+    provenance_columns,
 )
 
 
@@ -79,3 +80,83 @@ def test_integrate_to_flux_weighted_requires_time() -> None:
     df = np.array([[1.0, 2.0, 3.0]])
     with pytest.raises(ValueError):
         integrate_to_flux(df, drift=True, drift_mode="weighted", t_turns=None)
+
+
+def test_provenance_columns_defaults_when_disabled() -> None:
+    n_turns = 3
+    cols = provenance_columns(
+        n_turns=n_turns,
+        di_dt_enabled=False,
+        di_dt_res=None,
+        integrate_to_flux_enabled=False,
+        drift_enabled=False,
+        drift_mode=None,
+        drift_abs=None,
+        drift_cmp=None,
+    )
+
+    assert cols["preproc_di_dt_enabled"].shape == (n_turns,)
+    assert cols["preproc_di_dt_enabled"].dtype == bool
+    assert cols["preproc_di_dt_enabled"].sum() == 0
+
+    assert cols["preproc_di_dt_applied"].sum() == 0
+    assert np.all(np.isnan(cols["preproc_dI_dt_A_per_s"]))
+
+    assert cols["preproc_integrate_to_flux"].sum() == 0
+    assert cols["preproc_drift_enabled"].sum() == 0
+    assert all(x == "" for x in cols["preproc_drift_mode"].tolist())
+
+    assert cols["absolute_preproc_drift_applied"].sum() == 0
+    assert cols["compensated_preproc_drift_applied"].sum() == 0
+    assert np.all(np.isnan(cols["absolute_preproc_drift_offset_per_s"]))
+
+
+def test_provenance_columns_populates_didt_and_weighted_drift() -> None:
+    # One turn, variable dt.
+    dt = np.array([0.0, 0.5, 1.5, 1.0, 2.0, 0.5])
+    t = np.cumsum(dt)[None, :]
+
+    # Create a ramping current so di/dt triggers.
+    I = np.array([[20.0, 21.0, 22.0, 23.0, 24.0, 25.0]])
+    didt = di_dt_weights(t_turns=t, I_turns=I)
+
+    # Absolute and compensated df differ -> different weighted drift offsets.
+    c1 = 3.0
+    c2 = 4.0
+    df_abs = (c1 * dt)[None, :]
+    df_cmp = (c2 * dt)[None, :]
+
+    _, diag_abs = integrate_to_flux(df_abs, drift=True, drift_mode="weighted", t_turns=t)
+    _, diag_cmp = integrate_to_flux(df_cmp, drift=True, drift_mode="weighted", t_turns=t)
+
+    assert diag_abs is not None and diag_cmp is not None
+
+    cols = provenance_columns(
+        n_turns=1,
+        di_dt_enabled=True,
+        di_dt_res=didt,
+        integrate_to_flux_enabled=True,
+        drift_enabled=True,
+        drift_mode="weighted",
+        drift_abs=diag_abs,
+        drift_cmp=diag_cmp,
+    )
+
+    assert bool(cols["preproc_di_dt_enabled"][0]) is True
+    assert bool(cols["preproc_di_dt_applied"][0]) is True
+
+    # dI/dt should be ~1 A/s for this constructed ramp (not exact due to mean centering, but positive).
+    assert cols["preproc_dI_dt_A_per_s"][0] > 0.1
+
+    assert bool(cols["preproc_integrate_to_flux"][0]) is True
+    assert bool(cols["preproc_drift_enabled"][0]) is True
+    assert cols["preproc_drift_mode"][0] == "weighted"
+
+    # Weighted drift offsets should match the constructed constants.
+    # For df = c*dt, the estimated offset is sum(df)/sum(dt) = c.
+    assert np.isclose(cols["absolute_preproc_drift_offset_per_s"][0], c1)
+    assert np.isclose(cols["compensated_preproc_drift_offset_per_s"][0], c2)
+
+    # Total time should be > 0.
+    assert cols["absolute_preproc_drift_total_time_s"][0] > 0.0
+    assert cols["compensated_preproc_drift_total_time_s"][0] > 0.0
