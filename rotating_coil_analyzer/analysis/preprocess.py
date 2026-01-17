@@ -53,6 +53,7 @@ Implemented steps
 """
 
 from dataclasses import dataclass
+import os
 from typing import Any, Dict, Literal, Optional, Tuple
 
 import numpy as np
@@ -391,3 +392,67 @@ def provenance_columns(
     cols.update(_drift_block("compensated_", drift_cmp))
 
     return cols
+
+
+def format_preproc_tag(
+    *,
+    di_dt_enabled: bool,
+    integrate_to_flux_enabled: bool,
+    drift_enabled: bool,
+    drift_mode: Optional[str],
+    include_dc: bool,
+) -> str:
+    """Format a short, file-name-safe preprocessing tag.
+
+    This tag is intended for export filenames so that files remain
+    self-identifying when separated from logs.
+
+    Examples
+    --------
+    - di/dt on, integrate to flux, drift weighted, DC excluded:
+      ``didt_on_flux_dri_weighted_dc_off``
+    - di/dt off, no integration (raw incremental signal), DC excluded:
+      ``didt_off_df_dc_off``
+    """
+
+    parts: list[str] = []
+    parts.append("didt_on" if di_dt_enabled else "didt_off")
+
+    if integrate_to_flux_enabled:
+        parts.append("flux")
+        if drift_enabled:
+            m = (str(drift_mode).strip().lower() if drift_mode is not None else "")
+            if m not in ("legacy", "weighted"):
+                m = "unknown"
+            parts.append(f"dri_{m}")
+        else:
+            parts.append("dri_off")
+    else:
+        # Raw incremental signal path (no integration).
+        parts.append("df")
+
+    parts.append("dc_on" if include_dc else "dc_off")
+
+    # Make file-name-safe.
+    tag = "_".join(parts)
+    tag = "".join(ch if (ch.isalnum() or ch in "_-.") else "_" for ch in tag)
+    return tag
+
+
+def append_tag_to_path(path: str, tag: str) -> str:
+    """Append a preprocessing tag to a filesystem path (before extension).
+
+    If the base name already ends with the tag, the path is returned unchanged.
+    """
+
+    if not path:
+        return path
+
+    tag = str(tag).strip()
+    if not tag:
+        return path
+
+    root, ext = os.path.splitext(path)
+    if root.endswith("_" + tag) or root.endswith(tag):
+        return path
+    return f"{root}_{tag}{ext}"

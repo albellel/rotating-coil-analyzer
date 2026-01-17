@@ -30,6 +30,8 @@ from .preprocess import (
     di_dt_weights,
     apply_di_dt_to_channels,
     integrate_to_flux,
+    format_preproc_tag,
+    append_tag_to_path,
     provenance_columns,
 )
 
@@ -45,5 +47,7 @@ __all__ = [
     "di_dt_weights",
     "apply_di_dt_to_channels",
     "integrate_to_flux",
+    "format_preproc_tag",
+    "append_tag_to_path",
     "provenance_columns",
 ]

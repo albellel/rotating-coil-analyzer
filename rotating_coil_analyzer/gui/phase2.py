@@ -16,7 +16,13 @@ import matplotlib.pyplot as plt
 from rotating_coil_analyzer.models.frames import SegmentFrame
 from rotating_coil_analyzer.analysis.turns import split_into_turns
 from rotating_coil_analyzer.analysis.fourier import dft_per_turn
-from rotating_coil_analyzer.analysis.preprocess import apply_di_dt_to_channels, integrate_to_flux as integrate_turns_to_flux, provenance_columns
+from rotating_coil_analyzer.analysis.preprocess import (
+    apply_di_dt_to_channels,
+    integrate_to_flux as integrate_turns_to_flux,
+    provenance_columns,
+    format_preproc_tag,
+    append_tag_to_path,
+)
 
 
 # Keep a single active Phase II panel per kernel (defensive: prevents stacked live instances).
@@ -481,6 +487,22 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
 
     def _dq_cfg() -> tuple:
         return (bool(require_valid_time.value),)
+
+    def _export_preproc_tag() -> str:
+        """Return a file-name-safe tag describing the current preprocessing configuration."""
+
+        integrate_on = bool(integrate_to_flux.value)
+        drift_on = integrate_on and bool(drift_correction.value)
+        mode = str(drift_mode.value) if drift_on and drift_mode.value is not None else None
+
+        # DC (n=0) is excluded from the main harmonic outputs by design.
+        return format_preproc_tag(
+            di_dt_enabled=bool(di_dt_correction.value),
+            integrate_to_flux_enabled=integrate_on,
+            drift_enabled=drift_on,
+            drift_mode=mode,
+            include_dc=False,
+        )
 
     def _refresh_apply_button() -> None:
         src = _current_source()
@@ -1061,15 +1083,18 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 return
 
             fmt = str(save_plot_fmt.value)
+            tag = _export_preproc_tag()
             path = _saveas_dialog(
                 title="Save plot",
-                initialfile=f"phase2_plot.{fmt}",
+                initialfile=f"phase2_plot_{tag}.{fmt}",
                 defaultextension=f".{fmt}",
                 filetypes=[(fmt.upper(), f"*.{fmt}")],
             )
             if not path:
                 _end_action(ok=True, msg="save cancelled")
                 return
+
+            path = append_tag_to_path(path, tag)
 
             state.fig.savefig(path, bbox_inches="tight")
             with out_log:
@@ -1092,15 +1117,18 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 _end_action(ok=False, msg="no table")
                 return
 
+            tag = _export_preproc_tag()
             path = _saveas_dialog(
                 title="Save table (comma-separated values)",
-                initialfile=f"{key}.csv",
+                initialfile=f"{key}_{tag}.csv",
                 defaultextension=".csv",
                 filetypes=[("CSV", "*.csv")],
             )
             if not path:
                 _end_action(ok=True, msg="save cancelled")
                 return
+
+            path = append_tag_to_path(path, tag)
 
             df.to_csv(path, index=True)
             with out_log:

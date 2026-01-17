@@ -7,6 +7,8 @@ from rotating_coil_analyzer.analysis.preprocess import (
     di_dt_weights,
     integrate_to_flux,
     provenance_columns,
+    format_preproc_tag,
+    append_tag_to_path,
 )
 
 
@@ -160,3 +162,37 @@ def test_provenance_columns_populates_didt_and_weighted_drift() -> None:
     # Total time should be > 0.
     assert cols["absolute_preproc_drift_total_time_s"][0] > 0.0
     assert cols["compensated_preproc_drift_total_time_s"][0] > 0.0
+
+
+def test_format_preproc_tag_examples() -> None:
+    tag = format_preproc_tag(
+        di_dt_enabled=True,
+        integrate_to_flux_enabled=True,
+        drift_enabled=True,
+        drift_mode="weighted",
+        include_dc=False,
+    )
+    assert tag == "didt_on_flux_dri_weighted_dc_off"
+
+    # When integration is off, drift is irrelevant and should not appear in the tag.
+    tag2 = format_preproc_tag(
+        di_dt_enabled=False,
+        integrate_to_flux_enabled=False,
+        drift_enabled=True,
+        drift_mode="legacy",
+        include_dc=False,
+    )
+    assert tag2 == "didt_off_df_dc_off"
+
+
+def test_append_tag_to_path() -> None:
+    p1 = append_tag_to_path("/tmp/df_out.csv", "abc")
+    assert p1 == "/tmp/df_out_abc.csv"
+
+    # Idempotent if tag already present.
+    p2 = append_tag_to_path("/tmp/df_out_abc.csv", "abc")
+    assert p2 == "/tmp/df_out_abc.csv"
+
+    # No extension.
+    p3 = append_tag_to_path("/tmp/df_out", "abc")
+    assert p3 == "/tmp/df_out_abc"
