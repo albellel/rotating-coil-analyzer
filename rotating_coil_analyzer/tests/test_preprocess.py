@@ -171,8 +171,9 @@ def test_format_preproc_tag_examples() -> None:
         drift_enabled=True,
         drift_mode="weighted",
         include_dc=False,
+        main_order=2,
     )
-    assert tag == "didt_on_flux_dri_weighted_dc_off"
+    assert tag == "didt_on_m02_flux_dri_weighted_dc_off"
 
     # When integration is off, drift is irrelevant and should not appear in the tag.
     tag2 = format_preproc_tag(
@@ -181,8 +182,9 @@ def test_format_preproc_tag_examples() -> None:
         drift_enabled=True,
         drift_mode="legacy",
         include_dc=False,
+        main_order=3,
     )
-    assert tag2 == "didt_off_df_dc_off"
+    assert tag2 == "didt_off_m03_df_dc_off"
 
 
 def test_append_tag_to_path() -> None:

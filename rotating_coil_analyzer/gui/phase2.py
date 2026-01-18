@@ -501,6 +501,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             integrate_to_flux_enabled=integrate_on,
             drift_enabled=drift_on,
             drift_mode=mode,
+            main_order=int(main_order.value),
             include_dc=False,
         )
 

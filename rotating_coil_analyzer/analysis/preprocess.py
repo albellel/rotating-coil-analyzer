@@ -401,30 +401,44 @@ def format_preproc_tag(
     drift_enabled: bool,
     drift_mode: Optional[str],
     include_dc: bool,
+    main_order: Optional[int] = None,
 ) -> str:
     """Format a short, file-name-safe preprocessing tag.
 
     This tag is intended for export filenames so that files remain
     self-identifying when separated from logs.
 
+    The tag intentionally encodes the \"main field order\" $m$ used for the
+    phase reference (rotation). Even before $k_n$ is implemented, this prevents
+    ambiguity when a dataset is analyzed with different $m$ values.
+
     Examples
     --------
-    - di/dt on, integrate to flux, drift weighted, DC excluded:
-      ``didt_on_flux_dri_weighted_dc_off``
-    - di/dt off, no integration (raw incremental signal), DC excluded:
-      ``didt_off_df_dc_off``
+    - di/dt on, main order m=2, integrate to flux, drift weighted, DC excluded:
+      ``didt_on_m02_flux_dri_weighted_dc_off``
+    - di/dt off, main order m=3, no integration (raw incremental signal), DC excluded:
+      ``didt_off_m03_df_dc_off``
     """
 
     parts: list[str] = []
     parts.append("didt_on" if di_dt_enabled else "didt_off")
 
+    if main_order is not None:
+        try:
+            m = int(main_order)
+            if m > 0:
+                parts.append(f"m{m:02d}")
+        except Exception:
+            # Ignore invalid main_order values.
+            pass
+
     if integrate_to_flux_enabled:
         parts.append("flux")
         if drift_enabled:
-            m = (str(drift_mode).strip().lower() if drift_mode is not None else "")
-            if m not in ("legacy", "weighted"):
-                m = "unknown"
-            parts.append(f"dri_{m}")
+            dm = (str(drift_mode).strip().lower() if drift_mode is not None else "")
+            if dm not in ("legacy", "weighted"):
+                dm = "unknown"
+            parts.append(f"dri_{dm}")
         else:
             parts.append("dri_off")
     else:
@@ -435,7 +449,7 @@ def format_preproc_tag(
 
     # Make file-name-safe.
     tag = "_".join(parts)
-    tag = "".join(ch if (ch.isalnum() or ch in "_-.") else "_" for ch in tag)
+    tag = "".join(ch if (ch.isalnum() or ch in "_-." ) else "_" for ch in tag)
     return tag
 
 
