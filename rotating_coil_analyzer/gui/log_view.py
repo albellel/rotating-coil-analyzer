@@ -35,11 +35,16 @@ class HtmlLog:
       - optional "Output-like" capture proxy to minimize code changes
     """
 
-    def __init__(self, *, height_px: int = 220, max_entries: int = 2000) -> None:
+    def __init__(self, *, title: str | None = None, height_px: int = 220, max_entries: int = 2000) -> None:
         self._entries: List[_Entry] = []
         self._height_px = int(height_px)
         self._max_entries = int(max_entries)
         self.widget = w.HTML()
+        # Convenience container used by the GUI (some panels expect .panel).
+        if title:
+            self.panel = w.VBox([w.HTML(f"<b>{html.escape(str(title))}</b>"), self.widget])
+        else:
+            self.panel = self.widget
         self.clear()
 
     def clear(self) -> None:
@@ -54,6 +59,20 @@ class HtmlLog:
 
     def error(self, message: str) -> None:
         self._add("error", message)
+
+    def write(self, message: str) -> None:
+        """Compatibility helper for older GUI code.
+
+        The Phase III GUI uses HtmlLog.write(...) and may pass HTML snippets.
+        We strip basic HTML tags and route each line through the severity classifier.
+        """
+        import re
+        txt = "" if message is None else str(message)
+        plain = re.sub(r"<[^>]+>", "", txt)
+        lines = plain.splitlines() or [""]
+        for line in lines:
+            level = self._classify(line)
+            self._add(level, line)
 
     def output_proxy(self) -> "_OutputProxy":
         """

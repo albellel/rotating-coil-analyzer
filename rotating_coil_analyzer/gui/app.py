@@ -20,6 +20,7 @@ from rotating_coil_analyzer.models.catalog import MeasurementCatalog
 from rotating_coil_analyzer.models.frames import SegmentFrame
 
 from rotating_coil_analyzer.gui.phase2 import build_phase2_panel
+from rotating_coil_analyzer.gui.phase3_kn import build_phase3_kn_panel
 
 
 # Keep a single active GUI instance per kernel (prevents multiple live instances).
@@ -431,7 +432,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
 
 def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     """
-    Combined Phase I + Phase II GUI (two tabs).
+    Combined Phase I + Phase II + Phase III GUI (three tabs).
 
     VS Code notebook rule:
       If you re-run the launch cell without clearing the cell output, you may end up with
@@ -465,10 +466,12 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
 
     phase1 = _build_phase1_panel(shared)
     phase2 = build_phase2_panel(lambda: shared.get("segment_frame"))
+    phase3 = build_phase3_kn_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
 
-    tabs = w.Tab(children=[phase1, phase2])
+    tabs = w.Tab(children=[phase1, phase2, phase3])
     tabs.set_title(0, "Phase I — Catalog")
     tabs.set_title(1, "Phase II — FFT")
+    tabs.set_title(2, "Phase III — k_n")
 
     _ACTIVE_GUI = tabs
     return tabs

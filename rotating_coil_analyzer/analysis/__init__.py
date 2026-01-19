@@ -35,6 +35,9 @@ from .preprocess import (
     provenance_columns,
 )
 
+from .kn_pipeline import SegmentKn, LegacyKnPerTurn, load_segment_kn_txt, compute_legacy_kn_per_turn, merge_coefficients
+from .merge import MergeDiagnostics, recommend_merge_choice
+
 __all__ = [
     "TurnBlock",
     "split_into_turns",
@@ -50,4 +53,13 @@ __all__ = [
     "format_preproc_tag",
     "append_tag_to_path",
     "provenance_columns",
+
+    # kn phase
+    "SegmentKn",
+    "LegacyKnPerTurn",
+    "load_segment_kn_txt",
+    "compute_legacy_kn_per_turn",
+    "merge_coefficients",
+    "MergeDiagnostics",
+    "recommend_merge_choice",
 ]
