@@ -212,18 +212,18 @@ def build_phase3_kn_panel(
     log = HtmlLog(title="Phase III log")
     status = w.HTML("<b>Status:</b> idle")
 
-    # ---- k_n source selection ----
+    # ---- Kn source selection ----
     src_radio = w.ToggleButtons(
-        options=[("Segment k_n TXT", "segment_txt"), ("Head geometry CSV", "head_csv")],
+        options=[("Segment Kn TXT", "segment_txt"), ("Head geometry CSV", "head_csv")],
         value="segment_txt",
-        description="k_n source:",
+        description="Kn source:",
         style={"description_width": "110px"},
     )
 
     kn_path = w.Text(
         value="",
-        description="k_n TXT:",
-        placeholder="path to Kn_values_*.txt",
+        description="Kn TXT:",
+        placeholder="path to Kn_values_*.txt (segment Kn)",
         layout=w.Layout(width="780px"),
         style={"description_width": "110px"},
     )
@@ -253,29 +253,31 @@ def build_phase3_kn_panel(
     )
     head_abs_conn = w.Text(
         value="",
-        description="Abs conn:",
-        placeholder="e.g. 1.1-1.3 (A.C terms)",
+        description="Absolute conn:",
+        # Typical 3-coil head: central coil is the "absolute" channel, e.g. 1.2.
+        placeholder="e.g. 1.2 (single coil)",
         layout=w.Layout(width="520px"),
         style={"description_width": "110px"},
         disabled=True,
     )
     head_cmp_conn = w.Text(
         value="",
-        description="Cmp conn:",
-        placeholder="e.g. 1.2 (A.C terms)",
+        description="Compensated conn:",
+        # Typical compensation: A-C, e.g. 1.1-1.3.
+        placeholder="e.g. 1.1-1.3 (A-C)",
         layout=w.Layout(width="520px"),
         style={"description_width": "110px"},
         disabled=True,
     )
     head_ext_conn = w.Text(
         value="",
-        description="Ext conn:",
+        description="External conn:",
         placeholder="optional",
         layout=w.Layout(width="520px"),
         style={"description_width": "110px"},
         disabled=True,
     )
-    btn_export_kn_txt = w.Button(description="Export segment k_n TXT", button_style="")
+    btn_export_kn_txt = w.Button(description="Compute + export segment Kn TXT", button_style="")
     btn_export_kn_txt.disabled = True
 
     # ---- numeric parameters ----
@@ -288,51 +290,51 @@ def build_phase3_kn_panel(
 
     abs_calib = w.FloatText(
         value=1.0,
-        description="absCalib:",
+        description="Absolute calibration:",
         style={"description_width": "110px"},
         layout=w.Layout(width="240px"),
     )
 
     magnet_order = w.IntText(
         value=2,
-        description="Main m:",
+        description="Main order m:",
         style={"description_width": "110px"},
         layout=w.Layout(width="240px"),
     )
 
-    skew_main = w.Checkbox(value=False, description="skew main (legacy skw)")
+    skew_main = w.Checkbox(value=False, description="Skew main harmonic")
 
     # ---- processing options (legacy ordering) ----
-    opt_dit = w.Checkbox(value=False, description="dit")
-    opt_dri = w.Checkbox(value=True, description="dri")
-    opt_rot = w.Checkbox(value=True, description="rot")
-    opt_cel = w.Checkbox(value=False, description="cel")
-    opt_fed = w.Checkbox(value=False, description="fed")
-    opt_nor = w.Checkbox(value=False, description="nor")
+    opt_dit = w.Checkbox(value=False, description="di/dt correction")
+    opt_dri = w.Checkbox(value=True, description="drift correction")
+    opt_rot = w.Checkbox(value=True, description="rotation (post-Kn)")
+    opt_cel = w.Checkbox(value=False, description="CEL")
+    opt_fed = w.Checkbox(value=False, description="feeddown")
+    opt_nor = w.Checkbox(value=False, description="normalization")
 
     drift_mode = w.Dropdown(
         options=[("legacy", "legacy"), ("weighted", "weighted")],
         value="legacy",
-        description="drift mode:",
+        description="Drift mode:",
         style={"description_width": "110px"},
         layout=w.Layout(width="240px"),
     )
 
     # ---- actions ----
-    btn_load_kn = w.Button(description="Load k_n", button_style="info")
-    btn_compute = w.Button(description="Compute (Abs/Cmp)", button_style="success")
+    btn_load_kn = w.Button(description="Load Kn", button_style="info")
+    btn_compute = w.Button(description="Compute (Absolute/Compensated)", button_style="success")
     btn_recommend = w.Button(description="Recommend merge", button_style="")
 
     merge_mode = w.Dropdown(
         options=[
             ("recommended", "recommended"),
-            ("abs main, cmp others (legacy default)", "abs_main_cmp_others"),
-            ("abs all", "abs_all"),
-            ("cmp all", "cmp_all"),
-            ("abs up to m, cmp above", "abs_upto_m_cmp_above"),
+            ("absolute main, compensated others (legacy default)", "abs_main_cmp_others"),
+            ("absolute all", "abs_all"),
+            ("compensated all", "cmp_all"),
+            ("absolute up to m, compensated above", "abs_upto_m_cmp_above"),
         ],
         value="recommended",
-        description="merge:",
+        description="Merge:",
         style={"description_width": "110px"},
         layout=w.Layout(width="520px"),
     )
@@ -435,7 +437,7 @@ def build_phase3_kn_panel(
                     log.write("<b style='color:#b00'>Please provide a head CSV path.</b>")
                     return
                 if not head_abs_conn.value.strip() or not head_cmp_conn.value.strip():
-                    log.write("<b style='color:#b00'>Please fill Abs conn and Cmp conn.</b>")
+                    log.write("<b style='color:#b00'>Please fill Absolute conn and Compensated conn.</b>")
                     return
 
                 head = compute_head_kn_from_csv(
@@ -817,9 +819,17 @@ def build_phase3_kn_panel(
         diag_table,
     ])
 
-    panel = w.VBox(
+    header = w.HTML(
+        "<h3 style='margin:0;'>Phase III — Kn loading, computation, and application</h3>"
+        "<div style='color:#555; line-height:1.35; margin-bottom:6px;'>"
+        "Load Kn from TXT, or compute it from a measurement-head CSV, then apply it end-to-end. "
+        "Merge is explicit and requires user approval."
+        "</div>"
+    )
+
+    main_panel = w.VBox(
         [
-            w.HTML("<h3>Phase III — k_n loading, application, and merge</h3>"),
+            w.HTML("<b>Kn source selection</b>"),
             src_radio,
             row_kn,
             row_head,
@@ -838,10 +848,19 @@ def build_phase3_kn_panel(
             merge_box,
             w.HTML("<hr>"),
             out_plot,
+        ],
+        layout=w.Layout(width="68%", min_width="640px"),
+    )
+
+    diag_panel = w.VBox(
+        [
             status,
             log.panel,
-        ]
+        ],
+        layout=w.Layout(width="32%", min_width="360px"),
     )
+
+    panel = w.VBox([header, w.HBox([main_panel, diag_panel])])
 
     _ACTIVE_PHASE3_PANEL = panel
     return panel

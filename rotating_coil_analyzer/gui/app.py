@@ -141,10 +141,11 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
     dd_seg = w.Dropdown(options=[], description="Segment", layout=w.Layout(width="220px"))
 
     mode_dd = w.Dropdown(
-        description="Mode",
-        options=[("abs", "abs"), ("cmp", "cmp")],
+        description="Channel",
+        # Keep internal tokens ("abs"/"cmp") for compatibility with the rest of the pipeline.
+        options=[("Absolute", "abs"), ("Compensated", "cmp")],
         value="abs",
-        layout=w.Layout(width="160px"),
+        layout=w.Layout(width="220px"),
     )
 
     btn_load_seg = w.Button(description="Load segment", button_style="success", layout=w.Layout(width="140px"))
@@ -358,7 +359,8 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
                 return
             segf = st.segf
             ycol = "df_abs" if mode_dd.value == "abs" else "df_cmp"
-            title = f"Preview: run={st.run_id}  ap={segf.aperture_id}  seg={st.seg_id}  mode={mode_dd.value}"
+            mode_label = "absolute" if mode_dd.value == "abs" else "compensated"
+            title = f"Preview: run={st.run_id}  ap={segf.aperture_id}  seg={st.seg_id}  channel={mode_label}"
             table_html.value = _df_head_to_html(segf.df, n=12, title="SegmentFrame.df head(12)")
             _plot_first_turns(segf, ycol=ycol, title=title)
             _done("preview ready")
@@ -421,13 +423,24 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
     top = w.HBox([folder, btn_browse, btn_load_cat])
     mid = w.HBox([dd_run, dd_ap, dd_seg, mode_dd, btn_load_seg, btn_preview, btn_diag, append_log])
 
-    plot_box = w.VBox([w.HTML("<b>Plot</b>"), plot_slot])
-    table_box = w.VBox([w.HTML("<b>Table preview</b>"), table_html])
-    log_box = w.VBox([w.HTML("<b>Log</b>"), log.widget])
+    plot_box = w.VBox([w.HTML("<b>Plot</b>"), plot_slot], layout=w.Layout(width="100%"))
+    table_box = w.VBox([w.HTML("<b>Table preview</b>"), table_html], layout=w.Layout(width="100%"))
+    diag_box = w.VBox(
+        [
+            status,
+            w.HTML("<b>Log</b>"),
+            log.widget,
+        ],
+        layout=w.Layout(width="34%", min_width="360px"),
+    )
+
+    main_box = w.VBox([plot_box, table_box], layout=w.Layout(width="66%", min_width="620px"))
 
     _refresh_enabled()
 
-    return w.VBox([top, mid, status, plot_box, table_box, log_box])
+    # Two-column layout: results on the left, diagnostics on the right.
+    # This avoids vertical scrolling to reach the log/status.
+    return w.VBox([top, mid, w.HBox([main_box, diag_box], layout=w.Layout(width="100%"))])
 
 
 def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
@@ -471,7 +484,7 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     tabs = w.Tab(children=[phase1, phase2, phase3])
     tabs.set_title(0, "Phase I — Catalog")
     tabs.set_title(1, "Phase II — FFT")
-    tabs.set_title(2, "Phase III — k_n")
+    tabs.set_title(2, "Phase III — Kn")
 
     _ACTIVE_GUI = tabs
     return tabs

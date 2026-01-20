@@ -1228,27 +1228,31 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
         layout=w.Layout(border="1px solid #ddd", padding="10px", width="100%"),
     )
 
+    # Two-column layout:
+    #   left = controls + results (plot/table)
+    #   right = diagnostics (status/log)
+    # This prevents having to scroll down to see the log.
     left_panel = w.VBox(
         [
             compute_box,
             view1_box,
             view2_box,
             export_box,
-            w.HTML("<b>Log</b>"),
-            log.widget,
-        ],
-        layout=w.Layout(width="48%", min_width="560px"),
-    )
-
-    right_panel = w.VBox(
-        [
-            status,
             w.HTML("<b>Plot</b>"),
             plot_slot,
             w.HTML("<b>Table</b>"),
             table_html,
         ],
-        layout=w.Layout(width="52%"),
+        layout=w.Layout(width="68%", min_width="640px"),
+    )
+
+    right_panel = w.VBox(
+        [
+            status,
+            w.HTML("<b>Log</b>"),
+            log.widget,
+        ],
+        layout=w.Layout(width="32%", min_width="360px"),
     )
 
     def _refresh_apply_button_outer():
