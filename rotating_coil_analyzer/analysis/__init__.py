@@ -37,6 +37,7 @@ from .preprocess import (
 
 from .kn_pipeline import SegmentKn, LegacyKnPerTurn, load_segment_kn_txt, compute_legacy_kn_per_turn, merge_coefficients
 from .merge import MergeDiagnostics, recommend_merge_choice
+from .kn_head import HeadKnData, compute_head_kn_from_csv, compute_segment_kn_from_head, write_segment_kn_txt
 
 __all__ = [
     "TurnBlock",
@@ -62,4 +63,10 @@ __all__ = [
     "merge_coefficients",
     "MergeDiagnostics",
     "recommend_merge_choice",
+
+    # kn head-csv computation
+    "HeadKnData",
+    "compute_head_kn_from_csv",
+    "compute_segment_kn_from_head",
+    "write_segment_kn_txt",
 ]

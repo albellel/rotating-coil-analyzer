@@ -40,6 +40,11 @@ from rotating_coil_analyzer.analysis.kn_pipeline import (
     merge_coefficients,
 )
 from rotating_coil_analyzer.analysis.merge import recommend_merge_choice, MergeDiagnostics
+from rotating_coil_analyzer.analysis.kn_head import (
+    compute_head_kn_from_csv,
+    compute_segment_kn_from_head,
+    write_segment_kn_txt,
+)
 
 
 # Keep a single active Phase III panel per kernel (defensive).
@@ -209,7 +214,7 @@ def build_phase3_kn_panel(
 
     # ---- k_n source selection ----
     src_radio = w.ToggleButtons(
-        options=[("Segment k_n TXT", "segment_txt"), ("Head geometry CSV (later)", "head_csv")],
+        options=[("Segment k_n TXT", "segment_txt"), ("Head geometry CSV", "head_csv")],
         value="segment_txt",
         description="k_n source:",
         style={"description_width": "110px"},
@@ -227,12 +232,51 @@ def build_phase3_kn_panel(
     head_csv_path = w.Text(
         value="",
         description="Head CSV:",
-        placeholder="(planned) measurement head CSV",
+        placeholder="path to measurement head CSV (geometry)",
         layout=w.Layout(width="780px"),
         style={"description_width": "110px"},
         disabled=True,
     )
     head_browse = w.Button(description="Browse", disabled=True)
+
+    # ---- head-CSV computation controls (enabled only when src=head_csv) ----
+    # Defaults: warm=True and use_design_radius=True (typical case when calibrated radius is empty)
+    head_warm = w.Checkbox(value=True, description="Warm geometry", disabled=True)
+    head_use_design_radius = w.Checkbox(value=True, description="Use design radius", disabled=True)
+    head_strict_header = w.Checkbox(value=True, description="Strict header", disabled=True)
+    head_n_multipoles = w.IntText(
+        value=15,
+        description="N multipoles:",
+        style={"description_width": "110px"},
+        layout=w.Layout(width="240px"),
+        disabled=True,
+    )
+    head_abs_conn = w.Text(
+        value="",
+        description="Abs conn:",
+        placeholder="e.g. 1.1-1.3 (A.C terms)",
+        layout=w.Layout(width="520px"),
+        style={"description_width": "110px"},
+        disabled=True,
+    )
+    head_cmp_conn = w.Text(
+        value="",
+        description="Cmp conn:",
+        placeholder="e.g. 1.2 (A.C terms)",
+        layout=w.Layout(width="520px"),
+        style={"description_width": "110px"},
+        disabled=True,
+    )
+    head_ext_conn = w.Text(
+        value="",
+        description="Ext conn:",
+        placeholder="optional",
+        layout=w.Layout(width="520px"),
+        style={"description_width": "110px"},
+        disabled=True,
+    )
+    btn_export_kn_txt = w.Button(description="Export segment k_n TXT", button_style="")
+    btn_export_kn_txt.disabled = True
 
     # ---- numeric parameters ----
     rref_mm = w.FloatText(
@@ -343,15 +387,27 @@ def build_phase3_kn_panel(
 
     def _update_source_ui() -> None:
         is_txt = (src_radio.value == "segment_txt")
+
+        # Segment TXT widgets
         kn_path.disabled = not is_txt
         kn_browse.disabled = not is_txt
-        btn_load_kn.disabled = not is_txt
 
+        # Head CSV widgets
         head_csv_path.disabled = is_txt
         head_browse.disabled = is_txt
+        head_warm.disabled = is_txt
+        head_use_design_radius.disabled = is_txt
+        head_strict_header.disabled = is_txt
+        head_n_multipoles.disabled = is_txt
+        head_abs_conn.disabled = is_txt
+        head_cmp_conn.disabled = is_txt
+        head_ext_conn.disabled = is_txt
 
-        if not is_txt:
-            log.write("Head-CSV computation is planned but not wired into the GUI yet. Use segment k_n TXT for now.")
+        # Actions
+        btn_load_kn.disabled = False
+
+        # Export TXT is only meaningful for head-csv computed segment k_n
+        btn_export_kn_txt.disabled = (is_txt or st.kn is None)
 
     def _on_src_change(_chg) -> None:
         _update_source_ui()
@@ -362,25 +418,78 @@ def build_phase3_kn_panel(
         st.busy = True
         try:
             _set_status("loading k_n")
-            if src_radio.value != "segment_txt":
-                log.write("<b style='color:#b00'>Head CSV support not implemented in GUI yet.</b>")
-                return
+            if src_radio.value == "segment_txt":
+                p = kn_path.value.strip()
+                if not p:
+                    log.write("<b style='color:#b00'>Please provide a k_n TXT path.</b>")
+                    return
 
-            p = kn_path.value.strip()
-            if not p:
-                log.write("<b style='color:#b00'>Please provide a k_n TXT path.</b>")
-                return
+                kn = load_segment_kn_txt(p)
+                st.kn = kn
+                st.kn_path = p
+                btn_export_kn_txt.disabled = True
+                log.write(f"Loaded segment k_n: {p} (H={len(kn.orders)} harmonics)")
+            else:
+                p = head_csv_path.value.strip()
+                if not p:
+                    log.write("<b style='color:#b00'>Please provide a head CSV path.</b>")
+                    return
+                if not head_abs_conn.value.strip() or not head_cmp_conn.value.strip():
+                    log.write("<b style='color:#b00'>Please fill Abs conn and Cmp conn.</b>")
+                    return
 
-            kn = load_segment_kn_txt(p)
-            st.kn = kn
-            st.kn_path = p
-            log.write(f"Loaded segment k_n: {p} (H={len(kn.orders)} harmonics)")
+                head = compute_head_kn_from_csv(
+                    p,
+                    warm_geometry=bool(head_warm.value),
+                    n_multipoles=int(head_n_multipoles.value),
+                    use_design_radius=bool(head_use_design_radius.value),
+                    strict_header=bool(head_strict_header.value),
+                )
+                seg_kn = compute_segment_kn_from_head(
+                    head,
+                    abs_connection=head_abs_conn.value.strip(),
+                    cmp_connection=head_cmp_conn.value.strip(),
+                    ext_connection=head_ext_conn.value.strip() if head_ext_conn.value.strip() else None,
+                    source_label=f"head_csv:{p}",
+                )
+                st.kn = seg_kn
+                st.kn_path = f"head_csv:{p}"
+                btn_export_kn_txt.disabled = False
+                log.write(
+                    f"Computed segment k_n from head CSV: {p} (H={len(seg_kn.orders)}). "
+                    f"Abs='{head_abs_conn.value.strip()}', Cmp='{head_cmp_conn.value.strip()}'"
+                )
         except Exception as e:
             log.write(f"<b style='color:#b00'>k_n load failed:</b> {e}")
             raise
         finally:
             _set_status("idle")
             st.busy = False
+
+    def _on_export_kn_txt(_btn) -> None:
+        if st.kn is None:
+            log.write("<b style='color:#b00'>No k_n available to export.</b>")
+            return
+        if src_radio.value != "head_csv":
+            log.write("<b style='color:#b00'>Export segment k_n TXT is only for head-CSV computed k_n.</b>")
+            return
+
+        initial = "Kn_values_Seg_from_head.txt"
+        p = _saveas_dialog(
+            title="Save segment k_n TXT",
+            initialfile=initial,
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not p:
+            log.write("Save-as cancelled (or tkinter not available).")
+            return
+        try:
+            write_segment_kn_txt(st.kn, p)
+            log.write(f"Saved segment k_n TXT: {p}")
+        except Exception as e:
+            log.write(f"<b style='color:#b00'>Failed to export segment k_n TXT:</b> {e}")
+            raise
 
     def _compute_stage() -> Optional[LegacyKnPerTurn]:
         if not _refresh_segmentframe():
@@ -671,6 +780,9 @@ def build_phase3_kn_panel(
     _clear_button_handlers(btn_load_kn)
     btn_load_kn.on_click(_on_load_kn)
 
+    _clear_button_handlers(btn_export_kn_txt)
+    btn_export_kn_txt.on_click(_on_export_kn_txt)
+
     _clear_button_handlers(btn_compute)
     btn_compute.on_click(_on_compute)
 
@@ -688,6 +800,10 @@ def build_phase3_kn_panel(
     # ---- layout ----
     row_kn = w.HBox([kn_path, kn_browse])
     row_head = w.HBox([head_csv_path, head_browse])
+    row_head_opts = w.HBox([head_warm, head_use_design_radius, head_strict_header, head_n_multipoles, btn_export_kn_txt])
+    row_head_conn1 = w.HBox([head_abs_conn])
+    row_head_conn2 = w.HBox([head_cmp_conn])
+    row_head_conn3 = w.HBox([head_ext_conn])
 
     row_params1 = w.HBox([rref_mm, abs_calib, magnet_order])
     row_params2 = w.HBox([skew_main])
@@ -707,6 +823,10 @@ def build_phase3_kn_panel(
             src_radio,
             row_kn,
             row_head,
+            row_head_opts,
+            row_head_conn1,
+            row_head_conn2,
+            row_head_conn3,
             w.HTML("<hr>"),
             w.HTML("<b>Parameters</b>"),
             row_params1,
