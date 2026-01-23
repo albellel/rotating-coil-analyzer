@@ -481,7 +481,16 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     phase1 = _build_phase1_panel(shared)
     phase2 = build_phase2_panel(lambda: shared.get("segment_frame"))
     phase3 = build_phase3_kn_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
-    phase4 = build_phase4_plots_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
+    def _get_segmeta():
+        # Keep metadata minimal and stable: primarily the source path for display.
+        return {"source_path": shared.get("segment_path")}
+
+    # Turns are not guaranteed to be available; Phase IV handles None safely.
+    phase4 = build_phase4_plots_panel(
+        get_segmentframe_callable=lambda: shared.get("segment_frame"),
+        get_segmentmeta_callable=_get_segmeta,
+        get_turns_callable=lambda: shared.get("turns"),
+    )
 
     tabs = w.Tab(children=[phase1, phase2, phase3, phase4])
     tabs.set_title(0, "Phase I — Catalog")

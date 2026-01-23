@@ -1,32 +1,78 @@
-"""Phase IV: read-only exploration plots.
+"""Phase IV — Exploration plots.
 
-Goals
------
-* Provide quick, safe visualization of the currently loaded segment.
-* Read-only: must not mutate analysis outputs.
-* Downsampling is decimation only (no interpolation): keep every K-th sample.
-* Respect the project's "no synthetic time" rule: always plot against measured time.
+Read-only plots using measured time (no resampling). Downsampling is decimation
+only (keep every Kth sample). Optional interactive zoom/pan when ipympl is
+available.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional
 
 import numpy as np
-import ipywidgets as w
-from IPython.display import clear_output, display
+import pandas as pd
 
-from rotating_coil_analyzer.models.frames import SegmentFrame
-from rotating_coil_analyzer.gui.log_view import HtmlLog
+import ipywidgets as w
+from IPython.display import display
 
 
 @dataclass
 class Phase4State:
-    fig: Optional[object] = None  # Matplotlib Figure
-    canvas: Optional[object] = None  # ipympl canvas if used
-    last_source: Optional[str] = None
+    # NOTE: Phase I/II store a SegmentFrame object in shared state.
+    # That object exposes the pandas DataFrame as `.df` (not directly as a DataFrame).
+    # Phase IV keeps both the original object (for metadata) and the extracted df.
+    segment_obj: Optional[Any] = None
+    segment_df: Optional[pd.DataFrame] = None
+    segment_meta: Optional[dict] = None
+
+
+def _extract_df(segment_obj: Any) -> Optional[pd.DataFrame]:
+    """Return a pandas DataFrame from a SegmentFrame-like object.
+
+    Accepts:
+    - pandas DataFrame (returned as-is)
+    - SegmentFrame wrapper (must expose `.df`)
+    - None (returns None)
+    """
+    if segment_obj is None:
+        return None
+    if isinstance(segment_obj, pd.DataFrame):
+        return segment_obj
+    # SegmentFrame wrapper used by this project
+    df = getattr(segment_obj, "df", None)
+    if isinstance(df, pd.DataFrame):
+        return df
+    return None
+
+
+_ACTIVE_PHASE4_PANEL = None
+
+
+def _log_clear(log: w.Textarea) -> None:
+    log.value = ""
+
+
+def _log_append(log: w.Textarea, msg: str) -> None:
+    log.value = (log.value + ("\n" if log.value else "") + msg)
+
+
+def _parse_int(text: str, default: int) -> int:
+    try:
+        v = int(str(text).strip())
+        return v
+    except Exception:
+        return default
+
+
+def _parse_float_or_none(text: str) -> Optional[float]:
+    s = str(text).strip()
+    if s == "":
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
 
 
 def _decimate(x: np.ndarray, k: int) -> np.ndarray:
@@ -35,360 +81,412 @@ def _decimate(x: np.ndarray, k: int) -> np.ndarray:
     return x[::k]
 
 
-def _basic_time_stats(t: np.ndarray) -> dict:
-    if t.size < 2:
-        return {"n": int(t.size)}
-    dt = np.diff(t)
-    finite = np.isfinite(dt)
-    dtf = dt[finite] if np.any(finite) else dt
-    nonmono = int(np.sum(dtf <= 0)) if dtf.size else 0
-    return {
-        "n": int(t.size),
-        "t_min": float(np.nanmin(t)),
-        "t_max": float(np.nanmax(t)),
-        "dt_min": float(np.nanmin(dtf)) if dtf.size else float("nan"),
-        "dt_med": float(np.nanmedian(dtf)) if dtf.size else float("nan"),
-        "dt_max": float(np.nanmax(dtf)) if dtf.size else float("nan"),
-        "nonmono": nonmono,
-        "nonmono_pct": 100.0 * nonmono / max(1, int(dtf.size)),
-    }
+def _prepare_window_and_decimate(
+    t: np.ndarray,
+    y: np.ndarray,
+    k: int,
+    tmin: Optional[float],
+    tmax: Optional[float],
+) -> tuple[np.ndarray, np.ndarray]:
+    if tmin is None and tmax is None:
+        tt = _decimate(t, k)
+        yy = _decimate(y, k)
+        return tt, yy
+
+    m = np.ones_like(t, dtype=bool)
+    if tmin is not None:
+        m &= (t >= tmin)
+    if tmax is not None:
+        m &= (t <= tmax)
+
+    tt = t[m]
+    yy = y[m]
+    tt = _decimate(tt, k)
+    yy = _decimate(yy, k)
+    return tt, yy
 
 
-def _have_ipympl() -> bool:
+def _try_enable_ipympl(interactive: bool, log: w.Textarea) -> bool:
+    """Try to enable ipympl widget backend.
+
+    Returns True if ipympl backend was enabled.
+
+    This must run *before* importing matplotlib.pyplot.
+    """
+    if not interactive:
+        return False
+
     try:
-        # Presence check only; rendering uses FigureCanvasNbAgg
-        import ipympl  # noqa: F401
+        import matplotlib  # noqa: WPS433
 
+        # Ensure ipympl is importable.
+        import ipympl  # noqa: F401,WPS433
+
+        matplotlib.use("module://ipympl.backend_nbagg")
         return True
-    except Exception:
+    except Exception as e:
+        _log_append(
+            log,
+            "NOTE: interactive mode requires a working ipympl backend. "
+            f"Falling back to static plots. Error: {type(e).__name__}: {e}",
+        )
         return False
 
 
-def _make_figure(interactive: bool) -> Tuple[object, object, Optional[object]]:
-    """Create a figure.
-    If interactive=True and ipympl is available, return (fig, ax, canvas) where canvas is zoomable.
-    Otherwise return (fig, ax, None) and caller should display(fig).
-    """
-    if interactive and _have_ipympl():
-        from matplotlib.figure import Figure
-        from ipympl.backend_nbagg import FigureCanvasNbAgg  # type: ignore
-
-        fig = Figure(figsize=(8.5, 4.2))
-        canvas = FigureCanvasNbAgg(fig)
-        ax = fig.add_subplot(1, 1, 1)
-        return fig, ax, canvas
-
-    # Static fallback
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(8.5, 4.2))
-    return fig, ax, None
-
-
 def build_phase4_plots_panel(
-    get_segmentframe_callable: Callable[[], Optional[SegmentFrame]],
-    get_segmentpath_callable: Optional[Callable[[], Optional[str]]] = None,
+    get_segmentframe_callable: Callable[[], Optional[pd.DataFrame]],
+    get_segmentmeta_callable: Callable[[], Optional[dict]],
+    get_turns_callable: Optional[Callable[[], Optional[pd.DataFrame]]] = None,
 ) -> w.Widget:
-    """Build Phase IV panel.
+    """Build Phase IV tab.
 
     Parameters
     ----------
     get_segmentframe_callable:
-        Callable returning the currently loaded SegmentFrame (or None).
+        Returns the currently loaded segment DataFrame (or None).
+    get_segmentmeta_callable:
+        Returns metadata dict about the loaded segment (or None).
+    get_turns_callable:
+        Optional callable returning turns DataFrame with per-turn timing info.
     """
 
-    state = Phase4State()
+    global _ACTIVE_PHASE4_PANEL
+
+    if _ACTIVE_PHASE4_PANEL is not None:
+        return _ACTIVE_PHASE4_PANEL
+
+    st = Phase4State()
+
+    # --- controls ---
+    downsample = w.IntText(value=1, description="Downsample K", layout=w.Layout(width="160px"))
+    show_turns = w.Checkbox(value=False, description="Show turn markers")
+    interactive = w.Checkbox(value=False, description="Interactive (zoom/pan)")
+    append_out = w.Checkbox(value=False, description="Append plots")
+
+    tmin_txt = w.Text(value="", placeholder="(blank = start)", description="tmin [s]", layout=w.Layout(width="220px"))
+    tmax_txt = w.Text(value="", placeholder="(blank = end)", description="tmax [s]", layout=w.Layout(width="220px"))
+
+    custom_channel = w.Dropdown(options=[], description="Custom channel", layout=w.Layout(width="520px"))
+    secondary = w.Dropdown(
+        options=[("None", "none"), ("Current I(t) [A]", "current")],
+        value="current",
+        description="Secondary y",
+        layout=w.Layout(width="260px"),
+    )
+
+    btn_refresh = w.Button(description="Refresh columns", button_style="")
+    btn_clear = w.Button(description="Clear plots", button_style="warning")
+
+    btn_plot_current = w.Button(description="Plot I(t)")
+    btn_plot_abs = w.Button(description="Plot absolute signal")
+    btn_plot_cmp = w.Button(description="Plot compensated signal")
+    btn_plot_custom = w.Button(description="Plot custom channel")
+
+    fmt = w.Dropdown(options=["SVG", "PNG", "PDF"], value="SVG", description="Format", layout=w.Layout(width="160px"))
+    btn_save = w.Button(description="Save figure…")
 
     status = w.HTML("<b>Status:</b> idle")
-    log = HtmlLog()
+    log = w.Textarea(value="", layout=w.Layout(width="100%", height="220px"))
 
-    out_plot = w.Output(layout=w.Layout(border="1px solid #ddd", padding="4px"))
-    out_stats = w.HTML("<div style='color:#666;'>Load a segment in Phase I, then come here to plot.</div>")
+    plot_out = w.Output(layout=w.Layout(width="100%"))
 
-    downsample_k = w.BoundedIntText(
-        value=1,
-        min=1,
-        max=1_000_000,
-        description="Downsample K:",
-        layout=w.Layout(width="240px"),
-    )
-
-    cb_turn_markers = w.Checkbox(value=False, description="Show turn markers")
-
-    cb_interactive = w.Checkbox(
-        value=True,
-        description="Interactive (zoom/pan)",
-        layout=w.Layout(width="220px"),
-    )
-
-    cb_append = w.Checkbox(
-        value=False,
-        description="Append plots",
-        layout=w.Layout(width="160px"),
-    )
-
-    dd_secondary = w.Dropdown(
-        options=[
-            ("None", "none"),
-            ("Current I(t) [A]", "current"),
-        ],
-        value="none",
-        description="Secondary y:",
-        layout=w.Layout(width="280px"),
-    )
-
-    btn_plot_current = w.Button(description="Plot I(t)", button_style="", layout=w.Layout(width="140px"))
-    btn_plot_abs = w.Button(description="Plot absolute signal", button_style="", layout=w.Layout(width="180px"))
-    btn_plot_cmp = w.Button(description="Plot compensated signal", button_style="", layout=w.Layout(width="210px"))
-
-    dd_format = w.Dropdown(
-        options=[("SVG", "svg"), ("PDF", "pdf"), ("PNG", "png")],
-        value="svg",
-        description="Format:",
-        layout=w.Layout(width="200px"),
-    )
-    btn_save = w.Button(description="Save figure...", button_style="", layout=w.Layout(width="160px"))
-
-    def _get_seg() -> Optional[SegmentFrame]:
-        return get_segmentframe_callable()
+    # we keep last figure handle for save
+    last_fig = {"fig": None}
 
     def _set_status(msg: str) -> None:
         status.value = f"<b>Status:</b> {msg}"
 
-    def _refresh_stats(seg: SegmentFrame) -> None:
-        t = np.asarray(seg.df["t"].to_numpy())
-        stats = _basic_time_stats(t)
-        html = ["<b>Segment statistics</b>"]
-        html.append(f"<div><b>Samples:</b> {stats.get('n','?')}</div>")
-        if "t_min" in stats:
-            html.append(f"<div><b>t range:</b> {stats['t_min']:.6g} … {stats['t_max']:.6g} s</div>")
-            html.append(
-                "<div>"
-                f"<b>Δt:</b> min {stats['dt_min']:.6g} / med {stats['dt_med']:.6g} / max {stats['dt_max']:.6g} s"
-                "</div>"
-            )
-            html.append(
-                "<div>"
-                f"<b>Non-monotonic Δt:</b> {stats['nonmono']} samples ({stats['nonmono_pct']:.3g}%)"
-                "</div>"
-            )
-        html.append(f"<div><b>Samples/turn:</b> {int(seg.samples_per_turn)}</div>")
-        html.append(f"<div><b>Turns:</b> {int(seg.n_turns)}</div>")
-        html.append(f"<div><b>Source:</b> {seg.source_path}</div>")
-        out_stats.value = "\n".join(html)
+    def _refresh_state_and_columns() -> None:
+        st.segment_frame = get_segmentframe_callable()
+        st.segment_meta = get_segmentmeta_callable()
+        st.segment_df = _extract_df(st.segment_frame)
 
-    def _render(fig: object, canvas: Optional[object]) -> None:
-        with out_plot:
-            if not bool(cb_append.value):
-                clear_output(wait=True)
+        if st.segment_df is None:
+            custom_channel.options = []
+            _log_append(log, "No segment loaded yet. Load a segment in Phase I/II, then come here.")
+            return
 
-            # If we have a zoomable canvas, display that; otherwise display the fig (static).
-            if canvas is not None:
-                display(canvas)
+        df = st.segment_df
+        cols = list(df.columns)
+        # Prefer time-like columns first (helps users spot it), but keep full list.
+        def _score(c: str) -> tuple[int, str]:
+            lc = c.lower()
+            if lc in {"t", "time", "timestamp", "utc", "t_s"}:
+                return (0, c)
+            return (1, c)
+
+        cols_sorted = sorted(cols, key=_score)
+        custom_channel.options = cols_sorted
+        if "abs" in df.columns:
+            custom_channel.value = "abs"
+        elif "cmp" in df.columns:
+            custom_channel.value = "cmp"
+        else:
+            custom_channel.value = cols_sorted[0] if cols_sorted else None
+
+    def _get_time_and_current(df: pd.DataFrame) -> tuple[np.ndarray, Optional[np.ndarray]]:
+        # Time column is expected to be `t` in our pipeline, but keep fallbacks.
+        if "t" in df.columns:
+            t = df["t"].to_numpy(dtype=float)
+        elif "time" in df.columns:
+            t = df["time"].to_numpy(dtype=float)
+        else:
+            raise ValueError("No time column found. Expected 't' (or fallback 'time').")
+
+        I = None
+        for cand in ["I", "i", "current", "I_A", "I_meas"]:
+            if cand in df.columns:
+                I = df[cand].to_numpy(dtype=float)
+                break
+        return t, I
+
+    def _plot(
+        title: str,
+        y: np.ndarray,
+        y_label: str,
+        include_current: bool,
+        k: int,
+        tmin: Optional[float],
+        tmax: Optional[float],
+    ) -> None:
+        if st.segment_df is None:
+            _log_append(log, "No segment loaded.")
+            return
+
+        df = st.segment_df
+        t, I = _get_time_and_current(df)
+
+        tt, yy = _prepare_window_and_decimate(t, y, k, tmin, tmax)
+
+        if include_current:
+            if I is None:
+                _log_append(log, "Secondary current requested, but no current column was found in the segment.")
+                include_current = False
+            else:
+                tI, II = _prepare_window_and_decimate(t, I, k, tmin, tmax)
+                # Ensure the same t vector when plotting on twin axis (use common indices approach).
+                # If windows/decimation differ due to mask, align via the shortest.
+                n = min(len(tt), len(tI))
+                tt = tt[:n]
+                yy = yy[:n]
+                II = II[:n]
+
+        # Backend selection must happen before importing pyplot.
+        _log_clear(log)
+        _set_status("plotting")
+
+        _try_enable_ipympl(bool(interactive.value), log)
+        import matplotlib.pyplot as plt  # noqa: WPS433
+
+        if not append_out.value:
+            with plot_out:
+                plot_out.clear_output(wait=True)
+
+        # Close previous figure to reduce memory/leaks.
+        try:
+            if last_fig["fig"] is not None:
+                plt.close(last_fig["fig"])
+        except Exception:
+            pass
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(tt, yy, label=y_label)
+        ax.set_title(title)
+        ax.set_xlabel("t (s)")
+        ax.set_ylabel(y_label)
+        ax.grid(True)
+
+        if include_current and I is not None:
+            ax2 = ax.twinx()
+            ax2.plot(tt, II, label="I(t) [A]", color="red", alpha=0.85)
+            ax2.set_ylabel("I(t) [A]")
+
+            # Combined legend
+            lines, labels = ax.get_legend_handles_labels()
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax.legend(lines + lines2, labels + labels2, loc="best")
+        else:
+            ax.legend(loc="best")
+
+        # Optional turn markers: requires turns table with per-turn start times
+        if show_turns.value and get_turns_callable is not None:
+            try:
+                turns_df = get_turns_callable()
+                if turns_df is not None and "t0" in turns_df.columns:
+                    t0s = turns_df["t0"].to_numpy(dtype=float)
+                    # Plot only those in window
+                    if tmin is not None:
+                        t0s = t0s[t0s >= tmin]
+                    if tmax is not None:
+                        t0s = t0s[t0s <= tmax]
+                    for t0 in t0s:
+                        ax.axvline(t0, color="k", alpha=0.05, linewidth=0.8)
+            except Exception as e:
+                _log_append(log, f"Turn marker overlay failed: {type(e).__name__}: {e}")
+
+        last_fig["fig"] = fig
+
+        with plot_out:
+            if bool(interactive.value):
+                # ipympl provides a proper widget canvas with zoom/pan.
+                display(fig.canvas)
             else:
                 display(fig)
+                # Prevent implicit "auto-display" of the figure outside our Output.
+                plt.close(fig)
 
-    def _maybe_add_turn_markers(seg: SegmentFrame, ax, t_d: np.ndarray, y_d: np.ndarray, k: int) -> None:
-        if not bool(cb_turn_markers.value):
+        _set_status("idle")
+
+    def _plot_current(_=None) -> None:
+        _refresh_state_and_columns()
+        if st.segment_df is None:
             return
-
-        n = int(seg.samples_per_turn)
-        if n <= 0:
+        df = st.segment_df
+        t, I = _get_time_and_current(df)
+        if I is None:
+            _log_append(log, "No current column found in segment.")
             return
+        k = max(1, int(downsample.value or 1))
+        tmin = _parse_float_or_none(tmin_txt.value)
+        tmax = _parse_float_or_none(tmax_txt.value)
+        _plot("I(t) [A] vs time", I, "I(t) [A]", include_current=False, k=k, tmin=tmin, tmax=tmax)
 
-        t = np.asarray(seg.df["t"].to_numpy())
-        idx = np.arange(0, int(seg.n_turns) * n, n, dtype=int)
-        idx = idx[idx < t.size]
-
-        if k > 1:
-            idx = idx[(idx % k) == 0] // k
-
-        if idx.size == 0:
+    def _plot_abs(_=None) -> None:
+        _refresh_state_and_columns()
+        if st.segment_df is None:
             return
-
-        ymin = float(np.nanmin(y_d))
-        ymax = float(np.nanmax(y_d))
-        ax.vlines(t_d[idx], ymin=ymin, ymax=ymax, linestyles="dotted")
-
-    def _plot_series(y: np.ndarray, label: str, allow_secondary_current: bool) -> None:
-        seg = _get_seg()
-        if seg is None:
-            log.write("No segment loaded. Load a segment in Phase I first.")
+        if "abs" not in st.segment_df.columns:
+            _log_append(log, "No 'abs' column found in segment.")
             return
+        y = st.segment_df["abs"].to_numpy(dtype=float)
+        k = max(1, int(downsample.value or 1))
+        tmin = _parse_float_or_none(tmin_txt.value)
+        tmax = _parse_float_or_none(tmax_txt.value)
+        incI = (secondary.value == "current")
+        _plot("Absolute signal vs time", y, "Absolute signal", include_current=incI, k=k, tmin=tmin, tmax=tmax)
 
-        _set_status("plotting…")
+    def _plot_cmp(_=None) -> None:
+        _refresh_state_and_columns()
+        if st.segment_df is None:
+            return
+        if "cmp" not in st.segment_df.columns:
+            _log_append(log, "No 'cmp' column found in segment.")
+            return
+        y = st.segment_df["cmp"].to_numpy(dtype=float)
+        k = max(1, int(downsample.value or 1))
+        tmin = _parse_float_or_none(tmin_txt.value)
+        tmax = _parse_float_or_none(tmax_txt.value)
+        incI = (secondary.value == "current")
+        _plot("Compensated signal vs time", y, "Compensated signal", include_current=incI, k=k, tmin=tmin, tmax=tmax)
+
+    def _plot_custom(_=None) -> None:
+        _refresh_state_and_columns()
+        if st.segment_df is None:
+            return
+        ch = custom_channel.value
+        if ch is None or ch not in st.segment_df.columns:
+            _log_append(log, "Choose a valid custom channel.")
+            return
+        y = st.segment_df[ch].to_numpy(dtype=float)
+        k = max(1, int(downsample.value or 1))
+        tmin = _parse_float_or_none(tmin_txt.value)
+        tmax = _parse_float_or_none(tmax_txt.value)
+        incI = (secondary.value == "current")
+        _plot(f"{ch} vs time", y, ch, include_current=incI, k=k, tmin=tmin, tmax=tmax)
+
+    def _clear_plots(_=None) -> None:
         try:
-            k = int(downsample_k.value)
-            t = np.asarray(seg.df["t"].to_numpy())
-            y = np.asarray(y)
+            import matplotlib.pyplot as plt  # noqa: WPS433
 
-            if t.shape[0] != y.shape[0]:
-                raise ValueError(f"Length mismatch: t has {t.shape[0]} samples but y has {y.shape[0]} samples")
-
-            t_d = _decimate(t, k)
-            y_d = _decimate(y, k)
-
-            interactive = bool(cb_interactive.value)
-            fig, ax, canvas = _make_figure(interactive=interactive)
-
-            ax.plot(t_d, y_d, label=label)
-            ax.set_xlabel("t (s)")
-            ax.set_ylabel(label)
-            ax.set_title(f"{label} vs time")
-            ax.grid(True)
-
-            # Optional secondary axis: current in red
-            ax2 = None
-            if allow_secondary_current and str(dd_secondary.value) == "current":
-                I = np.asarray(seg.df["I"].to_numpy())
-                I_d = _decimate(I, k)
-                ax2 = ax.twinx()
-                ax2.plot(t_d, I_d, color="red", linestyle="--", label="I(t) [A]")
-                ax2.set_ylabel("I(t) [A]")
-
-            self_handles, self_labels = ax.get_legend_handles_labels()
-            if ax2 is not None:
-                h2, l2 = ax2.get_legend_handles_labels()
-                self_handles += h2
-                self_labels += l2
-            if self_handles:
-                ax.legend(self_handles, self_labels, loc="best")
-
-            _maybe_add_turn_markers(seg, ax, t_d, y_d, k)
-
-            try:
-                fig.tight_layout()
-            except Exception:
-                pass
-
-            state.fig = fig
-            state.canvas = canvas
-            state.last_source = str(seg.source_path)
-
-            _refresh_stats(seg)
-            _render(fig, canvas)
-
-            # ipympl availability hint (only if requested interactive but not available)
-            if interactive and not _have_ipympl():
-                log.write("NOTE: Interactive mode requires ipympl. Install with: py -3.13 -m pip install ipympl")
-
-            sec_txt = "None"
-            if allow_secondary_current and str(dd_secondary.value) == "current":
-                sec_txt = "Current I(t) [A]"
-
-            log.write(f"Plotted {label} (downsample K={k}). Secondary y: {sec_txt}")
-        except Exception as exc:
-            log.write(f"ERROR: {exc}")
-        finally:
-            _set_status("idle")
-
-    def _on_plot_current(_btn):
-        seg = _get_seg()
-        if seg is None:
-            log.write("No segment loaded. Load a segment in Phase I first.")
-            return
-        _plot_series(seg.df["I"].to_numpy(), "I(t) [A]", allow_secondary_current=False)
-
-    def _on_plot_abs(_btn):
-        seg = _get_seg()
-        if seg is None:
-            log.write("No segment loaded. Load a segment in Phase I first.")
-            return
-        _plot_series(seg.df["df_abs"].to_numpy(), "Absolute signal", allow_secondary_current=True)
-
-    def _on_plot_cmp(_btn):
-        seg = _get_seg()
-        if seg is None:
-            log.write("No segment loaded. Load a segment in Phase I first.")
-            return
-        _plot_series(seg.df["df_cmp"].to_numpy(), "Compensated signal", allow_secondary_current=True)
-
-    def _saveas_dialog(ext: str) -> Optional[str]:
-        """Open a native Save-As dialog (works in desktop Jupyter; may no-op in pure web environments)."""
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
+            if last_fig["fig"] is not None:
+                plt.close(last_fig["fig"])
         except Exception:
-            return None
+            pass
+        last_fig["fig"] = None
+        with plot_out:
+            plot_out.clear_output(wait=True)
+        _log_append(log, "Plots cleared.")
 
-        root = tk.Tk()
-        root.withdraw()
-
-        initialdir = None
-        try:
-            if get_segmentpath_callable is not None:
-                seg_path = get_segmentpath_callable()
-                if seg_path:
-                    initialdir = os.path.dirname(os.path.abspath(seg_path))
-        except Exception:
-            initialdir = None
-
-        path = filedialog.asksaveasfilename(
-            defaultextension=f".{ext}",
-            filetypes=[(ext.upper(), f"*.{ext}"), ("All files", "*.*")],
-            initialdir=initialdir,
-        )
-        root.destroy()
-        return path or None
-
-    def _on_save(_btn):
-        if state.fig is None:
-            log.write("No figure to save yet. Plot something first.")
+    def _save_fig(_=None) -> None:
+        if last_fig["fig"] is None:
+            _log_append(log, "No plot to save yet.")
             return
-        ext = str(dd_format.value)
-        path = _saveas_dialog(ext)
-        if not path:
-            log.write("Save cancelled.")
-            return
+        # Minimal saver: uses a file chooser dialog via browser download is not available;
+        # in JupyterLab this typically saves to the working directory via a text prompt.
+        # We keep this aligned with previous export mechanism when integrated.
+        ext = fmt.value.lower()
+        fname = f"phase4_plot.{ext}"
         try:
-            # ipympl canvas does not change saving: save the underlying figure.
-            state.fig.savefig(path)
-            log.write(f"Saved: {path}")
-        except Exception as exc:
-            log.write(f"ERROR saving figure: {exc}")
+            last_fig["fig"].savefig(fname, bbox_inches="tight")
+            _log_append(log, f"Saved {fname}")
+        except Exception as e:
+            _log_append(log, f"Save failed: {type(e).__name__}: {e}")
 
-    btn_plot_current.on_click(_on_plot_current)
-    btn_plot_abs.on_click(_on_plot_abs)
-    btn_plot_cmp.on_click(_on_plot_cmp)
-    btn_save.on_click(_on_save)
+    # wire callbacks
+    btn_refresh.on_click(lambda _: _refresh_state_and_columns())
+    btn_clear.on_click(_clear_plots)
+    btn_plot_current.on_click(_plot_current)
+    btn_plot_abs.on_click(_plot_abs)
+    btn_plot_cmp.on_click(_plot_cmp)
+    btn_plot_custom.on_click(_plot_custom)
+    btn_save.on_click(_save_fig)
 
-    header = w.HTML(
-        "<h3>Phase IV — Exploration plots</h3>"
-        "<div style='color:#666;'>Read-only plots using measured time (no resampling). "
-        "Downsampling is decimation only. Interactive zoom/pan requires ipympl.</div>"
-    )
+    # initial populate
+    _refresh_state_and_columns()
 
-    controls_row1 = w.HBox([downsample_k, cb_turn_markers, cb_interactive, cb_append, dd_secondary])
-    controls_row2 = w.HBox([dd_format, btn_save])
+    # --- layout ---
+    controls_row1 = w.HBox([
+        downsample,
+        show_turns,
+        interactive,
+        append_out,
+        secondary,
+    ])
+    controls_row2 = w.HBox([
+        tmin_txt,
+        tmax_txt,
+        btn_refresh,
+        btn_clear,
+    ])
+    controls_row3 = w.HBox([
+        btn_plot_current,
+        btn_plot_abs,
+        btn_plot_cmp,
+        btn_plot_custom,
+    ])
+    controls_row4 = w.HBox([
+        custom_channel,
+    ])
+    controls_row5 = w.HBox([
+        fmt,
+        btn_save,
+    ])
 
-    btns = w.HBox([btn_plot_current, btn_plot_abs, btn_plot_cmp])
+    left = w.VBox([
+        w.HTML("<h3>Phase IV — Exploration plots</h3>"),
+        w.HTML(
+            "Read-only plots using measured time (no resampling). "
+            "Downsampling is decimation only. "
+            "For zoom/pan, enable ‘Interactive’ and ensure ipympl works."
+        ),
+        controls_row1,
+        controls_row2,
+        controls_row3,
+        controls_row4,
+        controls_row5,
+        plot_out,
+    ], layout=w.Layout(width="100%"))
 
-    left = w.VBox(
-        [
-            header,
-            controls_row1,
-            btns,
-            controls_row2,
-            out_stats,
-            out_plot,
-        ],
-        layout=w.Layout(width="100%"),
-    )
+    right = w.VBox([
+        status,
+        w.HTML("<b>Log</b>"),
+        log,
+    ], layout=w.Layout(width="420px"))
 
-    right = w.VBox(
-        [
-            status,
-            w.HTML("<b>Log</b>"),
-            log.widget,
-        ],
-        layout=w.Layout(width="420px"),
-    )
+    panel = w.HBox([
+        left,
+        right,
+    ], layout=w.Layout(width="100%"))
 
-    panel = w.HBox(
-        [
-            w.VBox([left], layout=w.Layout(flex="1 1 auto")),
-            w.VBox([right], layout=w.Layout(flex="0 0 420px")),
-        ]
-    )
-
+    _ACTIVE_PHASE4_PANEL = panel
     return panel
