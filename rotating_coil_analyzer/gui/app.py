@@ -485,11 +485,10 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
         # Keep metadata minimal and stable: primarily the source path for display.
         return {"source_path": shared.get("segment_path")}
 
-    # Turns are not guaranteed to be available; Phase IV handles None safely.
+    # Phase IV — Plots (read-only)
     phase4 = build_phase4_plots_panel(
-        get_segmentframe_callable=lambda: shared.get("segment_frame"),
-        get_segmentmeta_callable=_get_segmeta,
-        get_turns_callable=lambda: shared.get("turns"),
+        get_segment_frame=lambda: shared.get("segment_frame"),
+        log_append=_log_append,   # <-- use the same logger function used elsewhere in the GUI
     )
 
     tabs = w.Tab(children=[phase1, phase2, phase3, phase4])
