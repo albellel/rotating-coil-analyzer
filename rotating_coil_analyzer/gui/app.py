@@ -489,6 +489,27 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     tabs.set_title(2, "Phase III — Kn")
     tabs.set_title(3, "Plots")
 
+    def _on_tab_change(change):
+        try:
+            if change.get("name") == "selected_index" and change.get("new") == 3:
+                refresh = getattr(phase4, "_phase4_refresh_columns", None)
+                if callable(refresh):
+                    refresh()
+        except Exception:
+            pass
+
+    tabs.observe(_on_tab_change, names="selected_index")
+
+    # If the GUI opens already on Plots tab, refresh once
+    try:
+        if getattr(tabs, "selected_index", 0) == 3:
+            refresh = getattr(phase4, "_phase4_refresh_columns", None)
+            if callable(refresh):
+                refresh()
+    except Exception:
+        pass
+
+
     _ACTIVE_GUI = tabs
     return tabs
 

@@ -5,12 +5,7 @@ Design goals:
 - Read-only with respect to analysis pipeline.
 - No synthetic time: always plot against measured time vector `t` as stored.
 - Downsampling is decimation only: keep every Kth sample (no interpolation).
-- Optional interactive zoom/pan using Matplotlib interactive backends when available.
-
-Notes on zoom/pan:
-- True zoom/pan requires a working interactive backend in Jupyter.
-- We try ipympl first, then nbagg.
-- If neither works, plots will still render, but they will be static.
+- Prefer interactive zoom/pan when a suitable Matplotlib Jupyter backend is available.
 """
 
 from __future__ import annotations
@@ -64,13 +59,23 @@ def _is_time_col(col: str) -> bool:
     return col in ("t", "time", "Time", "timestamp", "Timestamp")
 
 
-def _try_enable_interactive_backend() -> Tuple[bool, str]:
+# We keep interactivity always-on if possible; do it once.
+_BACKEND_TRIED = False
+_BACKEND_MSG = ""
+
+
+def _try_enable_interactive_backend_once() -> Tuple[bool, str]:
     """
-    Try to enable an interactive Matplotlib backend suitable for Jupyter.
+    Try to enable an interactive Matplotlib backend suitable for Jupyter exactly once.
 
     Returns:
         (ok, message)
     """
+    global _BACKEND_TRIED, _BACKEND_MSG
+    if _BACKEND_TRIED:
+        return ("Interactive backend enabled" in _BACKEND_MSG), _BACKEND_MSG
+
+    _BACKEND_TRIED = True
     import matplotlib as mpl
 
     # Prefer ipympl widget backend if available
@@ -78,18 +83,21 @@ def _try_enable_interactive_backend() -> Tuple[bool, str]:
         import ipympl  # noqa: F401
         try:
             mpl.use("module://ipympl.backend_nbagg", force=True)
-            return True, "Interactive backend: ipympl widget (module://ipympl.backend_nbagg)."
+            _BACKEND_MSG = "Interactive backend enabled: ipympl widget (module://ipympl.backend_nbagg)."
+            return True, _BACKEND_MSG
         except Exception:
             pass
     except Exception:
         pass
 
-    # Fall back to nbagg (Matplotlib's notebook backend)
+    # Fall back to nbagg (Matplotlib notebook backend)
     try:
         mpl.use("nbagg", force=True)
-        return True, "Interactive backend: Matplotlib nbagg."
+        _BACKEND_MSG = "Interactive backend enabled: Matplotlib nbagg."
+        return True, _BACKEND_MSG
     except Exception as exc:
-        return False, f"Interactive backend unavailable (fallback to static): {exc}"
+        _BACKEND_MSG = f"Interactive backend unavailable (plots may be static): {exc}"
+        return False, _BACKEND_MSG
 
 
 def _get_pyplot():
@@ -118,10 +126,6 @@ def build_phase4_plots_panel(
     """
     Build Phase IV panel.
 
-    Args:
-        get_segmentFrame_callable: returns the current SegmentFrame (or None).
-        get_segmentpath_callable: returns the current segment path (optional; used for Save-As default dir).
-
     Expected SegmentFrame interface (duck-typed):
         - seg.df: pandas.DataFrame with at least `t` and (often) `I`, `df_abs`, `df_cmp`.
         - seg.samples_per_turn: int
@@ -145,6 +149,10 @@ def build_phase4_plots_panel(
     def _get_df(seg):
         return getattr(seg, "df", None)
 
+    # Enable interactive backend once (if possible) and log it.
+    ok_backend, msg_backend = _try_enable_interactive_backend_once()
+    log.write(msg_backend)
+
     # -----------------------
     # Widgets (controls)
     # -----------------------
@@ -160,7 +168,6 @@ def build_phase4_plots_panel(
     )
 
     cb_turn_markers = w.Checkbox(value=False, description="Show turn markers")
-    cb_interactive = w.Checkbox(value=False, description="Interactive (zoom/pan)")
     cb_append = w.Checkbox(value=False, description="Append plots")
 
     tmin_box = w.Text(
@@ -183,7 +190,7 @@ def build_phase4_plots_panel(
 
     # Primary/Secondary y selection (two Y-axes)
     dd_primary = w.Dropdown(
-        options=[("—", "")],
+        options=[("— (no segment loaded)", "")],
         value="",
         description="Primary y",
         layout=w.Layout(width="360px"),
@@ -195,11 +202,12 @@ def build_phase4_plots_panel(
         layout=w.Layout(width="360px"),
     )
 
+    btn_plot_selected = w.Button(description="Plot selected y's")
+
     # Convenience buttons
     btn_plot_current = w.Button(description="Plot I(t)")
     btn_plot_abs = w.Button(description="Plot absolute signal")
     btn_plot_cmp = w.Button(description="Plot compensated signal")
-    btn_plot_selected = w.Button(description="Plot selected y's")
 
     # Save
     dd_format = w.Dropdown(
@@ -218,13 +226,15 @@ def build_phase4_plots_panel(
     # Column refresh
     # -----------------------
 
-    def _refresh_columns() -> None:
+    def _refresh_columns(force_log: bool = False) -> None:
         seg = _get_seg()
         if seg is None:
             dd_primary.options = [("— (no segment loaded)", "")]
             dd_primary.value = ""
             dd_secondary.options = [("None", "")]
             dd_secondary.value = ""
+            if force_log:
+                log.write("No segment loaded yet (columns not available).")
             return
 
         df = _get_df(seg)
@@ -233,6 +243,8 @@ def build_phase4_plots_panel(
             dd_primary.value = ""
             dd_secondary.options = [("None", "")]
             dd_secondary.value = ""
+            if force_log:
+                log.write("Segment loaded but has no .df (DataFrame).")
             return
 
         cols = list(df.columns)
@@ -255,20 +267,34 @@ def build_phase4_plots_panel(
             dd_primary.value = ""
             dd_secondary.options = [("None", "")]
             dd_secondary.value = ""
+            if force_log:
+                log.write("No plottable columns found (excluding time).")
             return
 
         dd_primary.options = [(c, c) for c in plottable]
         dd_secondary.options = [("None", "")] + [(c, c) for c in plottable]
 
-        # Default primary: df_abs if present, else df_cmp, else first.
-        pref_primary = _resolve_column(plottable, ["df_abs", "df_cmp", "I"]) or plottable[0]
-        dd_primary.value = pref_primary
+        # Keep current selection if still valid
+        current_primary = dd_primary.value
+        current_secondary = dd_secondary.value
 
-        # Default secondary: current if available and not already primary.
-        if "I" in plottable and dd_primary.value != "I":
-            dd_secondary.value = "I"
+        if current_primary in plottable:
+            dd_primary.value = current_primary
         else:
-            dd_secondary.value = ""
+            pref_primary = _resolve_column(plottable, ["df_abs", "df_cmp", "I"]) or plottable[0]
+            dd_primary.value = pref_primary
+
+        if current_secondary in plottable and current_secondary != dd_primary.value:
+            dd_secondary.value = current_secondary
+        else:
+            # Default secondary: I if available and not already primary
+            if "I" in plottable and dd_primary.value != "I":
+                dd_secondary.value = "I"
+            else:
+                dd_secondary.value = ""
+
+        if force_log:
+            log.write(f"Columns refreshed: {len(plottable)} plottable signals.")
 
     # -----------------------
     # Plot logic
@@ -286,7 +312,29 @@ def build_phase4_plots_panel(
             m &= (t <= tmax)
         return t[m], y[m]
 
+    # NEW: render a single blank plot (used by Clear plots and at startup)
+    def _render_blank_plot() -> None:
+        plt = _get_pyplot()
+        out_plot.clear_output(wait=True)
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+
+        with out_plot:
+            fig = plt.figure(figsize=(10.0, 4.8))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.set_title("Figure")
+            ax.set_xlabel("t (s)")
+            ax.set_ylabel("")
+            ax.grid(True)
+            plt.show()
+            state.fig = fig
+
     def _plot(primary_col: str, secondary_col: Optional[str], title: Optional[str] = None) -> None:
+        # Auto-refresh column dropdowns when user plots
+        _refresh_columns(force_log=False)
+
         seg = _get_seg()
         if seg is None:
             log.write("No segment loaded. Load a segment in Phase I first.")
@@ -319,11 +367,6 @@ def build_phase4_plots_panel(
         _set_status("plotting…")
         try:
             k = int(downsample_k.value)
-            interactive = bool(cb_interactive.value)
-
-            if interactive:
-                ok, msg = _try_enable_interactive_backend()
-                log.write(msg)
 
             plt = _get_pyplot()
 
@@ -343,6 +386,10 @@ def build_phase4_plots_panel(
             # Critical: clear unless Append is checked
             if not cb_append.value:
                 out_plot.clear_output(wait=True)
+                try:
+                    plt.close("all")
+                except Exception:
+                    pass
 
             with out_plot:
                 fig = plt.figure(figsize=(10.0, 4.8))
@@ -363,13 +410,12 @@ def build_phase4_plots_panel(
                 if secondary_col:
                     y2 = np.asarray(df[secondary_col].to_numpy())
                     t_w2, y2_w = _slice_by_time(t, y2)
-                    # Mask is computed from the same t, so this should match
                     if t_w2.shape[0] != t_w.shape[0]:
                         raise ValueError("Internal error: time-window slicing mismatch between primary and secondary.")
                     y2_d = _decimate(y2_w, k)
 
                     ax2 = ax1.twinx()
-                    # Secondary line: always red (requested for current visibility); dashed for clarity
+                    # Secondary line: red dashed (good visibility for current)
                     ax2.plot(t_d, y2_d, label=secondary_col, color="red", linestyle="--")
                     ax2.set_ylabel(secondary_col)
 
@@ -412,7 +458,7 @@ def build_phase4_plots_panel(
             log.write(
                 f"Plotted primary='{primary_col}'"
                 + (f", secondary='{secondary_col}'" if secondary_col else "")
-                + f" (K={k}, interactive={interactive}, append={bool(cb_append.value)})."
+                + f" (K={k}, append={bool(cb_append.value)})."
             )
         except Exception as exc:
             log.write(f"ERROR: {exc}")
@@ -424,13 +470,12 @@ def build_phase4_plots_panel(
     # -----------------------
 
     def _on_refresh(_btn):
-        _refresh_columns()
-        log.write("Columns refreshed.")
+        _refresh_columns(force_log=True)
 
     def _on_clear(_btn):
-        out_plot.clear_output(wait=True)
-        state.fig = None
+        # FIX: Clear must revert to a single blank plot
         log.write("Plots cleared.")
+        _render_blank_plot()
 
     def _on_plot_current(_btn):
         seg = _get_seg()
@@ -522,8 +567,17 @@ def build_phase4_plots_panel(
     btn_plot_selected.on_click(_on_plot_selected)
     btn_save.on_click(_on_save)
 
-    # Initial population
-    _refresh_columns()
+    # Initial population (likely no segment yet)
+    _refresh_columns(force_log=False)
+
+    # NEW: Start with a single blank plot (so Clear has a stable target state)
+    _render_blank_plot()
+
+    # NEW: expose a hook so app.py can auto-refresh when switching tabs
+    def _phase4_refresh_columns_hook():
+        _refresh_columns(force_log=False)
+
+    # We attach it to the returned panel below.
 
     # -----------------------
     # Layout
@@ -532,15 +586,31 @@ def build_phase4_plots_panel(
     header = w.HTML(
         "<h3>Phase IV — Exploration plots</h3>"
         "<div style='color:#666;'>Read-only plots using measured time (no resampling). "
-        "Downsampling is decimation only. Enable <b>Interactive</b> for zoom/pan (requires a working Matplotlib Jupyter backend).</div>"
+        "Downsampling is decimation only. Zoom/pan is available when your notebook backend supports it.</div>"
     )
 
-    row1 = w.HBox([downsample_k, cb_turn_markers, cb_interactive, cb_append, dd_secondary])
-    row2 = w.HBox([tmin_box, tmax_box, btn_refresh_cols, btn_clear])
-    row3 = w.HBox([btn_plot_current, btn_plot_abs, btn_plot_cmp, btn_plot_selected])
-    row4 = w.HBox([dd_primary, dd_format, btn_save])
+    # Top controls
+    row_top = w.HBox([downsample_k, cb_turn_markers, cb_append])
+    row_window = w.HBox([tmin_box, tmax_box, btn_refresh_cols, btn_clear])
 
-    left = w.VBox([header, row1, row2, row3, row4, out_plot], layout=w.Layout(width="70%"))
+    # Quick plot buttons
+    row_quick = w.HBox([btn_plot_current, btn_plot_abs, btn_plot_cmp])
+
+    # Grouped primary/secondary selection + action
+    row_select = w.HBox([dd_primary, dd_secondary, btn_plot_selected])
+
+    # Save row
+    row_save = w.HBox([dd_format, btn_save])
+
+    left = w.VBox(
+        [header, row_top, row_window, row_quick, row_select, row_save, out_plot],
+        layout=w.Layout(width="70%"),
+    )
     right = w.VBox([status, log.panel], layout=w.Layout(width="30%"))
 
-    return w.HBox([left, right], layout=w.Layout(width="100%"))
+    panel = w.HBox([left, right], layout=w.Layout(width="100%"))
+
+    # attach hook for app.py tab switch refresh
+    setattr(panel, "_phase4_refresh_columns", _phase4_refresh_columns_hook)
+
+    return panel
