@@ -481,15 +481,7 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     phase1 = _build_phase1_panel(shared)
     phase2 = build_phase2_panel(lambda: shared.get("segment_frame"))
     phase3 = build_phase3_kn_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
-    def _get_segmeta():
-        # Keep metadata minimal and stable: primarily the source path for display.
-        return {"source_path": shared.get("segment_path")}
-
-    # Phase IV — Plots (read-only)
-    phase4 = build_phase4_plots_panel(
-        get_segment_frame=lambda: shared.get("segment_frame"),
-        log_append=_log_append,   # <-- use the same logger function used elsewhere in the GUI
-    )
+    phase4 = build_phase4_plots_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
 
     tabs = w.Tab(children=[phase1, phase2, phase3, phase4])
     tabs.set_title(0, "Phase I — Catalog")
