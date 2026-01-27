@@ -26,6 +26,7 @@ from rotating_coil_analyzer.analysis.kn_pipeline import (
     SegmentKn,
     compute_legacy_kn_per_turn,
     load_segment_kn_txt,
+    merge_coefficients,
 )
 from rotating_coil_analyzer.analysis.turns import split_into_turns
 from rotating_coil_analyzer.ingest.discovery import MeasurementDiscovery
@@ -243,7 +244,7 @@ def _read_reference_results_txt(path: Path) -> pd.DataFrame:
     raise ValueError(f"Empty or unparsable reference results file: {path}")
 
 
-def _build_output_table(knr: LegacyKnPerTurn) -> pd.DataFrame:
+def _build_output_table(knr: LegacyKnPerTurn, *, magnet_order: int) -> pd.DataFrame:
     """Build a stable, comparison-friendly per-turn table."""
 
     H = int(knr.orders.size)
@@ -266,18 +267,32 @@ def _build_output_table(knr: LegacyKnPerTurn) -> pd.DataFrame:
     out["Time(s)"] = out["time_median_s"]
     out["Duration(s)"] = out["duration_s"]
 
+    # Mixed (legacy) channel used by SM18 results files:
+    #   - ABS for orders <= m
+    #   - CMP for orders > m
+    # This is what is usually meant by the "final reported harmonics".
+    m = int(magnet_order)
+    if not (1 <= m <= int(knr.H)):
+        raise ValueError(f"magnet_order must be in [1, {int(knr.H)}], got {m}")
+    C_mix = merge_coefficients(knr.C_abs, knr.C_cmp, magnet_order=m)
+    C_mix_db = merge_coefficients(knr.C_abs_db, knr.C_cmp_db, magnet_order=m)
+
     # Export harmonics as Re/Im to avoid downstream CSV complex parsing issues.
     for i, n in enumerate(knr.orders.tolist()):
         out[f"abs_re_n{n}"] = np.real(knr.C_abs[:, i])
         out[f"abs_im_n{n}"] = np.imag(knr.C_abs[:, i])
         out[f"cmp_re_n{n}"] = np.real(knr.C_cmp[:, i])
         out[f"cmp_im_n{n}"] = np.imag(knr.C_cmp[:, i])
+        out[f"mix_re_n{n}"] = np.real(C_mix[:, i])
+        out[f"mix_im_n{n}"] = np.imag(C_mix[:, i])
 
         # DB snapshot: useful when reference exports correspond to "deb" stage.
         out[f"abs_db_re_n{n}"] = np.real(knr.C_abs_db[:, i])
         out[f"abs_db_im_n{n}"] = np.imag(knr.C_abs_db[:, i])
         out[f"cmp_db_re_n{n}"] = np.real(knr.C_cmp_db[:, i])
         out[f"cmp_db_im_n{n}"] = np.imag(knr.C_cmp_db[:, i])
+        out[f"mix_db_re_n{n}"] = np.real(C_mix_db[:, i])
+        out[f"mix_db_im_n{n}"] = np.imag(C_mix_db[:, i])
 
     return pd.DataFrame(out)
 
@@ -708,7 +723,7 @@ def run_golden_folder(
                 options=options,
             )
 
-            table = _build_output_table(legacy)
+            table = _build_output_table(legacy, magnet_order=int(magnet_order))
             # Export start/end timestamps as additional diagnostics, but keep
             # the legacy-facing alias "Time(s)" as the **turn median**. This
             # matches the common golden-standard export convention where
@@ -740,7 +755,7 @@ def run_golden_folder(
                     cmp_candidates: Dict[str, object] = {}
                     best_key: Optional[str] = None
                     best_metric: float = float("inf")
-                    for ch in ("abs", "cmp"):
+                    for ch in ("mix", "abs", "cmp"):
                         for st in ("final", "db"):
                             key = f"{ch}/{st}"
                             try:

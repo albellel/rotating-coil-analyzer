@@ -19,11 +19,11 @@ Implemented steps
    signal prior to integration/FFT. When the current is ramping and the mean
    current is sufficiently large, incremental samples are reweighted by:
 
-     w_k = I_mean / I_k
+    w_k = |I_mean| / I_k
 
-   A turn is considered "on a ramp" if:
-     - dI/dt > 0.1 A/s
-     - mean(I) > 10 A
+    A turn is considered "on a ramp" if:
+     - |dI/dt| > 0.1 A/s   (works for both positive and negative ramps)
+     - |mean(I)| > 10 A
 
 2) Drift correction and integration (optional)
 
@@ -136,7 +136,6 @@ def estimate_linear_slope_per_turn(t_turns: np.ndarray, y_turns: np.ndarray) -> 
     slope[ok] = num[ok] / den[ok]
     return slope
 
-
 def di_dt_weights(
     t_turns: np.ndarray,
     I_turns: np.ndarray,
@@ -147,13 +146,21 @@ def di_dt_weights(
 ) -> DiDtResult:
     """Compute per-sample weights for the legacy ``dit`` / ``di/dt`` correction.
 
+    Legacy-compatible behavior
+    --------------------------
     A turn is corrected if:
-      - dI/dt > min_slope_A_per_s
-      - mean(I) > min_mean_I_A
-      - all samples are finite and |I| > eps_I_A
+      - |dI/dt| > min_slope_A_per_s      (apply on both up-ramps and down-ramps)
+      - |mean(I)| > min_mean_I_A
+      - all samples are finite and min(|I|) > eps_I_A
 
     The weights are:
-      w_k = I_mean / I_k
+      w_k = |I_mean| / I_k
+
+    Notes
+    -----
+    - The numerator uses |I_mean| to avoid disabling the correction on negative
+      ramps. The denominator keeps the sign of I_k.
+    - This follows the intent of the legacy analyzers for "outer_negative" data.
 
     Returns
     -------
@@ -167,18 +174,23 @@ def di_dt_weights(
     I = np.asarray(I_turns, dtype=float)
 
     I_mean = np.mean(I, axis=1)
+    I_mean_abs = np.abs(I_mean)
+
     slope = estimate_linear_slope_per_turn(t, I)
+    slope_abs = np.abs(slope)
+
     I_min_abs = np.min(np.abs(I), axis=1)
 
     finite = np.all(np.isfinite(t), axis=1) & np.all(np.isfinite(I), axis=1)
     ok_I = I_min_abs > float(eps_I_A)
-    on_ramp = (slope > float(min_slope_A_per_s)) & (I_mean > float(min_mean_I_A))
+
+    on_ramp = (slope_abs > float(min_slope_A_per_s)) & (I_mean_abs > float(min_mean_I_A))
 
     applied = finite & ok_I & on_ramp
 
     weights = np.ones_like(I, dtype=float)
     if np.any(applied):
-        weights[applied, :] = I_mean[applied, None] / I[applied, :]
+        weights[applied, :] = I_mean_abs[applied, None] / I[applied, :]
 
     # Guard against NaN/inf weights.
     bad_w = ~np.all(np.isfinite(weights), axis=1)
