@@ -100,6 +100,11 @@ class LegacyKnPerTurn:
     time_median_s: np.ndarray  # (n_turns,)
 
 
+    @property
+    def H(self) -> int:
+        return int(self.orders.size)
+
+
 def load_segment_kn_txt(path: str) -> SegmentKn:
     """Load a segment $k_n$ text file.
 

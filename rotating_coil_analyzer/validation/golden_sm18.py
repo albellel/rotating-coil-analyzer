@@ -274,8 +274,21 @@ def _build_output_table(knr: LegacyKnPerTurn, *, magnet_order: int) -> pd.DataFr
     m = int(magnet_order)
     if not (1 <= m <= int(knr.H)):
         raise ValueError(f"magnet_order must be in [1, {int(knr.H)}], got {m}")
-    C_mix = merge_coefficients(knr.C_abs, knr.C_cmp, magnet_order=m)
-    C_mix_db = merge_coefficients(knr.C_abs_db, knr.C_cmp_db, magnet_order=m)
+    
+    # SM18 “results_*.txt” legacy mixed channel:
+    #   ABS for orders <= m, CMP for orders > m
+    C_mix, _choice_mix = merge_coefficients(
+        C_abs=knr.C_abs,
+        C_cmp=knr.C_cmp,
+        magnet_order=m,
+        mode="abs_upto_m_cmp_above",
+    )
+    C_mix_db, _choice_mix_db = merge_coefficients(
+        C_abs=knr.C_abs_db,
+        C_cmp=knr.C_cmp_db,
+        magnet_order=m,
+        mode="abs_upto_m_cmp_above",
+    )
 
     # Export harmonics as Re/Im to avoid downstream CSV complex parsing issues.
     for i, n in enumerate(knr.orders.tolist()):
