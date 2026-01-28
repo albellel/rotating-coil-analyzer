@@ -5,12 +5,12 @@ from pathlib import Path
 import numpy as np
 
 from rotating_coil_analyzer.ingest.discovery import MeasurementDiscovery
-from rotating_coil_analyzer.ingest.readers_mba import MbaRawMeasurementReader, MbaReaderConfig
+from rotating_coil_analyzer.ingest.readers_plateau import PlateauReader, PlateauReaderConfig
 
 
-class TestMBA(unittest.TestCase):
+class TestPlateau(unittest.TestCase):
     def test_mh_fdis_and_plateau_concatenation(self):
-        """Acceptance test for MBA ingest:
+        """Acceptance test for plateau ingest:
 
         Requirements validated here:
           - Plateau files are discovered and concatenated in Run_XX order.
@@ -30,12 +30,12 @@ class TestMBA(unittest.TestCase):
             )
             (root / "Parameters.txt").write_text(params, encoding="utf-8")
 
-            base = "20251212_171620_MBA"
+            base = "20251212_171620_Plateau"
 
             # Create two plateau files per segment (Run_01 and Run_02), with constant currents 10 and 20.
             # Each file has 10 samples; with samples_per_turn=8 each plateau must be trimmed to 8 samples.
             def write_plateau(seg: str, run_no: int, current: float):
-                t = np.arange(10) * 0.1  # raw time resets per file (MBA reality)
+                t = np.arange(10) * 0.1  # raw time resets per file (plateau reality)
                 absf = np.sin(np.linspace(0, 1, 10)) * 1e-3
                 cmpf = absf * 1e-2
                 I = np.full(10, current)
@@ -57,7 +57,7 @@ class TestMBA(unittest.TestCase):
             self.assertTrue(f_ncs.name.endswith("_NCS_raw_measurement_data.txt"))
 
             # Reader concatenates both plateau files WITHOUT time stitching.
-            reader = MbaRawMeasurementReader(MbaReaderConfig())
+            reader = PlateauReader(PlateauReaderConfig())
             seg_frame = reader.read(f_ncs, run_id=base, segment="NCS", samples_per_turn=8, aperture_id=1)
 
             # 2 plateaus * (10 samples trimmed to 8) = 16

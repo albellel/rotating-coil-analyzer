@@ -224,8 +224,8 @@ class MeasurementDiscovery:
                 )
 
         # Discover segment files. Two supported families:
-        # A) SM18 corr_sigs / generic_corr_sigs
-        # B) MBA raw_measurement_data plateau text files (multiple per segment; reader concatenates)
+        # A) Streaming: corr_sigs / generic_corr_sigs (continuous acquisition, binary files)
+        # B) Plateau: raw_measurement_data text files (DC plateau acquisition, multiple files per segment)
         segment_files: Dict[Tuple[str, int, str], Path] = {}
 
         # Build fast lookup for allowed segments per aperture
@@ -233,14 +233,14 @@ class MeasurementDiscovery:
         for s in segments:
             segs_by_ap.setdefault(s.aperture_id, set()).add(s.segment_id)
 
-        # A) SM18
-        pat_sm18 = re.compile(
+        # A) Streaming (continuous acquisition)
+        pat_streaming = re.compile(
             r"^(?P<run>.+?)_(?:(?P<generic>generic)_)?corr_sigs_Ap_(?P<ap>\d+)_Seg(?P<seg>[^.]+)\.(?P<ext>bin|txt|csv)$",
             flags=re.IGNORECASE,
         )
 
-        # B) MBA plateau (no aperture token in filename typically)
-        pat_mba = re.compile(
+        # B) Plateau (DC acquisition, no aperture token in filename typically)
+        pat_plateau = re.compile(
             r"^(?P<base>.+?)_Run_(?P<step>\d+)_I_(?P<i>[-\d.]+)A_(?P<seg>[^_]+)_raw_measurement_data\.txt$",
             flags=re.IGNORECASE,
         )
@@ -250,7 +250,7 @@ class MeasurementDiscovery:
                 continue
             name = p.name
 
-            m = pat_sm18.match(name)
+            m = pat_streaming.match(name)
             if m:
                 run_id = m.group("run")
                 ap = int(m.group("ap"))
@@ -259,7 +259,7 @@ class MeasurementDiscovery:
                     continue
                 if seg_id not in segs_by_ap.get(ap, set()):
                     warnings.append(
-                        f"Found SM18 segment file not defined in FDIs table: ap={ap} seg='{seg_id}' ({p.name})"
+                        f"Found streaming segment file not defined in FDIs table: ap={ap} seg='{seg_id}' ({p.name})"
                     )
                     continue
 
@@ -287,7 +287,7 @@ class MeasurementDiscovery:
                         segment_files[key] = p
                 continue
 
-            m2 = pat_mba.match(name)
+            m2 = pat_plateau.match(name)
             if m2:
                 base = m2.group("base")
                 seg_id = m2.group("seg")
@@ -302,7 +302,7 @@ class MeasurementDiscovery:
                     continue
                 if seg_id not in segs_by_ap.get(ap, set()):
                     warnings.append(
-                        f"Found MBA raw file with segment='{seg_id}' not defined in FDIs table (ignored): {p.name}"
+                        f"Found plateau file with segment='{seg_id}' not defined in FDIs table (ignored): {p.name}"
                     )
                     continue
 
@@ -314,7 +314,7 @@ class MeasurementDiscovery:
                 else:
                     # keep the one with the smallest step number for determinism
                     def step_of(path: Path) -> int:
-                        mm = pat_mba.match(path.name)
+                        mm = pat_plateau.match(path.name)
                         return int(mm.group("step")) if mm else 10**9
                     if step_of(p) < step_of(prev):
                         segment_files[key] = p

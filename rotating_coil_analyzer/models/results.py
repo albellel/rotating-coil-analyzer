@@ -39,7 +39,7 @@ class HarmonicsResult:
     coeff_per_turn:
         Complex coefficients per turn, shape ``(n_turns, n_orders)``.
     plateau_id:
-        Optional plateau id per turn (MBA), shape ``(n_turns,)``.
+        Optional plateau id per turn (plateau data), shape ``(n_turns,)``.
     qc:
         Optional per-turn QC mask.
     """

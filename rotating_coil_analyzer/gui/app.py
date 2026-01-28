@@ -12,8 +12,8 @@ from rotating_coil_analyzer.gui.log_view import HtmlLog
 import matplotlib.pyplot as plt
 
 from rotating_coil_analyzer.ingest.discovery import MeasurementDiscovery
-from rotating_coil_analyzer.ingest.readers_sm18 import Sm18CorrSigsReader, Sm18ReaderConfig
-from rotating_coil_analyzer.ingest.readers_mba import MbaRawMeasurementReader, MbaReaderConfig
+from rotating_coil_analyzer.ingest.readers_streaming import StreamingReader, StreamingReaderConfig
+from rotating_coil_analyzer.ingest.readers_plateau import PlateauReader, PlateauReaderConfig
 
 # IMPORTANT: your repo defines MeasurementCatalog (not Catalog)
 from rotating_coil_analyzer.models.catalog import MeasurementCatalog
@@ -290,7 +290,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
         ap_phys = cat.resolve_aperture(ap_ui)
 
         if fpath.name.lower().endswith("_raw_measurement_data.txt"):
-            reader = MbaRawMeasurementReader(MbaReaderConfig())
+            reader = PlateauReader(PlateauReaderConfig())
             segf = reader.read(
                 fpath,
                 run_id=run_id,
@@ -300,7 +300,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
                 magnet_order=cat.magnet_order,
             )
         else:
-            reader = Sm18CorrSigsReader(Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5))
+            reader = StreamingReader(StreamingReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5))
             segf = reader.read(
                 fpath,
                 run_id=run_id,

@@ -17,7 +17,7 @@ class TurnBlock:
     Notes
     -----
     - The project forbids synthetic/modified time. Therefore ``t`` is returned exactly
-      as stored in the input data (it may be non-monotonic or contain NaNs for MBA).
+      as stored in the input data (it may be non-monotonic or contain NaNs for plateau data).
     - For any analysis that depends on the rotation phase, use the implicit angular grid
       per turn (sample index within turn), not time.
     """
@@ -66,7 +66,7 @@ def split_into_turns(
     columns:
         Required sample-wise columns. Defaults are the Phase I contract columns.
     plateau_key:
-        Name of the sample-wise plateau id column (MBA). If absent, plateau metadata
+        Name of the sample-wise plateau id column (plateau data). If absent, plateau metadata
         will be returned as None.
     strict_plateau_turns:
         If True and plateau_key exists, enforce that plateau id is constant within each
@@ -122,7 +122,7 @@ def split_into_turns(
 
         plateau_id = pid0
 
-        # Optional metadata (present in our MBA reader)
+        # Optional metadata (present in our plateau reader)
         if "plateau_step" in df.columns:
             pstep_s = _reshape_1d(df["plateau_step"].to_numpy(), n_turns, Ns)
             plateau_step = pstep_s[:, 0]

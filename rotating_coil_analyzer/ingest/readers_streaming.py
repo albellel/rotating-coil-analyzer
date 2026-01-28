@@ -12,16 +12,19 @@ from rotating_coil_analyzer.models.frames import SegmentFrame
 
 
 @dataclass(frozen=True)
-class Sm18ReaderConfig:
+class StreamingReaderConfig:
     """
-    Reader configuration.
+    Reader configuration for streaming (continuous) acquisition data.
+
+    Streaming acquisition produces a single large binary file from hours-long
+    continuous measurements.
 
     strict_time:
       - True: require strictly increasing finite time vector after trimming trailing invalid rows.
       - False: allow non-monotonic time (not recommended).
     dt_rel_tol:
       Relative tolerance for dt_median vs dt_nominal (computed from |v| and samples_per_turn).
-      Example: 0.2 means ±20%.
+      Example: 0.2 means +/-20%.
     max_currents:
       Try formats with 0..max_currents current channels (total columns = 3 + n_currents).
     dtype_candidates:
@@ -33,17 +36,20 @@ class Sm18ReaderConfig:
     dtype_candidates: Tuple[np.dtype, ...] = (np.dtype("<f8"), np.dtype("<f4"))
 
 
-class Sm18CorrSigsReader:
+class StreamingReader:
     """
-    Reader for SM18 corr_sigs and generic_corr_sigs segment files (bin/txt/csv).
+    Reader for streaming (continuous) acquisition segment files (bin/txt/csv).
+
+    Streaming acquisition typically produces large binary files from hours-long
+    continuous measurements with the rotating coil.
 
     HARD REQUIREMENT:
       - time is always taken from the file (column 0)
       - no synthetic time is ever generated
     """
 
-    def __init__(self, config: Optional[Sm18ReaderConfig] = None):
-        self.config = config or Sm18ReaderConfig()
+    def __init__(self, config: Optional[StreamingReaderConfig] = None):
+        self.config = config or StreamingReaderConfig()
 
     def read(
         self,
@@ -69,8 +75,8 @@ class Sm18CorrSigsReader:
         else:
             mat, ncols, warnings = self._infer_and_load(path, Ns=Ns, shaft_speed_rpm=float(shaft_speed_rpm))
 
-        # Column semantics (per SM18 scripts):
-        #   col0: time [s] (FDI time)
+        # Column semantics:
+        #   col0: time [s]
         #   col1/col2: flux channels (abs/cmp, order can vary -> we auto-assign by robust amplitude)
         #   col3..: one or more current traces (potentially from different sources)
         t = mat[:, 0]
@@ -317,3 +323,8 @@ class Sm18CorrSigsReader:
             raise ValueError(f"ASCII file must have >=3 columns (t, flux1, flux2, ...): {path}")
         mat = df.to_numpy(dtype=np.float64, copy=False)
         return mat, int(mat.shape[1]), warnings
+
+
+# Backward compatibility aliases (deprecated)
+Sm18ReaderConfig = StreamingReaderConfig
+Sm18CorrSigsReader = StreamingReader

@@ -4,14 +4,14 @@ from pathlib import Path
 
 import numpy as np
 
-from rotating_coil_analyzer.ingest.readers_sm18 import Sm18CorrSigsReader, Sm18ReaderConfig
-from rotating_coil_analyzer.ingest.readers_mba import MbaRawMeasurementReader, MbaReaderConfig
+from rotating_coil_analyzer.ingest.readers_streaming import StreamingReader, StreamingReaderConfig
+from rotating_coil_analyzer.ingest.readers_plateau import PlateauReader, PlateauReaderConfig
 
 
 class TestTimePolicy(unittest.TestCase):
-    def test_sm18_binary_time_is_exactly_file_time(self):
+    def test_streaming_binary_time_is_exactly_file_time(self):
         """
-        SM18: 't' must be taken from file column 0 and never synthesized/shifted.
+        Streaming: 't' must be taken from file column 0 and never synthesized/shifted.
         We create a tiny synthetic binary file with a known time vector and verify
         that the reader returns it unchanged.
         """
@@ -35,7 +35,7 @@ class TestTimePolicy(unittest.TestCase):
             p = Path(d) / "seg.bin"
             mat.tofile(p)
 
-            reader = Sm18CorrSigsReader(Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=3))
+            reader = StreamingReader(StreamingReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=3))
             seg = reader.read(
                 p,
                 run_id="R",
@@ -50,14 +50,14 @@ class TestTimePolicy(unittest.TestCase):
             # Exact equality is expected (no offsets, no re-sampling, no synthetic time).
             self.assertTrue(np.allclose(t_out, t, atol=0.0, rtol=0.0))
 
-    def test_mba_disallows_time_alignment_options(self):
+    def test_plateau_disallows_time_alignment_options(self):
         """
-        MBA: configuration options that imply time modification (align_time/strict_time)
+        Plateau: configuration options that imply time modification (align_time/strict_time)
         must be rejected, because NO synthetic/modified time is allowed in the project.
         """
-        reader = MbaRawMeasurementReader(MbaReaderConfig(align_time=True, strict_time=False))
+        reader = PlateauReader(PlateauReaderConfig(align_time=True, strict_time=False))
         with tempfile.TemporaryDirectory() as d:
-            # We only need a path that *looks* like an MBA plateau file name.
+            # We only need a path that *looks* like a plateau file name.
             dummy = Path(d) / "X_Run_01_I_1.00A_NCS_raw_measurement_data.txt"
             dummy.write_text("0 0 0 0 0\n", encoding="utf-8")
             with self.assertRaises(ValueError):

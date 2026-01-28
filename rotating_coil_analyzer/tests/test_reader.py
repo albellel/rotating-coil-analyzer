@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 import numpy as np
 
-from rotating_coil_analyzer.ingest.readers_sm18 import Sm18CorrSigsReader, Sm18ReaderConfig
+from rotating_coil_analyzer.ingest.readers_streaming import StreamingReader, StreamingReaderConfig
 
 
 class TestReaderBinaryInference(unittest.TestCase):
@@ -24,8 +24,8 @@ class TestReaderBinaryInference(unittest.TestCase):
             mat = np.column_stack([t, df_abs, df_cmp, I])
             self._write_bin(p, mat)
 
-            cfg = Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.1, max_currents=2)
-            reader = Sm18CorrSigsReader(cfg)
+            cfg = StreamingReaderConfig(strict_time=True, dt_rel_tol=0.1, max_currents=2)
+            reader = StreamingReader(cfg)
             seg = reader.read(p, run_id="RUN", segment="3", samples_per_turn=Ns, shaft_speed_rpm=60.0)
             self.assertEqual(seg.n_turns, n_turns)
 
@@ -43,8 +43,8 @@ class TestReaderBinaryInference(unittest.TestCase):
             mat = np.column_stack([t, df_abs, df_cmp, I])
             self._write_bin(p, mat)
 
-            cfg = Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.1, max_currents=2)
-            reader = Sm18CorrSigsReader(cfg)
+            cfg = StreamingReaderConfig(strict_time=True, dt_rel_tol=0.1, max_currents=2)
+            reader = StreamingReader(cfg)
             with self.assertRaises(ValueError):
                 reader.read(p, run_id="RUN", segment="3", samples_per_turn=Ns, shaft_speed_rpm=60.0)
 

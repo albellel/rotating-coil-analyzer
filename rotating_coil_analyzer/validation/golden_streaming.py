@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Golden-standard validation helper for SM18 *corr_sigs* measurements.
+"""Golden-standard validation helper for streaming *corr_sigs* measurements.
 
 This module provides a small CLI-oriented workflow:
 
@@ -32,7 +32,7 @@ from rotating_coil_analyzer.analysis.kn_pipeline import (
 )
 from rotating_coil_analyzer.analysis.turns import split_into_turns
 from rotating_coil_analyzer.ingest.discovery import MeasurementDiscovery
-from rotating_coil_analyzer.ingest.readers_sm18 import Sm18CorrSigsReader, Sm18ReaderConfig
+from rotating_coil_analyzer.ingest.readers_streaming import StreamingReader, StreamingReaderConfig
 from rotating_coil_analyzer.models.catalog import MeasurementCatalog
 from rotating_coil_analyzer.models.frames import SegmentFrame
 
@@ -72,7 +72,7 @@ def _find_single_run(cat: MeasurementCatalog) -> str:
 def _find_kn_file(folder: Path, *, ap: int, seg: str, run_id: str) -> Optional[Path]:
     """Find a Kn_values file for (ap, seg).
 
-    The SM18 script ecosystem has seen multiple naming conventions. This helper tries
+    The streaming acquisition ecosystem has seen multiple naming conventions. This helper tries
     a few patterns and returns the first match.
     """
 
@@ -128,7 +128,7 @@ def _read_reference_results_txt(path: Path) -> pd.DataFrame:
     import io
 
     def _guess_sep_from_header(header_line: str) -> str:
-        """Guess a delimiter for SM18 legacy exports.
+        """Guess a delimiter for streaming legacy exports.
 
         Practical issue
         ---------------
@@ -158,7 +158,7 @@ def _read_reference_results_txt(path: Path) -> pd.DataFrame:
 
     lines = path.read_text(errors="ignore").splitlines()
 
-    # Prefer the standard SM18 results header (Time(s) ...).
+    # Prefer the standard streaming results header (Time(s) ...).
     header_idx: Optional[int] = None
     header_line = ""
     for i, raw in enumerate(lines[:500]):
@@ -269,15 +269,15 @@ def _build_output_table(knr: LegacyKnPerTurn, *, magnet_order: int) -> pd.DataFr
     out["Time(s)"] = out["time_median_s"]
     out["Duration(s)"] = out["duration_s"]
 
-    # Mixed (legacy) channel used by SM18 results files:
+    # Mixed (legacy) channel used by streaming results files:
     #   - ABS for orders <= m
     #   - CMP for orders > m
     # This is what is usually meant by the "final reported harmonics".
     m = int(magnet_order)
     if not (1 <= m <= H):
         raise ValueError(f"magnet_order must be in [1, {H}], got {m}")
-    
-    # SM18 “results_*.txt” legacy mixed channel:
+
+    # Streaming "results_*.txt" legacy mixed channel:
     #   ABS for orders <= m, CMP for orders > m
     C_mix, _choice_mix = merge_coefficients(
         C_abs=knr.C_abs,
@@ -317,7 +317,7 @@ def _infer_bn_an_columns(df: pd.DataFrame) -> Tuple[Dict[int, str], Dict[int, st
 
     IMPORTANT
     ---------
-    SM18 reference exports often contain BOTH:
+    Streaming reference exports often contain BOTH:
       - physical-field columns in Tesla: e.g. 'B1(T)', 'A1(T)', 'B_main(T)', '...TF(T/kA)'
       - normalized multipoles in 1e-4 units: e.g. 'b2(Units)', 'a2(Units)', ...
 
@@ -353,7 +353,7 @@ def _infer_bn_an_columns(df: pd.DataFrame) -> Tuple[Dict[int, str], Dict[int, st
             return True
         if "tf" in s or "t/ka" in s or "tka" in s:
             return True
-        # Common SM18 physical columns:
+        # Common streaming physical columns:
         if "b_main" in s or "a_main" in s:
             return True
         return False
@@ -700,7 +700,7 @@ def run_golden_folder(
 
     options = tuple(str(x).strip().lower() for x in cfg.options)
 
-    reader = Sm18CorrSigsReader(Sm18ReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5))
+    reader = StreamingReader(StreamingReaderConfig(strict_time=True, dt_rel_tol=0.25, max_currents=5))
 
     out_root = Path(out_dir).expanduser().resolve() if out_dir is not None else (folder / "validation_out")
     out_root.mkdir(parents=True, exist_ok=True)
@@ -838,11 +838,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     import textwrap
 
     p = argparse.ArgumentParser(
-        prog="python -m rotating_coil_analyzer.validation.golden_sm18",
+        prog="python -m rotating_coil_analyzer.validation.golden_streaming",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Run the rotating-coil analyzer on an SM18 golden-standard folder.
+            Run the rotating-coil analyzer on a streaming golden-standard folder.
 
             The folder must contain Parameters.txt and corr_sigs/generic_corr_sigs files.
             If 'compare' is enabled, the folder should also contain reference exports

@@ -1,6 +1,6 @@
 # Rotating Coil Analyzer
 
-Python tooling to ingest rotating-coil acquisition files (SM18 binary and MBA plateau text formats), split measurements into turns using a strict time policy, and compute per-turn Fourier harmonics with a simple two-tab GUI.
+Python tooling to ingest rotating-coil acquisition files (streaming binary and plateau text formats), split measurements into turns using a strict time policy, and compute per-turn Fourier harmonics with a simple two-tab GUI.
 
 This project is designed for accelerator-magnet rotating-coil measurements, with a strong emphasis on **data integrity** and **traceability**.
 
@@ -20,8 +20,8 @@ The software **never creates synthetic time**.
 ## Current capabilities
 
 ### Supported input formats
-- **SM18 binary** (`*.bin`): “corr/generic” variants supported via `Parameters.txt` FDIs table mapping.
-- **MBA plateau text** (`*_raw_measurement_data.txt`): multi-file plateau sequences concatenated in correct order, with plateau metadata propagated per turn.
+- **Streaming binary** (`*.bin`): continuous acquisition data, "corr/generic" variants supported via `Parameters.txt` FDIs table mapping.
+- **Plateau text** (`*_raw_measurement_data.txt`): DC plateau acquisition, multi-file plateau sequences concatenated in correct order, with plateau metadata propagated per turn.
 
 ### Data model
 - A discovered measurement folder is represented as a **MeasurementCatalog** (core API).

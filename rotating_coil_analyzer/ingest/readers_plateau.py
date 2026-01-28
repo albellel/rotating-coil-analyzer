@@ -12,13 +12,16 @@ from rotating_coil_analyzer.models.frames import SegmentFrame
 
 
 @dataclass(frozen=True)
-class MbaReaderConfig:
-    """Reader configuration for MBA plateau text files (``*_raw_measurement_data.txt``).
+class PlateauReaderConfig:
+    """Reader configuration for plateau-based text files (``*_raw_measurement_data.txt``).
+
+    Plateau-based acquisition collects data at discrete DC current levels, producing
+    one text file per plateau (current step).
 
     Project-wide hard constraint:
         **No synthetic/modified time is allowed anywhere in this project.**
 
-    For MBA plateau concatenation this means:
+    For plateau concatenation this means:
         - The time column ``t`` is always the raw time read from each plateau file.
         - Time is never offset/shifted/aligned across plateau boundaries.
         - The concatenated time vector may therefore contain discontinuities and resets.
@@ -37,10 +40,10 @@ class MbaReaderConfig:
     max_rows_preview_warning: int = 2_000_000
 
 
-class MbaRawMeasurementReader:
-    """Reads and concatenates MBA plateau files.
+class PlateauReader:
+    """Reads and concatenates plateau-based acquisition files.
 
-    MBA acquisition consists of many plateau files (one per current level), e.g.:
+    Plateau-based acquisition consists of many files (one per current level), e.g.:
 
         ``<base>_Run_<step>_I_<current>A_<segment>_raw_measurement_data.txt``
 
@@ -73,8 +76,8 @@ class MbaRawMeasurementReader:
         flags=re.IGNORECASE,
     )
 
-    def __init__(self, config: Optional[MbaReaderConfig] = None):
-        self.config = config or MbaReaderConfig()
+    def __init__(self, config: Optional[PlateauReaderConfig] = None):
+        self.config = config or PlateauReaderConfig()
 
     @staticmethod
     def _robust_range(x: np.ndarray) -> float:
@@ -88,7 +91,7 @@ class MbaRawMeasurementReader:
     def _find_plateau_files(self, representative: Path) -> Tuple[str, str, List[Path]]:
         m = self._PAT.match(representative.name)
         if not m:
-            raise ValueError(f"Not an MBA raw_measurement_data file: {representative.name}")
+            raise ValueError(f"Not a plateau raw_measurement_data file: {representative.name}")
         base = m.group("base")
         seg = m.group("seg")
         glob_pat = f"{base}_Run_*_I_*A_{seg}_raw_measurement_data.txt"
@@ -107,7 +110,7 @@ class MbaRawMeasurementReader:
 
         files.sort(key=step_key)
         if not files:
-            raise FileNotFoundError(f"No MBA plateau files matched {glob_pat} in {representative.parent}")
+            raise FileNotFoundError(f"No plateau files matched {glob_pat} in {representative.parent}")
         return base, seg, files
 
     def _read_one(self, path: Path) -> np.ndarray:
@@ -126,8 +129,8 @@ class MbaRawMeasurementReader:
     ) -> SegmentFrame:
         if self.config.align_time or self.config.strict_time:
             raise ValueError(
-                "MBA reader: align_time/strict_time are disallowed because they imply modifying or "
-                "enforcing a stitched time axis. This project forbids synthetic/modified time." 
+                "Plateau reader: align_time/strict_time are disallowed because they imply modifying or "
+                "enforcing a stitched time axis. This project forbids synthetic/modified time."
             )
 
         Ns = int(samples_per_turn)
@@ -144,7 +147,7 @@ class MbaRawMeasurementReader:
         sample_in_plateau_blocks: List[np.ndarray] = []
 
         warnings: List[str] = []
-        warnings.append(f"MBA reader: concatenating {len(files)} plateau files for base='{base}', segment='{seg}'")
+        warnings.append(f"Plateau reader: concatenating {len(files)} plateau files for base='{base}', segment='{seg}'")
 
         last_plateau_end_t: Optional[float] = None
 
@@ -169,7 +172,7 @@ class MbaRawMeasurementReader:
                 if np.isfinite(first_t) and np.isfinite(last_plateau_end_t) and first_t <= last_plateau_end_t:
                     warnings.append(
                         f"time reset/overlap across plateaus at {f.name}: prev_end_t={last_plateau_end_t:.6g}, first_t={first_t:.6g} "
-                        "(expected for MBA; time is kept raw by design)"
+                        "(expected for plateau data; time is kept raw by design)"
                     )
 
             # Intra-plateau time diagnostics (warning-level only; no correction).
@@ -230,7 +233,7 @@ class MbaRawMeasurementReader:
 
         if len(mat) > self.config.max_rows_preview_warning:
             warnings.append(
-                f"large concatenated MBA trace: {len(mat)} rows (preview/plotting may be slow)."
+                f"large concatenated plateau trace: {len(mat)} rows (preview/plotting may be slow)."
             )
 
         ncols = mat.shape[1]
@@ -315,3 +318,8 @@ class MbaRawMeasurementReader:
             aperture_id=aperture_id,
             magnet_order=magnet_order,
         )
+
+
+# Backward compatibility aliases (deprecated)
+MbaReaderConfig = PlateauReaderConfig
+MbaRawMeasurementReader = PlateauReader
