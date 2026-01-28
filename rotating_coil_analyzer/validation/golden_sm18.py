@@ -21,6 +21,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+import glob
+
 from rotating_coil_analyzer.analysis.kn_pipeline import (
     LegacyKnPerTurn,
     SegmentKn,
@@ -272,8 +274,8 @@ def _build_output_table(knr: LegacyKnPerTurn, *, magnet_order: int) -> pd.DataFr
     #   - CMP for orders > m
     # This is what is usually meant by the "final reported harmonics".
     m = int(magnet_order)
-    if not (1 <= m <= int(knr.H)):
-        raise ValueError(f"magnet_order must be in [1, {int(knr.H)}], got {m}")
+    if not (1 <= m <= H):
+        raise ValueError(f"magnet_order must be in [1, {H}], got {m}")
     
     # SM18 “results_*.txt” legacy mixed channel:
     #   ABS for orders <= m, CMP for orders > m
@@ -313,9 +315,20 @@ def _build_output_table(knr: LegacyKnPerTurn, *, magnet_order: int) -> pd.DataFr
 def _infer_bn_an_columns(df: pd.DataFrame) -> Tuple[Dict[int, str], Dict[int, str]]:
     """Infer (b_n, a_n) column mapping from a reference dataframe.
 
+    IMPORTANT
+    ---------
+    SM18 reference exports often contain BOTH:
+      - physical-field columns in Tesla: e.g. 'B1(T)', 'A1(T)', 'B_main(T)', '...TF(T/kA)'
+      - normalized multipoles in 1e-4 units: e.g. 'b2(Units)', 'a2(Units)', ...
+
+    For validation against the analyzer's 'nor' option, we must compare ONLY
+    the normalized multipole columns (bN/aN), and MUST NOT treat Tesla columns
+    as bN/aN. Otherwise, 'B1(T)' gets mis-identified as 'b1' and comparisons
+    explode by orders of magnitude.
+
     Returns
     -------
-    b_map, a_map
+    b_map, a_map:
         dict mapping harmonic order n -> column name.
     """
 
@@ -324,17 +337,8 @@ def _infer_bn_an_columns(df: pd.DataFrame) -> Tuple[Dict[int, str], Dict[int, st
     a_map: Dict[int, str] = {}
 
     def _canon(name: object) -> str:
-        """Canonicalize a column name for robust matching.
-
-        Examples
-        --------
-        'B3 (1e-4)' -> 'b3'
-        'b_03' -> 'b03'
-        'bn5[unit]' -> 'bn5'
-        'Skew 4' -> 'skew4'
-        """
         s = str(name).strip().lower()
-        # Remove bracketed unit hints.
+        # Remove bracketed unit hints but keep the base token.
         s = re.sub(r"\(.*?\)", "", s)
         s = re.sub(r"\[.*?\]", "", s)
         s = re.sub(r"\{.*?\}", "", s)
@@ -342,14 +346,28 @@ def _infer_bn_an_columns(df: pd.DataFrame) -> Tuple[Dict[int, str], Dict[int, st
         s = re.sub(r"[^a-z0-9]+", "", s)
         return s
 
-    # Accept a broad set of conventions.
-    # Normal: b3, bn3, normal3, n3 (rare). Skew: a3, an3, skew3, s3 (rare).
+    def _is_tesla_like(raw: str) -> bool:
+        s = raw.strip().lower()
+        # Physical-field / transfer-function columns we must not use as b_n/a_n.
+        if "(t" in s or "tesla" in s:
+            return True
+        if "tf" in s or "t/ka" in s or "tka" in s:
+            return True
+        # Common SM18 physical columns:
+        if "b_main" in s or "a_main" in s:
+            return True
+        return False
+
+    # Accept a broad set of b/a conventions, but ONLY for non-Tesla columns.
     b_re = re.compile(r"^(?:b|bn|normal)(?P<n>\d+)$", flags=re.IGNORECASE)
     a_re = re.compile(r"^(?:a|an|skew)(?P<n>\d+)$", flags=re.IGNORECASE)
 
     for c in cols:
         c0 = str(c)
-        cc = _canon(c)
+        if _is_tesla_like(c0):
+            continue
+
+        cc = _canon(c0)
         mb = b_re.match(cc)
         if mb:
             b_map[int(mb.group("n"))] = c0
@@ -867,9 +885,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     kn_file = None
     if ns.kn_file:
-        kn_file = Path(ns.kn_file).expanduser().resolve()
-        if not kn_file.exists() or not kn_file.is_file():
-            raise FileNotFoundError(str(kn_file))
+        # Users sometimes paste shortened paths with "..." (UI elision). Treat that as a glob
+        # and fall back to auto-discovery when the provided path cannot be resolved.
+        kn_arg = str(ns.kn_file).strip()
+        candidate = Path(kn_arg).expanduser()
+
+        if candidate.exists() and candidate.is_file():
+            kn_file = candidate.resolve()
+        else:
+            # 1) Try glob expansion (also handles "..." -> "*").
+            pattern = kn_arg.replace("...", "*")
+            matches = [Path(m) for m in glob.glob(pattern)]
+            matches = [m for m in matches if m.exists() and m.is_file()]
+
+            if len(matches) == 1:
+                kn_file = matches[0].resolve()
+                print(f"[info] resolved --kn-file via glob: {kn_file}")
+            else:
+                # 2) Fall back to auto-discovery under the selected folder.
+                print(f"[warn] --kn-file not found: {kn_arg!r}. Falling back to auto-discovery in folder.")
+                kn_file = None
 
     cfg = GoldenRunConfig(
         run_id=ns.run_id,
