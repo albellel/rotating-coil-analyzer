@@ -58,6 +58,7 @@ plots/
 reports/
 tmp/
 *.log
+*.bak
 
 # =========================
 # Data (raw measurement data should live outside repo)
