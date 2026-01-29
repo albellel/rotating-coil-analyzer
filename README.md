@@ -106,8 +106,9 @@ gui  # Display the GUI
 Example notebooks are in `rotating_coil_analyzer/notebooks/`:
 
 1. **01_catalog_browser.ipynb** - Browse measurement catalogs
-2. **02_phase2_gui.ipynb** - Harmonics computation workflow
+2. **02_analysis_gui.ipynb** - Combined GUI (Catalog + Harmonics workflow)
 3. **03_kn_from_mh_csv.ipynb** - Compute kn from measurement-head CSV
+4. **golden_standard_parity.ipynb** - Validation against legacy C++ results
 
 ---
 
@@ -168,3 +169,19 @@ rotating_coil_analyzer/
 ├── tests/             # Unit tests
 └── validation/        # Golden reference validation
 ```
+
+---
+
+## Theory and References
+
+The analysis algorithms follow the standard procedures described in:
+
+- **Bottura, L.** - *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets - Part I: Harmonics* (included in `theory/` folder)
+
+Key formulas implemented:
+- FFT-based harmonic extraction: `f_n = 2·FFT(flux)/N`
+- Kn application: `C_n = f_n / conj(kn) · Rref^(n-1)`
+- Phase rotation: `C_rotated = C · exp(-i·phi·k)`
+- Center location (CEL) and feeddown corrections
+
+The implementation has been validated against the legacy C++ analyzer (ffmm/MatlabAnalyzerRotCoil.cpp).
