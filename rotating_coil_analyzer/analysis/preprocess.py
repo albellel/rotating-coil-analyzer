@@ -263,10 +263,25 @@ def integrate_to_flux(
         raise ValueError(f"Unknown drift mode: {drift_mode!r}")
 
     if mode == "legacy":
-        # Match the legacy C++ analyzer: cumsum(df-mean(df)) then recenter flux.
+        # Match the legacy C++ analyzer EXACTLY:
+        #   fluxAbs = cumsum(df_abs - mean(df_abs)) - mean(cumsum(df_abs))
+        #
+        # IMPORTANT: The C++ code subtracts mean(cumsum(df_abs)), i.e., the mean
+        # of the ORIGINAL cumsum (before drift correction), NOT the mean of the
+        # drift-corrected cumsum. This is a subtle but critical difference.
+        #
+        # Reference: ffmm/src/core/utils/matlab_analyzer/MatlabAnalyzerRotCoil.cpp
+        # Line ~127: fluxAbs = cumsum(df_abs - mean(df_abs)) - mean(cumsum(df_abs));
+
+        # Step 1: Compute original cumsum (before any drift correction)
+        flux_original = np.cumsum(df, axis=1)
+
+        # Step 2: Remove mean from incremental signal, then cumsum
         df0 = df - np.mean(df, axis=1, keepdims=True)
         flux = np.cumsum(df0, axis=1)
-        flux = flux - np.mean(flux, axis=1, keepdims=True)
+
+        # Step 3: Subtract mean of ORIGINAL cumsum (not drift-corrected cumsum)
+        flux = flux - np.mean(flux_original, axis=1, keepdims=True)
 
         applied = np.all(np.isfinite(df), axis=1)
         return flux, DriftResult(mode="legacy", applied=applied)
