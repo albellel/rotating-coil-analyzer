@@ -57,8 +57,14 @@ processed_data/
 plots/
 reports/
 tmp/
+outputs/
 *.log
 *.bak
+
+# =========================
+# Generated notebook outputs
+# =========================
+rotating_coil_analyzer/notebooks/*_computed.txt
 
 # =========================
 # Data (raw measurement data should live outside repo)
