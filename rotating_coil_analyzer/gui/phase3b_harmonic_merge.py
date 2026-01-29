@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-"""Phase 3B GUI: Harmonic Merge (apply kn + per-n channel selection).
+"""Harmonic Merge GUI tab (apply kn + per-n channel selection).
 
 This tab is responsible for:
-1. Applying the kn calibration (from Phase 3A) to compute Abs/Cmp harmonics per turn.
+1. Applying the kn calibration (from Coil Calibration tab) to compute Abs/Cmp harmonics per turn.
 2. Displaying diagnostics and allowing per-harmonic-order source selection.
 3. Providing preset merge modes and custom per-n selection.
 4. Exporting merged results with full provenance.
 
 Inputs:
-- SegmentFrame from Phase I
-- KnBundle from Phase 3A
+- SegmentFrame from Catalog tab
+- KnBundle from Coil Calibration tab
 
 Output:
 - MergeResult with full traceability (kn provenance, compensation scheme, per-n map)
@@ -49,7 +49,7 @@ _ACTIVE_PHASE3B_PANEL: Optional[w.Widget] = None
 
 
 @dataclass
-class Phase3BState:
+class HarmonicMergeState:
     """Local state for the Harmonic Merge tab."""
     segf: Optional[SegmentFrame] = None
     seg_path: Optional[str] = None
@@ -186,7 +186,7 @@ def build_phase3b_harmonic_merge_panel(
             pass
         _ACTIVE_PHASE3B_PANEL = None
 
-    st = Phase3BState()
+    st = HarmonicMergeState()
 
     log = HtmlLog(title="Harmonic Merge log")
     status = w.HTML("<b>Status:</b> idle")
@@ -194,7 +194,7 @@ def build_phase3b_harmonic_merge_panel(
     # ---- Context display ----
     context_html = w.HTML(
         "<div style='color:#666; padding:4px; background:#f8f8f8; border:1px solid #ddd;'>"
-        "Waiting for inputs from Phase I (segment) and Phase 3A (kn)."
+        "Waiting for inputs: segment from Catalog tab and kn from Coil Calibration tab."
         "</div>"
     )
 
@@ -295,14 +295,16 @@ def build_phase3b_harmonic_merge_panel(
         status.value = f"<b>Status:</b> {msg}"
 
     def _refresh_context() -> bool:
-        """Refresh context from Phase I and Phase 3A. Returns True if ready."""
+        """Refresh context from Catalog tab and Coil Calibration tab. Returns True if ready."""
         segf = get_segmentframe_callable()
         kn_bundle = get_kn_bundle_callable() if get_kn_bundle_callable else None
 
         if segf is None:
             context_html.value = (
                 "<div style='color:#b00; padding:4px; background:#fee; border:1px solid #c88;'>"
-                "No segment loaded. Load a measurement in Phase I first."
+                "<b>No segment loaded.</b><br>"
+                "Go to the <b>Catalog</b> tab, browse to a measurement folder, "
+                "select a run/aperture/segment, then click <b>'Load segment'</b>."
                 "</div>"
             )
             st.segf = None
@@ -311,8 +313,9 @@ def build_phase3b_harmonic_merge_panel(
 
         if kn_bundle is None:
             context_html.value = (
-                "<div style='color:#b00; padding:4px; background:#fee; border:1px solid #c88;'>"
-                "No kn loaded. Load/compute kn in Phase 3A (Coil Calibration) first."
+                "<div style='color:#960; padding:4px; background:#ffc; border:1px solid #c90;'>"
+                "<b>Segment loaded</b>, but <b>no kn calibration</b> available.<br>"
+                "Go to the <b>Coil Calibration</b> tab to load or compute kn coefficients first."
                 "</div>"
             )
             st.segf = segf
@@ -803,7 +806,7 @@ def build_phase3b_harmonic_merge_panel(
 
     # ---- Layout ----
     header = w.HTML(
-        "<h3 style='margin:0;'>Phase 3B: Harmonic Merge (Channel Selection)</h3>"
+        "<h3 style='margin:0;'>Harmonic Merge</h3>"
         "<div style='color:#555; line-height:1.35; margin-bottom:8px;'>"
         "Apply kn calibration to compute harmonics, then select Abs/Cmp source per harmonic order. "
         "All outputs include full provenance (kn source, compensation scheme, per-n map)."

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any
+import time
 
 import numpy as np
 import pandas as pd
@@ -81,56 +82,63 @@ def _browse_for_folder() -> Optional[str]:
 
 
 @dataclass
-class Phase1State:
+class CatalogState:
     cat: Optional[MeasurementCatalog] = None
     segf: Optional[SegmentFrame] = None
     seg_path: Optional[Path] = None
     run_id: Optional[str] = None
     ap_ui: Optional[int] = None
     seg_id: Optional[str] = None
+    fig: Optional[Any] = None  # Reference to last figure (for save)
+    # Debounce: prevent duplicate callback invocations
+    busy: bool = False
+    last_action_key: Optional[str] = None
+    last_action_t: float = 0.0
 
-    fig: Optional[Any] = None
-    ax: Optional[Any] = None
 
+def _try_enable_interactive_backend_once() -> tuple[bool, str]:
+    """
+    Try to enable an interactive Matplotlib backend suitable for Jupyter exactly once.
+    Returns (ok, message).
+    """
+    import matplotlib as mpl
 
-def _init_plot_once(state: Phase1State, plot_slot: w.Box) -> None:
-    if state.fig is not None and state.ax is not None:
-        return
+    # Check if backend is already suitable
+    current = mpl.get_backend().lower()
+    if "ipympl" in current or "nbagg" in current or "widget" in current:
+        return True, f"Interactive backend already active: {mpl.get_backend()}"
 
-    was_interactive = plt.isinteractive()
+    # Prefer ipympl widget backend if available
     try:
-        plt.ioff()
-        fig, ax = plt.subplots()
-    finally:
-        if was_interactive:
-            plt.ion()
+        import ipympl  # noqa: F401
+        try:
+            mpl.use("module://ipympl.backend_nbagg", force=True)
+            return True, "Interactive backend enabled: ipympl widget."
+        except Exception:
+            pass
+    except ImportError:
+        pass
 
-    ax.set_title("Phase I plot")
-    ax.set_xlabel("t (s)")
-    ax.set_ylabel("signal")
-    state.fig, state.ax = fig, ax
-
-    if isinstance(fig.canvas, w.Widget):
-        plot_slot.children = (fig.canvas,)
-    else:
-        plot_slot.children = (w.HTML("Non-interactive backend. In the first cell run: %matplotlib widget (ipympl)."),)
+    # Fall back to nbagg
+    try:
+        mpl.use("nbagg", force=True)
+        return True, "Interactive backend enabled: nbagg."
+    except Exception as exc:
+        return False, f"Interactive backend unavailable (plots may be static): {exc}"
 
 
-def _redraw(fig) -> None:
-    if fig is None:
-        return
-    if hasattr(fig.canvas, "draw_idle"):
-        fig.canvas.draw_idle()
-    else:
-        fig.canvas.draw()
+def _get_pyplot():
+    """Import pyplot lazily (backend should already be configured)."""
+    import matplotlib.pyplot as plt
+    return plt
 
 
 def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
     """
-    Phase I panel (catalog discovery + segment load + preview/diagnostics).
-    Stores the loaded SegmentFrame into shared["segment_frame"] for Phase II.
+    Catalog panel (measurement discovery + segment load + preview/diagnostics).
+    Stores the loaded SegmentFrame into shared["segment_frame"] for downstream tabs.
     """
-    st = Phase1State()
+    st = CatalogState()
 
     folder = w.Text(
         description="Folder",
@@ -162,9 +170,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
     log = HtmlLog(height_px=220)
 
     table_html = w.HTML(value="<div style='color:#666;'>No segment loaded.</div>")
-    plot_slot = w.Box(layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%"))
-
-    _init_plot_once(st, plot_slot)
+    out_plot = w.Output(layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%", height="320px"))
 
     def _log(msg: str) -> None:
         s = "" if msg is None else str(msg)
@@ -263,7 +269,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
             shared["segment_frame"] = None
             shared["segment_path"] = None
 
-            table_html.value = "<div style='color:#666;'>Catalog loaded. Select run/aperture/segment, then “Load segment”.</div>"
+            table_html.value = "<div style='color:#666;'>Catalog loaded. Select run/aperture/segment, then 'Load segment'.</div>"
 
             if cat.warnings:
                 _log("WARNINGS:")
@@ -332,13 +338,38 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
         t = segf.df["t"].to_numpy()[:n]
         y = segf.df[ycol].to_numpy()[:n]
 
-        ax = st.ax
-        ax.clear()
-        ax.plot(t, y, "-", linewidth=1.0)
-        ax.set_title(title)
-        ax.set_xlabel("t (s)")
-        ax.set_ylabel(ycol)
-        _redraw(st.fig)
+        mpl_plt = _get_pyplot()
+
+        # Close any previous figure stored in state (prevents lingering references)
+        if st.fig is not None:
+            try:
+                mpl_plt.close(st.fig)
+            except Exception:
+                pass
+            st.fig = None
+
+        out_plot.clear_output(wait=True)
+        try:
+            mpl_plt.close("all")
+        except Exception:
+            pass
+
+        with out_plot:
+            fig, ax = mpl_plt.subplots(figsize=(8.0, 3.5))
+            ax.plot(t, y, "-", linewidth=1.0)
+            ax.set_title(title)
+            ax.set_xlabel("t (s)")
+            ax.set_ylabel(ycol)
+            ax.grid(True)
+            mpl_plt.tight_layout()
+            mpl_plt.show()
+
+            # Verify exactly one line was plotted (debug assertion)
+            n_lines = len(ax.get_lines())
+            if n_lines != 1:
+                _log(f"WARNING: Expected 1 line, got {n_lines} on axes")
+
+            st.fig = fig
 
     def _on_load_segment(_):
         try:
@@ -349,16 +380,26 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
             for m in segf.warnings:
                 _log(f"CHECK: {m}")
             table_html.value = _df_head_to_html(segf.df, n=12, title="SegmentFrame.df head(12)")
-            _done("segment loaded (Phase II ready)")
+            _done("segment loaded (Harmonics tab ready)")
         except Exception as e:
             _log(f"ERROR: {repr(e)}")
             _done("error")
 
     def _on_preview(_):
+        # Debounce: prevent duplicate invocations within 250ms
+        now = time.monotonic()
+        if st.last_action_key == "preview" and (now - st.last_action_t) < 0.25:
+            return
+        if st.busy:
+            return
+        st.last_action_key = "preview"
+        st.last_action_t = now
+        st.busy = True
+
         try:
             _start("Preview…")
             if st.segf is None:
-                _log("WARNING: No segment loaded yet. Click “Load segment” first.")
+                _log("WARNING: No segment loaded yet. Click 'Load segment' first.")
                 _done("no segment")
                 return
             segf = st.segf
@@ -371,12 +412,14 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
         except Exception as e:
             _log(f"ERROR: {repr(e)}")
             _done("error")
+        finally:
+            st.busy = False
 
     def _on_diag(_):
         try:
             _start("Diagnostics…")
             if st.segf is None:
-                _log("WARNING: No segment loaded yet. Click “Load segment” first.")
+                _log("WARNING: No segment loaded yet. Click 'Load segment' first.")
                 _done("no segment")
                 return
             segf = st.segf
@@ -427,7 +470,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
     top = w.HBox([folder, btn_browse, btn_load_cat])
     mid = w.HBox([dd_run, dd_ap, dd_seg, mode_dd, btn_load_seg, btn_preview, btn_diag, append_log])
 
-    plot_box = w.VBox([w.HTML("<b>Plot</b>"), plot_slot], layout=w.Layout(width="100%"))
+    plot_box = w.VBox([w.HTML("<b>Plot</b>"), out_plot], layout=w.Layout(width="100%"))
     table_box = w.VBox([w.HTML("<b>Table preview</b>"), table_html], layout=w.Layout(width="100%"))
     diag_box = w.VBox(
         [
@@ -449,7 +492,7 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
 
 def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     """
-    Combined Phase I + Phase II + Phase III + Plots GUI (four tabs).
+    Main GUI with five tabs: Catalog, Harmonics, Coil Calibration, Harmonic Merge, Plots.
 
     VS Code notebook rule:
       If you re-run the launch cell without clearing the cell output, you may end up with
@@ -474,6 +517,9 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
         _ACTIVE_GUI = None
 
     _close_all_figures()
+
+    # Ensure interactive matplotlib backend is configured before building any panels
+    _try_enable_interactive_backend_once()
 
     shared: Dict[str, Any] = {
         "catalog": None,
@@ -508,10 +554,10 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     phase4 = build_phase4_plots_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
 
     tabs = w.Tab(children=[phase1, phase2, phase3a, phase3b, phase4])
-    tabs.set_title(0, "Phase I — Catalog")
-    tabs.set_title(1, "Phase II — FFT")
-    tabs.set_title(2, "Phase 3A — Coil Calibration")
-    tabs.set_title(3, "Phase 3B — Harmonic Merge")
+    tabs.set_title(0, "Catalog")
+    tabs.set_title(1, "Harmonics")
+    tabs.set_title(2, "Coil Calibration")
+    tabs.set_title(3, "Harmonic Merge")
     tabs.set_title(4, "Plots")
 
     def _on_tab_change(change):
@@ -540,7 +586,7 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
 
 
 def build_catalog_gui() -> w.Widget:
-    """Return only the Phase I panel (catalog/preview/diagnostics)."""
+    """Return only the Catalog panel (browse/preview/diagnostics)."""
     shared: Dict[str, Any] = {"catalog": None, "segment_frame": None, "segment_path": None}
     return _build_phase1_panel(shared)
 

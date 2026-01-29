@@ -3,7 +3,18 @@
     "allow": [
       "Bash(python -m pytest:*)",
       "Bash(py -m pytest:*)",
-      "Bash(py:*)"
+      "Bash(py:*)",
+      "Bash(del \"C:\\\\Users\\\\albellel\\\\python-projects\\\\rotating-coil-analyzer\\\\rotating_coil_analyzer\\\\analysis\\\\preprocess.bak\")",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\albellel\\\\python-projects\\\\rotating-coil-analyzer\" -File)",
+      "Bash(Select-Object -ExpandProperty Name)",
+      "Bash(del \"\\\\?\\\\C:\\\\Users\\\\albellel\\\\python-projects\\\\rotating-coil-analyzer\\\\nul\")",
+      "Bash(cmd.exe /c 'del \"\"\\\\\\\\?\\\\C:\\\\Users\\\\albellel\\\\python-projects\\\\rotating-coil-analyzer\\\\nul\"\"')",
+      "Bash(powershell.exe -Command \"Remove-Item -LiteralPath ''\\\\?\\\\C:\\\\Users\\\\albellel\\\\python-projects\\\\rotating-coil-analyzer\\\\nul'' -Force\")",
+      "Bash(cmd.exe /c \"del /f /q \\\\?\\\\C:\\\\Users\\\\albellel\\\\python-projects\\\\rotating-coil-analyzer\\\\nul\")",
+      "Bash(powershell.exe -Command \"Get-ChildItem -Force | Where-Object { $_.Name -eq ''nul'' } | Format-List *\")",
+      "Bash(git add:*)"
     ]
   }
 }

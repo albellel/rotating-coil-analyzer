@@ -45,6 +45,10 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+.claude/
+
+# Windows reserved filenames (can't be deleted easily)
+nul
 
 # =========================
 # Project outputs (do not version)
@@ -62,6 +66,11 @@ data/raw/
 data/large/
 *.bin
 # If you want to keep small example .bin files under version control, remove the line above.
+
+# =========================
+# Golden standards (local validation data, too large for git)
+# =========================
+golden_standards/
 
 # =========================
 # Optional: local scratch notebooks

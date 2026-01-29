@@ -25,12 +25,12 @@ from rotating_coil_analyzer.analysis.preprocess import (
 )
 
 
-# Keep a single active Phase II panel per kernel (defensive: prevents stacked live instances).
-_ACTIVE_PHASE2_PANEL: Optional[w.Widget] = None
+# Keep a single active Harmonics panel per kernel (defensive: prevents stacked live instances).
+_ACTIVE_HARMONICS_PANEL: Optional[w.Widget] = None
 
 
 @dataclass
-class Phase2State:
+class HarmonicsState:
     segf: Optional[SegmentFrame] = None
     tb: Any = None
     valid_turn: Optional[np.ndarray] = None
@@ -247,17 +247,17 @@ def _clear_button_handlers(btn: w.Button) -> None:
 
 
 def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) -> w.Widget:
-    global _ACTIVE_PHASE2_PANEL
+    global _ACTIVE_HARMONICS_PANEL
 
     # Close any previous Phase II panel (defensive against stacked live instances).
-    if _ACTIVE_PHASE2_PANEL is not None:
+    if _ACTIVE_HARMONICS_PANEL is not None:
         try:
-            _ACTIVE_PHASE2_PANEL.close()
+            _ACTIVE_HARMONICS_PANEL.close()
         except Exception:
             pass
-        _ACTIVE_PHASE2_PANEL = None
+        _ACTIVE_HARMONICS_PANEL = None
 
-    state = Phase2State()
+    state = HarmonicsState()
 
     STYLE_WIDE = {"description_width": "190px"}
     STYLE_MED = {"description_width": "150px"}
@@ -438,7 +438,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     out_log = log.output_proxy()
     table_html = w.HTML(value="<div style='color:#666;'>Table is empty.</div>")
 
-    plot_slot = w.Box(layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%"))
+    out_plot = w.Output(layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%", height="420px"))
 
     # ---------------------------
     # Helpers
@@ -446,37 +446,23 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     def _set_status(msg: str):
         status.value = f"<b>Status:</b> {msg}"
 
-    def _init_plot_once():
-        if state.fig is not None and state.ax is not None:
-            return
+    def _clear_and_close():
+        """Clear output widget and close all matplotlib figures.
 
-        was_interactive = plt.isinteractive()
+        MUST be called inside `with out_plot:` context for proper clearing.
+        """
+        out_plot.clear_output(wait=True)
         try:
-            plt.ioff()
-            fig, ax = plt.subplots(figsize=(7.4, 5.0), constrained_layout=True)
-        finally:
-            if was_interactive:
-                plt.ion()
-
-        state.fig, state.ax = fig, ax
-        plot_slot.children = (fig.canvas,)
-
-    def _clear_ax():
-        if state.ax is not None:
-            state.ax.clear()
-
-    def _draw():
-        if state.fig is None:
-            return
-        # Reserve extra top margin for wrapped titles (defensive).
-        try:
-            state.fig.subplots_adjust(top=0.86)
+            plt.close("all")
         except Exception:
             pass
-        if hasattr(state.fig.canvas, "draw_idle"):
-            state.fig.canvas.draw_idle()
-        else:
-            state.fig.canvas.draw()
+
+    def _show_plot(fig):
+        """Display the figure and store reference for saving."""
+        state.fig = fig
+        state.ax = None  # Not used in Output pattern
+        plt.tight_layout()
+        plt.show()
 
     def _get_table(key: str) -> Optional[pd.DataFrame]:
         return getattr(state, key, None)
@@ -614,7 +600,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
         if not _start_action("preview", "Previewing data-quality cuts…"):
             return
         try:
-            _init_plot_once()
+            # Note: plot initialization is handled by _clear_and_close()/_show_plot() inside `with out_plot:` blocks
 
             segf = get_segmentframe_callable()
             if segf is None:
@@ -904,8 +890,6 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
         if not _start_action("plot_amp", "Updating amplitude-versus-current plot…"):
             return
         try:
-            _init_plot_once()
-
             if state.df_out is None:
                 with out_log:
                     print("No results available yet. Run: Preview → Apply cuts and compute harmonics (FFT).")
@@ -930,31 +914,33 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
 
             current_col = _pick_current_column_name(df)
 
-            _clear_ax()
+            with out_plot:
+                _clear_and_close()  # Must be inside `with` context to clear properly
+                fig, ax = plt.subplots(figsize=(7.4, 5.0))
 
-            if "plateau_id" in df.columns:
-                g = df.groupby("plateau_id", sort=True)
-                x = g[current_col].mean().values
-                y = g[amp_col].mean().values
-                yerr = g[amp_col].std().values
-                state.ax.errorbar(x, y, yerr=yerr, fmt="o", capsize=3)
-                ttl = f"Amplitude versus current — order {n} ({title_chan} channel) — plateau mean ± standard deviation"
-            else:
-                x = df[current_col].values
-                y = df[amp_col].values
-                state.ax.plot(x, y, marker="o", linestyle="None")
-                ttl = f"Amplitude versus current — order {n} ({title_chan} channel)"
+                if "plateau_id" in df.columns:
+                    g = df.groupby("plateau_id", sort=True)
+                    x = g[current_col].mean().values
+                    y = g[amp_col].mean().values
+                    yerr = g[amp_col].std().values
+                    ax.errorbar(x, y, yerr=yerr, fmt="o", capsize=3)
+                    ttl = f"Amplitude versus current — order {n} ({title_chan} channel) — plateau mean ± standard deviation"
+                else:
+                    x = df[current_col].values
+                    y = df[amp_col].values
+                    ax.plot(x, y, marker="o", linestyle="None")
+                    ttl = f"Amplitude versus current — order {n} ({title_chan} channel)"
 
-            t = state.ax.set_title(_wrap_title(ttl, width=44), fontsize=11, pad=10)
-            try:
-                t.set_wrap(True)
-            except Exception:
-                pass
+                t = ax.set_title(_wrap_title(ttl, width=44), fontsize=11, pad=10)
+                try:
+                    t.set_wrap(True)
+                except Exception:
+                    pass
 
-            state.ax.set_xlabel("Mean current [A]")
-            state.ax.set_ylabel(f"Amplitude |C_{n}| (internal units)")
-            state.ax.grid(True)
-            _draw()
+                ax.set_xlabel("Mean current [A]")
+                ax.set_ylabel(f"Amplitude |C_{n}| (internal units)")
+                ax.grid(True)
+                _show_plot(fig)
 
             _end_action(ok=True, msg="plot updated")
         except Exception as e:
@@ -966,8 +952,6 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
         if not _start_action("plot_ns", "Updating normal/skew versus harmonic order…"):
             return
         try:
-            _init_plot_once()
-
             if state.mean_ba is None or state.std_ba is None:
                 with out_log:
                     print("No normal/skew results available yet. Run: Preview → Apply cuts and compute harmonics (FFT).")
@@ -1030,42 +1014,44 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 _end_action(ok=False, msg="no harmonic columns")
                 return
 
-            _clear_ax()
+            with out_plot:
+                _clear_and_close()  # Must be inside `with` context to clear properly
+                fig, ax = plt.subplots(figsize=(7.4, 5.0))
 
-            x = np.arange(orders.size, dtype=float)
-            width = 0.42
+                x = np.arange(orders.size, dtype=float)
+                width = 0.42
 
-            state.ax.bar(x - width / 2, B, width=width, label="Normal (B_n)")
-            state.ax.bar(x + width / 2, A, width=width, label="Skew (A_n)")
+                ax.bar(x - width / 2, B, width=width, label="Normal (B_n)")
+                ax.bar(x + width / 2, A, width=width, label="Skew (A_n)")
 
-            if np.any(np.isfinite(sB)):
-                state.ax.errorbar(x - width / 2, B, yerr=sB, fmt="none", capsize=3)
-            if np.any(np.isfinite(sA)):
-                state.ax.errorbar(x + width / 2, A, yerr=sA, fmt="none", capsize=3)
+                if np.any(np.isfinite(sB)):
+                    ax.errorbar(x - width / 2, B, yerr=sB, fmt="none", capsize=3)
+                if np.any(np.isfinite(sA)):
+                    ax.errorbar(x + width / 2, A, yerr=sA, fmt="none", capsize=3)
 
-            state.ax.set_xticks(x)
-            state.ax.set_xticklabels([str(int(n)) for n in orders])
-            state.ax.set_xlabel("Harmonic order n")
-            state.ax.set_ylabel("Normal / Skew (legacy convention)")
+                ax.set_xticks(x)
+                ax.set_xticklabels([str(int(n)) for n in orders])
+                ax.set_xlabel("Harmonic order n")
+                ax.set_ylabel("Normal / Skew (legacy convention)")
 
-            I = state.plateau_current_map.get(pid, float("nan")) if state.plateau_current_map else float("nan")
-            if np.isfinite(I):
-                ttl = f"Normal and skew versus harmonic order — {title_chan} channel — Plateau {pid} at {I:.6g} A"
-            else:
-                ttl = f"Normal and skew versus harmonic order — {title_chan} channel — Plateau {pid}"
+                I = state.plateau_current_map.get(pid, float("nan")) if state.plateau_current_map else float("nan")
+                if np.isfinite(I):
+                    ttl = f"Normal and skew versus harmonic order — {title_chan} channel — Plateau {pid} at {I:.6g} A"
+                else:
+                    ttl = f"Normal and skew versus harmonic order — {title_chan} channel — Plateau {pid}"
 
-            if hide_main_in_ns.value:
-                ttl += f" (main field order {int(main_order.value)} hidden)"
+                if hide_main_in_ns.value:
+                    ttl += f" (main field order {int(main_order.value)} hidden)"
 
-            t = state.ax.set_title(_wrap_title(ttl, width=44), fontsize=11, pad=10)
-            try:
-                t.set_wrap(True)
-            except Exception:
-                pass
+                t = ax.set_title(_wrap_title(ttl, width=44), fontsize=11, pad=10)
+                try:
+                    t.set_wrap(True)
+                except Exception:
+                    pass
 
-            state.ax.grid(True, axis="y")
-            state.ax.legend()
-            _draw()
+                ax.grid(True, axis="y")
+                ax.legend()
+                _show_plot(fig)
 
             _end_action(ok=True, msg="plot updated")
         except Exception as e:
@@ -1178,8 +1164,6 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     btn_save_table.on_click(_save_table)
     btn_show_head.on_click(_show_head)
 
-    _init_plot_once()
-
     # ---------------------------
     # Layout: two columns
     # ---------------------------
@@ -1239,7 +1223,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             view2_box,
             export_box,
             w.HTML("<b>Plot</b>"),
-            plot_slot,
+            out_plot,
             w.HTML("<b>Table</b>"),
             table_html,
         ],
@@ -1261,5 +1245,5 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     _refresh_apply_button_outer()
 
     panel = w.HBox([left_panel, right_panel], layout=w.Layout(width="100%"))
-    _ACTIVE_PHASE2_PANEL = panel
+    _ACTIVE_HARMONICS_PANEL = panel
     return panel

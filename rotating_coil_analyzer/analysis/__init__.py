@@ -1,8 +1,8 @@
-"""Phase II analysis package.
+"""Analysis package for rotating coil data.
 
 Design principle:
-  - Ingest (Phase I) produces validated :class:`~rotating_coil_analyzer.models.frames.SegmentFrame` objects.
-  - Analysis (Phase II) consumes SegmentFrame and produces derived quantities.
+  - Ingest (Catalog) produces validated :class:`~rotating_coil_analyzer.models.frames.SegmentFrame` objects.
+  - Analysis (Harmonics, Coil Calibration, Merge) consumes SegmentFrame and produces derived quantities.
 
 Project-wide hard constraint:
   - No synthetic/modified time is allowed anywhere.

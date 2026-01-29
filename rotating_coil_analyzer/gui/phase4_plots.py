@@ -1,5 +1,5 @@
 """
-Phase IV (Plots) — Exploration plots.
+Plots tab — Exploration plots.
 
 Design goals:
 - Read-only with respect to analysis pipeline.
@@ -124,7 +124,7 @@ def build_phase4_plots_panel(
     get_segmentpath_callable: Optional[Callable[[], Optional[str]]] = None,
 ) -> w.Widget:
     """
-    Build Phase IV panel.
+    Build Catalog tabV panel.
 
     Expected SegmentFrame interface (duck-typed):
         - seg.df: pandas.DataFrame with at least `t` and (often) `I`, `df_abs`, `df_cmp`.
@@ -337,7 +337,7 @@ def build_phase4_plots_panel(
 
         seg = _get_seg()
         if seg is None:
-            log.write("No segment loaded. Load a segment in Phase I first.")
+            log.write("No segment loaded. Load a segment in Catalog tab first.")
             return
         df = _get_df(seg)
         if df is None:
@@ -480,7 +480,7 @@ def build_phase4_plots_panel(
     def _on_plot_current(_btn):
         seg = _get_seg()
         if seg is None or _get_df(seg) is None:
-            log.write("No segment loaded. Load a segment in Phase I first.")
+            log.write("No segment loaded. Load a segment in Catalog tab first.")
             return
         df = _get_df(seg)
         col = _resolve_column(df.columns, ["I", "current", "Current"])
@@ -492,7 +492,7 @@ def build_phase4_plots_panel(
     def _on_plot_abs(_btn):
         seg = _get_seg()
         if seg is None or _get_df(seg) is None:
-            log.write("No segment loaded. Load a segment in Phase I first.")
+            log.write("No segment loaded. Load a segment in Catalog tab first.")
             return
         df = _get_df(seg)
         col = _resolve_column(df.columns, ["df_abs", "abs", "Abs", "absolute", "Absolute"])
@@ -504,7 +504,7 @@ def build_phase4_plots_panel(
     def _on_plot_cmp(_btn):
         seg = _get_seg()
         if seg is None or _get_df(seg) is None:
-            log.write("No segment loaded. Load a segment in Phase I first.")
+            log.write("No segment loaded. Load a segment in Catalog tab first.")
             return
         df = _get_df(seg)
         col = _resolve_column(df.columns, ["df_cmp", "cmp", "Cmp", "compensated", "Compensated"])
@@ -584,7 +584,7 @@ def build_phase4_plots_panel(
     # -----------------------
 
     header = w.HTML(
-        "<h3>Phase IV — Exploration plots</h3>"
+        "<h3>Exploration Plots</h3>"
         "<div style='color:#666;'>Read-only plots using measured time (no resampling). "
         "Downsampling is decimation only. Zoom/pan is available when your notebook backend supports it.</div>"
     )

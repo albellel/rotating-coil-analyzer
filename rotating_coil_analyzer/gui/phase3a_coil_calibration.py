@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Phase 3A GUI: Coil Calibration (kn loading and computation).
+"""Coil Calibration GUI tab (kn loading and computation).
 
 This tab is responsible for:
 1. Loading segment kn from a TXT file, OR
@@ -9,7 +9,7 @@ This tab is responsible for:
 Output: A KnBundle object stored in shared state, which carries full provenance
 metadata (source type, file paths, connection specs, timestamps).
 
-Non-goals (handled by Phase 3B):
+Non-goals (handled by Harmonic Merge tab):
 - Applying kn to harmonics
 - Merging Abs/Cmp channels
 """
@@ -39,7 +39,7 @@ _ACTIVE_PHASE3A_PANEL: Optional[w.Widget] = None
 
 
 @dataclass
-class Phase3AState:
+class CoilCalibrationState:
     """Local state for the Coil Calibration tab."""
     segf: Optional[SegmentFrame] = None
     seg_path: Optional[str] = None
@@ -133,7 +133,7 @@ def build_phase3a_coil_calibration_panel(
     get_segmentpath_callable: Callable[[], Optional[str]] | None = None,
     set_kn_bundle_callable: Callable[[Optional[KnBundle]], None] | None = None,
 ) -> w.Widget:
-    """Build the Phase 3A (Coil Calibration) panel.
+    """Build the Coil Calibration panel.
 
     Parameters
     ----------
@@ -153,7 +153,7 @@ def build_phase3a_coil_calibration_panel(
             pass
         _ACTIVE_PHASE3A_PANEL = None
 
-    st = Phase3AState()
+    st = CoilCalibrationState()
 
     log = HtmlLog(title="Coil Calibration log")
     status = w.HTML("<b>Status:</b> idle")
@@ -161,7 +161,7 @@ def build_phase3a_coil_calibration_panel(
     # ---- Context display ----
     context_html = w.HTML(
         "<div style='color:#666; padding:4px; background:#f8f8f8; border:1px solid #ddd;'>"
-        "No segment loaded. Load a measurement in Phase I first."
+        "No segment loaded. Load a measurement in the Catalog tab first."
         "</div>"
     )
 
@@ -244,12 +244,12 @@ def build_phase3a_coil_calibration_panel(
         status.value = f"<b>Status:</b> {msg}"
 
     def _refresh_context() -> None:
-        """Update context display from Phase I."""
+        """Update context display from Catalog tab."""
         segf = get_segmentframe_callable()
         if segf is None:
             context_html.value = (
                 "<div style='color:#666; padding:4px; background:#f8f8f8; border:1px solid #ddd;'>"
-                "No segment loaded. Load a measurement in Phase I first."
+                "No segment loaded. Load a measurement in the Catalog tab first."
                 "</div>"
             )
             st.segf = None
@@ -459,10 +459,10 @@ def build_phase3a_coil_calibration_panel(
 
     # ---- Layout ----
     header = w.HTML(
-        "<h3 style='margin:0;'>Phase 3A: Coil Calibration (Sensitivity Coefficients)</h3>"
+        "<h3 style='margin:0;'>Coil Calibration (Sensitivity Coefficients)</h3>"
         "<div style='color:#555; line-height:1.35; margin-bottom:8px;'>"
         "Load kn from a TXT file or compute from measurement-head geometry CSV. "
-        "The resulting KnBundle is passed to the Harmonic Merge tab (Phase 3B)."
+        "The resulting KnBundle is passed to the Harmonic Merge tab."
         "</div>"
     )
 
