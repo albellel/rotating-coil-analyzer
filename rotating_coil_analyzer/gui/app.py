@@ -20,8 +20,11 @@ from rotating_coil_analyzer.models.catalog import MeasurementCatalog
 from rotating_coil_analyzer.models.frames import SegmentFrame
 
 from rotating_coil_analyzer.gui.phase2 import build_phase2_panel
-from rotating_coil_analyzer.gui.phase3_kn import build_phase3_kn_panel
+from rotating_coil_analyzer.gui.phase3_kn import build_phase3_kn_panel  # Legacy (kept for backward compat)
+from rotating_coil_analyzer.gui.phase3a_coil_calibration import build_phase3a_coil_calibration_panel
+from rotating_coil_analyzer.gui.phase3b_harmonic_merge import build_phase3b_harmonic_merge_panel
 from rotating_coil_analyzer.gui.phase4_plots import build_phase4_plots_panel
+from rotating_coil_analyzer.analysis.kn_bundle import KnBundle, MergeResult
 
 
 # Keep a single active GUI instance per kernel (prevents multiple live instances).
@@ -476,22 +479,44 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
         "catalog": None,
         "segment_frame": None,
         "segment_path": None,
+        "kn_bundle": None,
+        "merge_result": None,
     }
+
+    def set_kn_bundle(bundle: Optional[KnBundle]) -> None:
+        shared["kn_bundle"] = bundle
+
+    def set_merge_result(result: Optional[MergeResult]) -> None:
+        shared["merge_result"] = result
 
     phase1 = _build_phase1_panel(shared)
     phase2 = build_phase2_panel(lambda: shared.get("segment_frame"))
-    phase3 = build_phase3_kn_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
+
+    # New split tabs: Coil Calibration (3A) and Harmonic Merge (3B)
+    phase3a = build_phase3a_coil_calibration_panel(
+        lambda: shared.get("segment_frame"),
+        lambda: shared.get("segment_path"),
+        set_kn_bundle,
+    )
+    phase3b = build_phase3b_harmonic_merge_panel(
+        lambda: shared.get("segment_frame"),
+        lambda: shared.get("segment_path"),
+        lambda: shared.get("kn_bundle"),
+        set_merge_result,
+    )
+
     phase4 = build_phase4_plots_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
 
-    tabs = w.Tab(children=[phase1, phase2, phase3, phase4])
+    tabs = w.Tab(children=[phase1, phase2, phase3a, phase3b, phase4])
     tabs.set_title(0, "Phase I — Catalog")
     tabs.set_title(1, "Phase II — FFT")
-    tabs.set_title(2, "Phase III — Kn")
-    tabs.set_title(3, "Plots")
+    tabs.set_title(2, "Phase 3A — Coil Calibration")
+    tabs.set_title(3, "Phase 3B — Harmonic Merge")
+    tabs.set_title(4, "Plots")
 
     def _on_tab_change(change):
         try:
-            if change.get("name") == "selected_index" and change.get("new") == 3:
+            if change.get("name") == "selected_index" and change.get("new") == 4:
                 refresh = getattr(phase4, "_phase4_refresh_columns", None)
                 if callable(refresh):
                     refresh()
@@ -502,7 +527,7 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
 
     # If the GUI opens already on Plots tab, refresh once
     try:
-        if getattr(tabs, "selected_index", 0) == 3:
+        if getattr(tabs, "selected_index", 0) == 4:
             refresh = getattr(phase4, "_phase4_refresh_columns", None)
             if callable(refresh):
                 refresh()
