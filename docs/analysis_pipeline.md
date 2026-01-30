@@ -204,7 +204,7 @@ Five implementations have been compared step by step:
 
 ### Rotation loop bounds
 
-The C++ code rotates harmonics k=1..H-1, leaving the last harmonic unrotated. The Python implementation replicates this via `legacy_rotate_excludes_last=True` (default). Setting it to `False` would rotate all H harmonics.
+The C++ code rotates ALL harmonics k=1..H. Parity validation confirms that `legacy_rotate_excludes_last=False` is required to match the C++ output. The Python default (`True`) excludes the last harmonic; set it to `False` for golden-standard parity.
 
 ### Normalisation source
 
