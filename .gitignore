@@ -83,3 +83,13 @@ golden_standards/
 # Optional: local scratch notebooks
 # =========================
 notebooks/_scratch/
+
+# =========================
+# Measurement data (raw acquisition, too large for git)
+# =========================
+measurements/
+
+# =========================
+# Local analysis output (notebook exports, plots, etc.)
+# =========================
+output/
