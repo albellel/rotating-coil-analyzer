@@ -293,10 +293,8 @@ def parse_connection(conn: str) -> List[Tuple[float, KnIndex]]:
     if not s:
         return []
 
-    # Normalize separators: replace '-' with '+-' but keep leading '-'
+    # Normalize separators: replace '-' with '+-'
     s2 = s.replace(" ", "")
-    if s2.startswith("-"):
-        s2 = "0" + s2
     s2 = s2.replace("-", "+-")
     parts = [p for p in s2.split("+") if p]
 
