@@ -10,7 +10,7 @@ import numpy as np
 class TurnQC:
     """Quality-control flags at turn granularity.
 
-    This structure is intentionally minimal. It is meant to be extended during Phase II.
+    This structure is intentionally minimal. It is meant to be extended during harmonic analysis.
 
     Attributes
     ----------

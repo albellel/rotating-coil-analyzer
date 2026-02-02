@@ -9,7 +9,7 @@ from rotating_coil_analyzer.analysis.turns import split_into_turns
 from rotating_coil_analyzer.analysis.fourier import dft_per_turn
 
 
-class TestPhase2TurnsFourier(unittest.TestCase):
+class TestTurnsFourier(unittest.TestCase):
     def test_split_into_turns_shapes_and_plateau_id(self):
         Ns = 8
         n_turns = 2

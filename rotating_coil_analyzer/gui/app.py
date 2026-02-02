@@ -20,11 +20,10 @@ from rotating_coil_analyzer.ingest.readers_plateau import PlateauReader, Plateau
 from rotating_coil_analyzer.models.catalog import MeasurementCatalog
 from rotating_coil_analyzer.models.frames import SegmentFrame
 
-from rotating_coil_analyzer.gui.phase2 import build_phase2_panel
-from rotating_coil_analyzer.gui.phase3_kn import build_phase3_kn_panel  # Legacy (kept for backward compat)
-from rotating_coil_analyzer.gui.phase3a_coil_calibration import build_phase3a_coil_calibration_panel
-from rotating_coil_analyzer.gui.phase3b_harmonic_merge import build_phase3b_harmonic_merge_panel
-from rotating_coil_analyzer.gui.phase4_plots import build_phase4_plots_panel
+from rotating_coil_analyzer.gui.harmonics import build_phase2_panel
+from rotating_coil_analyzer.gui.coil_calibration import build_phase3a_coil_calibration_panel
+from rotating_coil_analyzer.gui.harmonic_merge import build_phase3b_harmonic_merge_panel
+from rotating_coil_analyzer.gui.plots import build_phase4_plots_panel
 from rotating_coil_analyzer.analysis.kn_bundle import KnBundle, MergeResult
 
 

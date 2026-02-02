@@ -15,7 +15,7 @@ Legacy parity notes
 The legacy analyzers apply some optional preprocessing steps *before* FFT:
 
 - ``dit`` / ``di/dt`` current-ramp correction (uses measured time + current)
-- Drift correction (legacy uniform-Δt or Bottura/Pentella Δt-weighted)
+- Drift correction (legacy uniform-Δt or Bottura Δt-weighted)
 
 These are implemented in :mod:`rotating_coil_analyzer.analysis.preprocess`.
 """
@@ -35,7 +35,7 @@ from .preprocess import (
     provenance_columns,
 )
 
-from .kn_pipeline import SegmentKn, LegacyKnPerTurn, load_segment_kn_txt, compute_legacy_kn_per_turn, merge_coefficients
+from .kn_pipeline import SegmentKn, LegacyKnPerTurn, load_segment_kn_txt, compute_legacy_kn_per_turn, merge_coefficients, safe_normalize_to_units, compute_from_profile
 from .merge import MergeDiagnostics, recommend_merge_choice
 from .kn_head import HeadKnData, compute_head_kn_from_csv, compute_segment_kn_from_head, write_segment_kn_txt
 from .kn_bundle import KnBundle, MergeResult, CHANNEL_ABS, CHANNEL_CMP, CHANNEL_EXT, CHANNEL_NAMES
@@ -62,6 +62,8 @@ __all__ = [
     "load_segment_kn_txt",
     "compute_legacy_kn_per_turn",
     "merge_coefficients",
+    "safe_normalize_to_units",
+    "compute_from_profile",
     "MergeDiagnostics",
     "recommend_merge_choice",
 

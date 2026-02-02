@@ -184,6 +184,7 @@ def compute_legacy_kn_per_turn(
     skew_main: bool = False,
     eps_main: float = 1e-20,
     legacy_rotate_excludes_last: bool = True,
+    max_zR: float = 1.0,
 ) -> LegacyKnPerTurn:
     """Compute legacy per-turn harmonics with $k_n$ application.
 
@@ -210,6 +211,12 @@ def compute_legacy_kn_per_turn(
         in the normalization step (legacy "skw" option).
     legacy_rotate_excludes_last:
         If True, replicate the legacy loop bounds which do not rotate the last harmonic.
+    max_zR:
+        Maximum allowed |zR| (center offset / R_ref) before clamping to 0.
+        Default 1.0 preserves legacy behaviour.  For dipoles with AC
+        compensation where the CEL uses noise-level compensated harmonics
+        (n=10, 11), a tighter value (e.g. 0.01) prevents feeddown Taylor
+        expansion from amplifying noise.
 
     Returns
     -------
@@ -286,10 +293,7 @@ def compute_legacy_kn_per_turn(
     arg_m = np.angle(c_m)
     bad_phi = (~np.isfinite(mag_m)) | (mag_m < float(eps_main)) | (~np.isfinite(arg_m))
     arg_wrapped = _wrap_arg_to_pm_pi_over_2(arg_m)
-    phi_out = arg_wrapped / float(m)
-    if np.any(bad_phi):
-        phi_out = np.array(phi_out, copy=True)
-        phi_out[bad_phi] = 0.0
+    phi_out = np.where(bad_phi, 0.0, arg_wrapped / float(m))
 
     # --- rotation (optional) ---
     if "rot" in opt:
@@ -313,16 +317,23 @@ def compute_legacy_kn_per_turn(
             if H >= 11:
                 Cn_1 = C_cmp[:, 9]
                 Cn_2 = C_cmp[:, 10]
-                zR = -(Cn_1 / (10.0 * Cn_2))
-            else:
-                zR[:] = np.nan + 1j * np.nan
+                ok_cel = np.isfinite(Cn_2) & (np.abs(Cn_2) > float(eps_main))
+                zR[ok_cel] = -(Cn_1[ok_cel] / (10.0 * Cn_2[ok_cel]))
+            # else: zR stays 0+0j (initialized above)
         else:
             if m >= 2:
                 Cn_1 = C_abs[:, m - 2]
                 Cn_2 = C_abs[:, m - 1]
-                zR = -(Cn_1 / ((m - 1.0) * Cn_2))
-            else:
-                zR[:] = np.nan + 1j * np.nan
+                ok_cel = np.isfinite(Cn_2) & (np.abs(Cn_2) > float(eps_main))
+                zR[ok_cel] = -(Cn_1[ok_cel] / ((m - 1.0) * Cn_2[ok_cel]))
+            # else: zR stays 0+0j
+
+        # Clamp physically unreasonable center offsets.  The feeddown Taylor
+        # expansion amplifies noise as comb(k,n) * zR^(k-n); for H=15,
+        # comb(14,7)*|zR|^7 ~ 27 at |zR|=0.5.  Use max_zR to control.
+        bad_zR = ~np.isfinite(zR) | (np.abs(zR) > float(max_zR))
+        if np.any(bad_zR):
+            zR[bad_zR] = 0.0
 
         z = Rref * zR
         x = np.real(z)
@@ -455,3 +466,97 @@ def merge_coefficients(
     for j in range(H):
         merged[:, j] = B[:, j] if choice[j] == 1 else A[:, j]
     return merged, choice
+
+
+def safe_normalize_to_units(
+    C: np.ndarray,
+    magnet_order: int,
+    *,
+    absCalib: float = 1.0,
+    skew_main: bool = False,
+    min_main_field: float = 1e-20,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Normalize complex harmonics to 'units' (1e-4 relative to main field).
+
+    Parameters
+    ----------
+    C : np.ndarray
+        Complex harmonics, shape (n_turns, H).
+    magnet_order : int
+        Main field order m.
+    absCalib : float
+        Absolute calibration factor.
+    skew_main : bool
+        If True, use Im(main) for normalization instead of Re(main).
+    min_main_field : float
+        Minimum absolute value of the main field component.
+        Turns below this threshold get NaN in the normalized output.
+
+    Returns
+    -------
+    C_units : np.ndarray
+        Normalized harmonics, shape (n_turns, H). Turns with weak main
+        field contain NaN.
+    ok : np.ndarray
+        Boolean mask of shape (n_turns,). True for turns where the main
+        field was above the threshold.
+    """
+    C = np.asarray(C, dtype=complex)
+    m = int(magnet_order)
+    if C.ndim != 2 or m < 1 or m > C.shape[1]:
+        raise ValueError(
+            f"C must be 2D with at least {m} columns, got shape {C.shape}"
+        )
+    main = C[:, m - 1] * float(absCalib)
+    comp = np.imag(main) if skew_main else np.real(main)
+    ok = np.isfinite(comp) & (np.abs(comp) > float(min_main_field))
+    scale = np.full(comp.shape, np.nan, dtype=float)
+    scale[ok] = 10000.0 / comp[ok]
+    C_units = C * scale[:, None]
+    return C_units, ok
+
+
+def compute_from_profile(
+    *,
+    df_abs_turns: np.ndarray,
+    df_cmp_turns: np.ndarray,
+    t_turns: np.ndarray,
+    I_turns: np.ndarray,
+    kn: SegmentKn,
+    profile: "AnalysisProfile",
+) -> LegacyKnPerTurn:
+    """Convenience wrapper: call :func:`compute_legacy_kn_per_turn` from an AnalysisProfile.
+
+    Parameters
+    ----------
+    df_abs_turns, df_cmp_turns, t_turns, I_turns :
+        Per-turn arrays, shape (n_turns, Ns).
+    kn :
+        Segment kn values.
+    profile :
+        An :class:`~rotating_coil_analyzer.models.profile.AnalysisProfile`
+        bundling all pipeline configuration.
+
+    Returns
+    -------
+    LegacyKnPerTurn
+    """
+    # Lazy import to avoid circular dependency (analysis -> models -> analysis)
+    from rotating_coil_analyzer.models.profile import AnalysisProfile  # noqa: F811
+
+    return compute_legacy_kn_per_turn(
+        df_abs_turns=df_abs_turns,
+        df_cmp_turns=df_cmp_turns,
+        t_turns=t_turns,
+        I_turns=I_turns,
+        kn=kn,
+        Rref_m=profile.r_ref_m,
+        magnet_order=profile.magnet_order,
+        absCalib=profile.abs_calib,
+        options=profile.options,
+        drift_mode=profile.drift_mode,
+        skew_main=profile.skew_main,
+        eps_main=profile.min_main_field_T,
+        legacy_rotate_excludes_last=profile.legacy_rotate_excludes_last,
+        max_zR=profile.max_zR,
+    )

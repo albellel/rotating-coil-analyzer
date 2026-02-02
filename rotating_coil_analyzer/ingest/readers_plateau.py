@@ -9,6 +9,12 @@ import numpy as np
 import pandas as pd
 
 from rotating_coil_analyzer.models.frames import SegmentFrame
+from rotating_coil_analyzer.ingest.channel_detect import (
+    ColumnMapping,
+    detect_flux_channels,
+    detect_current_channel,
+    validate_channel_assignment,
+)
 
 
 @dataclass(frozen=True)
@@ -33,11 +39,18 @@ class PlateauReaderConfig:
 
     max_rows_preview_warning:
         If the concatenated trace exceeds this many rows, a warning is emitted (GUI usability).
+    column_mapping:
+        Optional explicit column assignment.  ``None`` means auto-detect.
+    filename_pattern:
+        Optional regex override for plateau filename matching.  ``None`` uses
+        the default ``_Run_XX_I_XXA_<seg>_raw_measurement_data.txt`` pattern.
     """
 
     align_time: bool = False
     strict_time: bool = False
     max_rows_preview_warning: int = 2_000_000
+    column_mapping: Optional[ColumnMapping] = None
+    filename_pattern: Optional[str] = None
 
 
 class PlateauReader:
@@ -78,18 +91,13 @@ class PlateauReader:
 
     def __init__(self, config: Optional[PlateauReaderConfig] = None):
         self.config = config or PlateauReaderConfig()
-
-    @staticmethod
-    def _robust_range(x: np.ndarray) -> float:
-        if x.size == 0:
-            return float("nan")
-        try:
-            return float(np.nanpercentile(x, 99.5) - np.nanpercentile(x, 0.5))
-        except Exception:
-            return float("nan")
+        if self.config.filename_pattern is not None:
+            self._pat = re.compile(self.config.filename_pattern, flags=re.IGNORECASE)
+        else:
+            self._pat = self._PAT
 
     def _find_plateau_files(self, representative: Path) -> Tuple[str, str, List[Path]]:
-        m = self._PAT.match(representative.name)
+        m = self._pat.match(representative.name)
         if not m:
             raise ValueError(f"Not a plateau raw_measurement_data file: {representative.name}")
         base = m.group("base")
@@ -98,7 +106,7 @@ class PlateauReader:
         files = list(representative.parent.glob(glob_pat))
 
         def step_key(p: Path) -> Tuple[int, float, str]:
-            mm = self._PAT.match(p.name)
+            mm = self._pat.match(p.name)
             if not mm:
                 return (10**9, float("nan"), p.name)
             step = int(mm.group("step"))
@@ -152,7 +160,7 @@ class PlateauReader:
         last_plateau_end_t: Optional[float] = None
 
         for pid, f in enumerate(files):
-            mm = self._PAT.match(f.name)
+            mm = self._pat.match(f.name)
             step = int(mm.group("step")) if mm else pid
             try:
                 i_hint = float(mm.group("i")) if mm else float("nan")
@@ -239,33 +247,20 @@ class PlateauReader:
         ncols = mat.shape[1]
         t = mat[:, 0].astype(np.float64, copy=False)
 
-        # Choose abs/cmp between col1 and col2 by robust range (larger -> abs)
-        c1 = mat[:, 1].astype(np.float64, copy=False)
-        c2 = mat[:, 2].astype(np.float64, copy=False)
-        r1 = self._robust_range(c1)
-        r2 = self._robust_range(c2)
-        if np.isfinite(r1) and np.isfinite(r2) and r2 > r1:
-            df_abs = c2
-            df_cmp = c1
-            warnings.append("swapped flux columns: treated col2 as abs and col1 as cmp (by robust range)")
-        else:
-            df_abs = c1
-            df_cmp = c2
+        # Choose abs/cmp between col1 and col2 (shared detection with optional override)
+        mapping = self.config.column_mapping
+        df_abs, df_cmp, abs_col, cmp_col, detect_w = detect_flux_channels(
+            mat, mapping=mapping,
+        )
+        warnings.extend(detect_w)
+        warnings.extend(validate_channel_assignment(df_abs, df_cmp))
 
-        # Current candidates: columns >=3 (may include extras)
+        # Current channel (shared detection with optional override)
+        I_main, best_curr_col, curr_w = detect_current_channel(
+            mat, start_col=3, mapping=mapping,
+        )
+        warnings.extend(curr_w)
         curr_cols = list(range(3, ncols))
-        I_main = np.zeros_like(t)
-        if curr_cols:
-            ranges = []
-            for idx in curr_cols:
-                ranges.append((self._robust_range(mat[:, idx]), idx))
-            # pick by largest robust range; tie-breaker: lowest index
-            ranges_sorted = sorted(ranges, key=lambda ri: (-ri[0], ri[1]))
-            best_idx = ranges_sorted[0][1]
-            I_main = mat[:, best_idx].astype(np.float64, copy=False)
-            rng_txt = ", ".join([f"col{idx}:{r:.6g}" for r, idx in ranges_sorted if np.isfinite(r)])
-            warnings.append(f"current candidate ranges (p99.5-p0.5): {rng_txt}")
-            warnings.append(f"selected main current column: col{best_idx} (stored as df['I'])")
 
         # Global sample index for ordering/plotting (NOT time)
         k = np.arange(len(t), dtype=np.float64)

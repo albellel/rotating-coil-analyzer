@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """KnBundle and MergeResult: provenance-rich containers for kn calibration and merge workflow.
 
-This module defines the data contracts between the Coil Calibration tab (Phase 3A)
-and the Harmonic Merge tab (Phase 3B).
+This module defines the data contracts between the Coil Calibration tab
+and the Harmonic Merge tab.
 
 Design goals
 ------------
@@ -26,8 +26,8 @@ from .kn_pipeline import SegmentKn
 class KnBundle:
     """Segment-level kn with full provenance metadata.
 
-    This is the output of the Coil Calibration tab (Phase 3A) and the input
-    to the Harmonic Merge tab (Phase 3B).
+    This is the output of the Coil Calibration tab and the input
+    to the Harmonic Merge tab.
 
     Attributes
     ----------
@@ -63,7 +63,7 @@ class KnBundle:
     source_path: str
     timestamp: str
 
-    # Context from Phase I
+    # Context from Catalog tab
     segment_id: Optional[str] = None
     aperture_id: Optional[int] = None
 
@@ -122,7 +122,7 @@ CHANNEL_NAMES = {CHANNEL_ABS: "abs", CHANNEL_CMP: "cmp", CHANNEL_EXT: "ext"}
 class MergeResult:
     """Result of the harmonic merge workflow with full traceability.
 
-    This is the output of the Harmonic Merge tab (Phase 3B).
+    This is the output of the Harmonic Merge tab.
 
     Attributes
     ----------

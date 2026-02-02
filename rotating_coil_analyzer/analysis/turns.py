@@ -64,7 +64,7 @@ def split_into_turns(
     seg:
         Input frame from ingest.
     columns:
-        Required sample-wise columns. Defaults are the Phase I contract columns.
+        Required sample-wise columns. Defaults are the Catalog contract columns.
     plateau_key:
         Name of the sample-wise plateau id column (plateau data). If absent, plateau metadata
         will be returned as None.

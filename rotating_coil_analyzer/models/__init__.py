@@ -11,3 +11,9 @@ Design principle:
 - All models carry provenance metadata for traceability
 - No business logic in models - they are pure data holders
 """
+
+from .profile import AnalysisProfile
+
+__all__ = [
+    "AnalysisProfile",
+]

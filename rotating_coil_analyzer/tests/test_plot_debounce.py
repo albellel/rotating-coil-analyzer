@@ -25,7 +25,7 @@ def test_catalog_state_has_debounce_fields():
     assert st.last_action_t == 0.0
 
 
-def test_phase1_panel_preview_button_wired():
+def test_catalog_panel_preview_button_wired():
     """Verify Preview button exists and has handlers."""
     from rotating_coil_analyzer.gui.app import _build_phase1_panel
     import ipywidgets as w

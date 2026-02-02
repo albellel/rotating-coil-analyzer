@@ -9,7 +9,7 @@ import pytest
 from pathlib import Path
 
 # Find the golden standard MH CSV file
-MH_CSV_PATH = Path(__file__).parent.parent.parent.parent / "golden_standards" / "measurement_heads" / "CRMMMMH_AF-00000001.csv"
+MH_CSV_PATH = Path(__file__).parent.parent.parent / "golden_standards" / "measurement_heads" / "CRMMMMH_AF-00000001.csv"
 
 
 @pytest.mark.skipif(not MH_CSV_PATH.exists(), reason="Golden standard MH CSV not available")

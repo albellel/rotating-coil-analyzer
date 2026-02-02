@@ -63,7 +63,7 @@ class HtmlLog:
     def write(self, message: str) -> None:
         """Compatibility helper for older GUI code.
 
-        The Phase III GUI uses HtmlLog.write(...) and may pass HTML snippets.
+        The Coil Calibration / Harmonic Merge GUI uses HtmlLog.write(...) and may pass HTML snippets.
         We strip basic HTML tags and route each line through the severity classifier.
         """
         import re

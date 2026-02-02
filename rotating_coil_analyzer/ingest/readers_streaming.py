@@ -9,6 +9,12 @@ import numpy as np
 import pandas as pd
 
 from rotating_coil_analyzer.models.frames import SegmentFrame
+from rotating_coil_analyzer.ingest.channel_detect import (
+    ColumnMapping,
+    detect_flux_channels,
+    detect_current_channel,
+    validate_channel_assignment,
+)
 
 
 @dataclass(frozen=True)
@@ -29,11 +35,14 @@ class StreamingReaderConfig:
       Try formats with 0..max_currents current channels (total columns = 3 + n_currents).
     dtype_candidates:
       Candidate numpy dtypes to test for the binary content (little-endian only).
+    column_mapping:
+      Optional explicit column assignment. ``None`` means auto-detect all columns.
     """
     strict_time: bool = True
     dt_rel_tol: float = 0.25
     max_currents: int = 3
     dtype_candidates: Tuple[np.dtype, ...] = (np.dtype("<f8"), np.dtype("<f4"))
+    column_mapping: Optional[ColumnMapping] = None
 
 
 class StreamingReader:
@@ -80,63 +89,27 @@ class StreamingReader:
         #   col1/col2: flux channels (abs/cmp, order can vary -> we auto-assign by robust amplitude)
         #   col3..: one or more current traces (potentially from different sources)
         t = mat[:, 0]
+        mapping = self.config.column_mapping
 
-        # Assign df_abs and df_cmp robustly between col1 and col2
+        # Assign df_abs and df_cmp (shared detection with optional override)
         if ncols >= 3:
-            c1 = mat[:, 1]
-            c2 = mat[:, 2]
-            r1 = float(np.nanpercentile(c1, 99.5) - np.nanpercentile(c1, 0.5))
-            r2 = float(np.nanpercentile(c2, 99.5) - np.nanpercentile(c2, 0.5))
-            if np.isfinite(r1) and np.isfinite(r2) and (r2 > r1):
-                df_abs = c2
-                df_cmp = c1
-                warnings.append("swapped flux columns: treated col2 as abs and col1 as cmp (by robust range)")
-                abs_col, cmp_col = 2, 1
-            else:
-                df_abs = c1
-                df_cmp = c2
-                abs_col, cmp_col = 1, 2
+            df_abs, df_cmp, abs_col, cmp_col, detect_w = detect_flux_channels(
+                mat, mapping=mapping,
+            )
+            warnings.extend(detect_w)
+            warnings.extend(validate_channel_assignment(df_abs, df_cmp))
         else:
             df_abs = mat[:, 1] if ncols >= 2 else np.full((len(t),), np.nan, dtype=np.float64)
             df_cmp = mat[:, 2] if ncols >= 3 else np.full((len(t),), np.nan, dtype=np.float64)
             abs_col, cmp_col = 1, 2
 
-        # Collect current candidates and select a "main" current.
-        I_main = np.full((len(t),), np.nan, dtype=np.float64)
-        curr_cols = []
-        curr_mat = None
-        if ncols >= 4:
-            curr_cols = list(range(3, ncols))
-            curr_mat = mat[:, 3:ncols]
-
-            # Robust dynamic range (avoid spikes).
-            ranges: List[Tuple[float, int]] = []
-            for k in range(curr_mat.shape[1]):
-                c = curr_mat[:, k]
-                finite = np.isfinite(c)
-                if finite.sum() < max(10, int(0.9 * len(c))):
-                    ranges.append((float("-inf"), k))
-                    continue
-                lo = float(np.nanpercentile(c, 0.5))
-                hi = float(np.nanpercentile(c, 99.5))
-                ranges.append((hi - lo, k))
-
-            # Select by max range; tie-breaker: smallest column index (deterministic)
-            best_range = max(r for r, _ in ranges) if ranges else float("-inf")
-            best_ks = [k for r, k in ranges if np.isfinite(r) and abs(r - best_range) <= 0.0]
-            best_k = min(best_ks) if best_ks else (ranges[0][1] if ranges else 0)
-            I_main = curr_mat[:, best_k]
-
-            # Emit mapping summary.
-            abs_r = float(np.nanpercentile(df_abs, 99.5) - np.nanpercentile(df_abs, 0.5)) if len(df_abs) else float("nan")
-            cmp_r = float(np.nanpercentile(df_cmp, 99.5) - np.nanpercentile(df_cmp, 0.5)) if len(df_cmp) else float("nan")
-            warnings.append(f"column map: t=0, df_abs={abs_col}, df_cmp={cmp_col}, current cols=3..{ncols-1}")
-            warnings.append(f"flux ranges (p99.5-p0.5): abs={abs_r:.6g}, cmp={cmp_r:.6g}")
-
-            # Report current candidates
-            ranges_sorted = sorted(ranges, key=lambda rk: (-rk[0], rk[1]))
-            rng_txt = ", ".join([f"col{3+k}:{r:.6g}" for r, k in ranges_sorted if np.isfinite(r)])
-            warnings.append(f"current candidate ranges (p99.5-p0.5): {rng_txt}")
+        # Current channel (shared detection with optional override)
+        I_main, best_curr_col, curr_w = detect_current_channel(
+            mat, start_col=3, mapping=mapping,
+        )
+        warnings.extend(curr_w)
+        curr_cols = list(range(3, ncols)) if ncols >= 4 else []
+        warnings.append(f"column map: t=0, df_abs={abs_col}, df_cmp={cmp_col}, current cols=3..{ncols-1}")
 
         df = pd.DataFrame({"t": t, "df_abs": df_abs, "df_cmp": df_cmp, "I": I_main})
 

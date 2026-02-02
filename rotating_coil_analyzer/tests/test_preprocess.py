@@ -50,9 +50,13 @@ def test_integrate_to_flux_legacy_matches_definition() -> None:
     assert diag is not None
     assert diag.mode == "legacy"
 
+    # Legacy C++ formula: cumsum(df - mean(df)) - mean(cumsum(df))
+    # Note: the subtracted mean is from the ORIGINAL cumsum (before drift
+    # correction), not from the drift-corrected cumsum.
     df0 = df - np.mean(df, axis=1, keepdims=True)
+    flux_original = np.cumsum(df, axis=1)
     expected = np.cumsum(df0, axis=1)
-    expected = expected - np.mean(expected, axis=1, keepdims=True)
+    expected = expected - np.mean(flux_original, axis=1, keepdims=True)
 
     assert np.allclose(flux, expected)
 

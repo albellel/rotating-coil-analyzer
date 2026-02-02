@@ -249,7 +249,7 @@ def _clear_button_handlers(btn: w.Button) -> None:
 def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) -> w.Widget:
     global _ACTIVE_HARMONICS_PANEL
 
-    # Close any previous Phase II panel (defensive against stacked live instances).
+    # Close any previous Harmonics panel (defensive against stacked live instances).
     if _ACTIVE_HARMONICS_PANEL is not None:
         try:
             _ACTIVE_HARMONICS_PANEL.close()
@@ -302,7 +302,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     drift_mode = w.Dropdown(
         options=[
             ("Legacy (C++) — uniform Δt", "legacy"),
-            ("Bottura/Pentella — Δt-weighted", "weighted"),
+            ("Bottura — Δt-weighted", "weighted"),
         ],
         value="legacy",
         description="Drift mode",
@@ -605,7 +605,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             segf = get_segmentframe_callable()
             if segf is None:
                 with out_log:
-                    print("No segment is loaded yet. In Phase I, click 'Load segment' first.")
+                    print("No segment is loaded yet. In the Catalog tab, click 'Load segment' first.")
                 state.dq_plan = None
                 state.dq_plan_cfg = None
                 state.dq_source = None
@@ -729,7 +729,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                     flux_cmp, drift_cmp = integrate_turns_to_flux(cmp_turns, drift=True, drift_mode=mode, t_turns=t_turns)
 
                     with out_log:
-                        label = "Legacy (C++)" if mode == "legacy" else "Bottura/Pentella (Δt-weighted)"
+                        label = "Legacy (C++)" if mode == "legacy" else "Bottura (Δt-weighted)"
                         print(f"Signal used for spectrum: integrated flux with drift correction ({label}).")
                 else:
                     flux_abs, drift_abs = integrate_turns_to_flux(abs_turns, drift=False)
@@ -1073,7 +1073,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             tag = _export_preproc_tag()
             path = _saveas_dialog(
                 title="Save plot",
-                initialfile=f"phase2_plot_{tag}.{fmt}",
+                initialfile=f"harmonics_plot_{tag}.{fmt}",
                 defaultextension=f".{fmt}",
                 filetypes=[(fmt.upper(), f"*.{fmt}")],
             )

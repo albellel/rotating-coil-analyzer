@@ -1,4 +1,4 @@
-"""Regression tests for Phase II (Harmonics) preview callback.
+"""Regression tests for Harmonics preview callback.
 
 Bug B fix: Removed dangling `_init_plot_once()` call that caused NameError.
 """
@@ -12,21 +12,21 @@ def test_preview_callback_no_init_plot_once_reference():
     Regression test for Bug B: NameError("name '_init_plot_once' is not defined")
     """
     import inspect
-    from rotating_coil_analyzer.gui import phase2
+    from rotating_coil_analyzer.gui import harmonics
 
     # Get the source code of the module
-    source = inspect.getsource(phase2)
+    source = inspect.getsource(harmonics)
 
     # The function _init_plot_once should not be called anywhere
     # (it was removed during refactoring)
     assert "_init_plot_once()" not in source, (
-        "_init_plot_once() call found in phase2.py - this function was removed"
+        "_init_plot_once() call found in harmonics.py - this function was removed"
     )
 
 
-def test_phase2_panel_import_and_build():
-    """Verify that phase2 panel can be imported and built without error."""
-    from rotating_coil_analyzer.gui.phase2 import build_phase2_panel
+def test_harmonics_panel_import_and_build():
+    """Verify that harmonics panel can be imported and built without error."""
+    from rotating_coil_analyzer.gui.harmonics import build_phase2_panel
 
     # Build with a mock callable
     panel = build_phase2_panel(lambda: None)
@@ -36,9 +36,9 @@ def test_phase2_panel_import_and_build():
     assert isinstance(panel, w.Widget)
 
 
-def test_phase2_preview_button_exists():
+def test_harmonics_preview_button_exists():
     """Verify that the Preview data-quality cuts button exists and is wired."""
-    from rotating_coil_analyzer.gui.phase2 import build_phase2_panel
+    from rotating_coil_analyzer.gui.harmonics import build_phase2_panel
     import ipywidgets as w
 
     panel = build_phase2_panel(lambda: None)

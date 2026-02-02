@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Phase II preprocessing helpers.
+"""Preprocessing helpers.
 
 This module implements *legacy-compatible* preprocessing steps that occur
 *before* harmonic analysis (FFT).
@@ -36,7 +36,7 @@ Implemented steps
 
      This matches the legacy C++ implementation exactly.
 
-   - "weighted" (Bottura/Pentella):
+   - "weighted" (Bottura):
        dt_k = t_k - t_{k-1}   (measured)
        df_k <- df_k - (sum(df)/sum(dt)) * dt_k
        flux = cumsum(df)
@@ -169,6 +169,7 @@ def di_dt_weights(
     """
 
     _validate_2d_same_shape(t_turns, I_turns)
+    eps_I_A = max(float(eps_I_A), 1e-30)
 
     t = np.asarray(t_turns, dtype=float)
     I = np.asarray(I_turns, dtype=float)
@@ -242,7 +243,7 @@ def integrate_to_flux(
         Whether to apply drift correction.
     drift_mode:
         - "legacy": C++ expression (uniform dt)
-        - "weighted": Bottura/Pentella dt-weighted correction using measured time
+        - "weighted": Bottura dt-weighted correction using measured time
     t_turns:
         Required for drift_mode="weighted". Measured timestamps per turn.
 

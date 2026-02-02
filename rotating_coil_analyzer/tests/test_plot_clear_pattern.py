@@ -15,17 +15,17 @@ The correct pattern is:
 import pytest
 
 
-def test_phase2_clear_inside_with_block():
-    """Verify phase2.py uses _clear_and_close() inside `with out_plot:` blocks."""
+def test_harmonics_clear_inside_with_block():
+    """Verify harmonics.py uses _clear_and_close() inside `with out_plot:` blocks."""
     import inspect
-    from rotating_coil_analyzer.gui import phase2
+    from rotating_coil_analyzer.gui import harmonics
 
-    source = inspect.getsource(phase2)
+    source = inspect.getsource(harmonics)
 
     # The old pattern (_begin_plot() before `with out_plot:`) should be gone
     # The new pattern should have _clear_and_close() inside the with block
     assert "_clear_and_close()" in source, (
-        "_clear_and_close() function should exist in phase2.py"
+        "_clear_and_close() function should exist in harmonics.py"
     )
 
     # Should NOT have `_begin_plot()` (old function)
@@ -43,12 +43,12 @@ def test_phase2_clear_inside_with_block():
             )
 
 
-def test_phase2_has_clear_and_close_function():
+def test_harmonics_has_clear_and_close_function():
     """Verify _clear_and_close function exists and clears properly."""
     import inspect
-    from rotating_coil_analyzer.gui import phase2
+    from rotating_coil_analyzer.gui import harmonics
 
-    source = inspect.getsource(phase2)
+    source = inspect.getsource(harmonics)
 
     # Verify the function definition includes the correct operations
     assert "def _clear_and_close" in source

@@ -586,7 +586,7 @@ def _summary_metric(summary: ComparisonSummary) -> float:
 def _resolve_catalog_root(folder: Path, *, prefer_ap: int = 1, max_down: int = 3) -> Path:
     """Resolve a user-provided folder to a catalog root that contains Parameters.txt.
 
-    The GUI workflow typically points Phase I to the *aperture* folder (e.g. ...\aperture1),
+    The GUI workflow typically points the Catalog tab to the *aperture* folder (e.g. ...\aperture1),
     which contains Parameters.txt. For validation, users often pass the parent run folder.
     This helper keeps MeasurementDiscovery strict while providing a controlled downward search.
 

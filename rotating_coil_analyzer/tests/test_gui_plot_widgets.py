@@ -12,8 +12,8 @@ import pytest
 import ipywidgets as w
 
 
-def test_phase1_panel_creates_output_widget():
-    """Verify Phase 1 panel creates an Output widget for plots."""
+def test_catalog_panel_creates_output_widget():
+    """Verify Catalog panel creates an Output widget for plots."""
     from rotating_coil_analyzer.gui.app import _build_phase1_panel
 
     shared = {"catalog": None, "segment_frame": None, "segment_path": None}
@@ -33,13 +33,13 @@ def test_phase1_panel_creates_output_widget():
         return None
 
     out_plot = find_output(panel)
-    assert out_plot is not None, "Phase 1 panel should contain an Output widget for plots"
+    assert out_plot is not None, "Catalog panel should contain an Output widget for plots"
     assert isinstance(out_plot, w.Output)
 
 
-def test_phase2_panel_creates_output_widget():
-    """Verify Phase 2 panel creates an Output widget for plots."""
-    from rotating_coil_analyzer.gui.phase2 import build_phase2_panel
+def test_harmonics_panel_creates_output_widget():
+    """Verify Harmonics panel creates an Output widget for plots."""
+    from rotating_coil_analyzer.gui.harmonics import build_phase2_panel
 
     panel = build_phase2_panel(lambda: None)
 
@@ -57,13 +57,13 @@ def test_phase2_panel_creates_output_widget():
         return None
 
     out_plot = find_output(panel)
-    assert out_plot is not None, "Phase 2 panel should contain an Output widget for plots"
+    assert out_plot is not None, "Harmonics panel should contain an Output widget for plots"
     assert isinstance(out_plot, w.Output)
 
 
-def test_phase4_panel_creates_output_widget():
-    """Verify Phase 4 (Plots) panel creates an Output widget."""
-    from rotating_coil_analyzer.gui.phase4_plots import build_phase4_plots_panel
+def test_plots_panel_creates_output_widget():
+    """Verify Plots panel creates an Output widget."""
+    from rotating_coil_analyzer.gui.plots import build_phase4_plots_panel
 
     panel = build_phase4_plots_panel(lambda: None)
 
@@ -81,7 +81,7 @@ def test_phase4_panel_creates_output_widget():
         return None
 
     out_plot = find_output(panel)
-    assert out_plot is not None, "Phase 4 panel should contain an Output widget for plots"
+    assert out_plot is not None, "Plots panel should contain an Output widget for plots"
     assert isinstance(out_plot, w.Output)
 
 

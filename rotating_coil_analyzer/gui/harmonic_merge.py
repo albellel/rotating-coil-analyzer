@@ -163,8 +163,9 @@ def build_phase3b_harmonic_merge_panel(
     get_segmentpath_callable: Callable[[], Optional[str]] | None = None,
     get_kn_bundle_callable: Callable[[], Optional[KnBundle]] | None = None,
     set_merge_result_callable: Callable[[Optional[MergeResult]], None] | None = None,
+    get_profile_callable: Callable | None = None,
 ) -> w.Widget:
-    """Build the Phase 3B (Harmonic Merge) panel.
+    """Build the Harmonic Merge panel.
 
     Parameters
     ----------
@@ -173,9 +174,12 @@ def build_phase3b_harmonic_merge_panel(
     get_segmentpath_callable
         Returns the current segment file path.
     get_kn_bundle_callable
-        Returns the KnBundle from Phase 3A.
+        Returns the KnBundle from Coil Calibration tab.
     set_merge_result_callable
         Called when a MergeResult is created.
+    get_profile_callable
+        Optional.  Returns an :class:`~rotating_coil_analyzer.models.profile.AnalysisProfile`
+        to pre-populate widget values (Rref, magnet order, options, etc.).
     """
     global _ACTIVE_PHASE3B_PANEL
 
@@ -333,6 +337,19 @@ def build_phase3b_harmonic_merge_panel(
         if m0 is not None:
             try:
                 magnet_order.value = int(m0)
+            except Exception:
+                pass
+
+        # Auto-fill from AnalysisProfile if provided
+        if get_profile_callable is not None:
+            try:
+                _profile = get_profile_callable()
+                if _profile is not None:
+                    rref_mm.value = _profile.r_ref_m * 1000.0
+                    magnet_order.value = _profile.magnet_order
+                    abs_calib.value = _profile.abs_calib
+                    drift_mode.value = _profile.drift_mode
+                    skew_main.value = _profile.skew_main
             except Exception:
                 pass
 
@@ -701,7 +718,7 @@ def build_phase3b_harmonic_merge_panel(
             mr = st.merge_result
 
             # Default file prefix
-            prefix = "phase3b_merge"
+            prefix = "harmonic_merge"
             if st.seg_path:
                 try:
                     base = os.path.basename(str(st.seg_path))

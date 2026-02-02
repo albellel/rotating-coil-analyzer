@@ -16,3 +16,11 @@ Design principle:
 - No synthetic time is created during ingestion
 - All metadata is preserved and propagated
 """
+
+from .channel_detect import (
+    ColumnMapping,
+    robust_range,
+    detect_flux_channels,
+    detect_current_channel,
+    validate_channel_assignment,
+)
