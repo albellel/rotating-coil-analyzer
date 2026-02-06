@@ -2,7 +2,9 @@
 
 ## Overview
 
-The rotating coil analysis pipeline transforms raw acquisition data (incremental flux samples, encoder counts, and current measurements) into calibrated magnetic field harmonics. The implementation in `rotating_coil_analyzer/analysis/kn_pipeline.py` follows the legacy C++ analyzer semantics exactly (`ffmm/src/core/utils/matlab_analyzer/MatlabAnalyzerRotCoil.cpp`).
+The rotating coil analysis pipeline transforms raw acquisition data (incremental flux samples, encoder counts, and current measurements) into calibrated magnetic field harmonics. It is designed for CERN accelerator magnets across all machine complexes (LHC, SPS, PS, PSB, transfer lines, test benches such as SM18).
+
+The core implementation in `rotating_coil_analyzer/analysis/kn_pipeline.py` follows the legacy C++ analyzer semantics exactly (`ffmm/src/core/utils/matlab_analyzer/MatlabAnalyzerRotCoil.cpp`).
 
 **Inputs:**
 - Incremental flux per sample, absolute and compensated channels (Wb)
@@ -253,6 +255,106 @@ Flux files typically contain more turns than the reference. The legacy software 
 | CEL | 180-195 | Centre location |
 | Feeddown | 200-220 | Binomial expansion |
 | Normalisation | 225-235 | `10000/Re(C_m)` |
+
+## Streaming Analysis Utilities
+
+For **streaming (continuous) acquisition** measurements -- where the magnet current follows a machine supercycle rather than holding at individual DC plateaus -- additional utilities are provided in `rotating_coil_analyzer/analysis/utility_functions.py`.
+
+These utilities address the key challenge: during streaming, only turns acquired on **flat current plateaus** produce reliable harmonics. Turns during ramps or transitions must be excluded.
+
+### Plateau Detection
+
+The plateau detection pipeline uses a **block-averaged** approach to filter out sample-level ADC noise:
+
+#### Step 1: Block-averaged current range (`compute_block_averaged_range`)
+
+Each turn (typically 1024 samples) is split into *N* blocks (default 10). Each block is averaged to a single value, then the range (max - min) of the block means is computed:
+
+```
+I_blocks[turn, k] = mean(I[turn, k*block_sz : (k+1)*block_sz])
+I_range[turn] = max(I_blocks[turn, :]) - min(I_blocks[turn, :])
+```
+
+This measures real current drift or ramp contamination while filtering out sample-level noise spikes. Raw `max(I) - min(I)` over 1024 samples is dominated by ADC noise and would reject even perfectly flat plateaus.
+
+**Code:** `utility_functions.py:39-75` (`compute_block_averaged_range`)
+
+#### Step 2: Three-rule plateau detection (`detect_plateau_turns`)
+
+A turn is accepted as "on a plateau" only if **all three** rules pass:
+
+| Rule | Condition | Purpose |
+|------|-----------|---------|
+| **(a)** | `I_range < threshold` | Current must be flat throughout the turn |
+| **(b)** | `\|I_blocks[0] - I_mean\| < threshold` | Turn must **start** on the plateau |
+| **(c)** | `\|I_blocks[-1] - I_mean\| < threshold` | Turn must **end** on the plateau |
+
+Rules (b) and (c) reject turns that straddle a ramp-to-plateau or plateau-to-ramp boundary. A turn that passes rule (a) but fails (b) or (c) is flagged as "boundary-rejected".
+
+**Code:** `utility_functions.py:78-124` (`detect_plateau_turns`)
+
+#### Step 3: Current-level classification (`classify_current`)
+
+Each plateau turn is classified by its mean current into a machine cycle-type label. The default thresholds are tuned for SPS:
+
+| Label | Current range (A) |
+|-------|------------------|
+| `zero` | < 50 |
+| `pre-ramp` | 50 -- 200 |
+| `injection` | 200 -- 500 |
+| `flat-low` | 500 -- 2000 |
+| `flat-mid` | 2000 -- 4000 |
+| `flat-high` | > 4000 |
+
+Custom thresholds can be provided for other machines (PS, PSB, LHC, ...) via the `thresholds` parameter.
+
+**Code:** `utility_functions.py:131-167` (`classify_current`)
+
+### Pipeline Wrapper
+
+#### `process_kn_pipeline`
+
+Wraps the three core pipeline functions into a single call:
+
+```
+compute_legacy_kn_per_turn  -->  merge_coefficients  -->  safe_normalize_to_units
+```
+
+Returns the full `LegacyKnPerTurn` result, merged complex coefficients, normalised units, and the `ok_main` boolean mask.
+
+**Code:** `utility_functions.py:213-293` (`process_kn_pipeline`)
+
+#### `build_harmonic_rows`
+
+Converts pipeline results into a list of dicts (one per turn) suitable for `pd.DataFrame()`. Each row contains:
+
+- Per-turn scalars: `time_s`, `I_mean_A`, `ok_main`, `phi_rad`, `x_mm`, `y_mm`
+- Bn/An (T) for orders <= magnet_order
+- bn/an (units) for higher orders
+- Optional extra columns (e.g. `global_turn`, `label`, `I_range_A`)
+
+**Code:** `utility_functions.py:296-353` (`build_harmonic_rows`)
+
+### General-Purpose Utilities
+
+#### `find_contiguous_groups`
+
+Finds contiguous runs of `True` values in a boolean array. Used to identify injection plateaus, flat-top groups, and other contiguous turn sequences in the supercycle structure.
+
+Returns a list of `(start, end)` tuples (inclusive indices), optionally filtered by minimum group length.
+
+**Code:** `utility_functions.py:174-206` (`find_contiguous_groups`)
+
+### Code References
+
+| Function | Line | Purpose |
+|----------|------|---------|
+| `compute_block_averaged_range` | 39 | Noise-robust current range per turn |
+| `detect_plateau_turns` | 78 | Three-rule plateau detection |
+| `classify_current` | 142 | Current-level classification |
+| `find_contiguous_groups` | 174 | Contiguous True-run finder |
+| `process_kn_pipeline` | 213 | Full pipeline wrapper |
+| `build_harmonic_rows` | 296 | DataFrame row builder |
 
 ## References
 

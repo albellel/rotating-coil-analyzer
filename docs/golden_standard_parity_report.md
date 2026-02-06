@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the methodology and results of validating the Python analysis pipeline (`kn_pipeline.py`) against the legacy C++ analyzer. The goal is to confirm that both implementations produce numerically identical results when given the same raw data and calibration coefficients.
+This document describes the methodology and results of validating the Python analysis pipeline (`kn_pipeline.py`) against the legacy C++ analyzer. The goal is to confirm that both implementations produce numerically identical results when given the same raw data and calibration coefficients. The pipeline is designed for CERN accelerator magnets across all machine complexes (LHC, SPS, PS, PSB, transfer lines, test benches such as SM18).
 
 The primary validation tool is the Jupyter notebook `rotating_coil_analyzer/notebooks/golden_standard_parity.ipynb`.
 

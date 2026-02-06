@@ -1,4 +1,7 @@
-"""Analysis package for rotating coil data.
+"""Analysis package for CERN accelerator-magnet rotating-coil data.
+
+Supports all CERN machine complexes (LHC, SPS, PS, PSB, transfer lines,
+test benches such as SM18).
 
 Design principle:
   - Ingest (Catalog) produces validated :class:`~rotating_coil_analyzer.models.frames.SegmentFrame` objects.
@@ -9,6 +12,17 @@ Project-wide hard constraint:
 
 Accordingly, analysis functions are expressed on the *sample/turn index* and the
 implicit angular grid per turn, not on any reconstructed time axis.
+
+Modules
+-------
+- :mod:`~.kn_pipeline` -- Core per-turn pipeline (dit, drift, FFT, kn, rotation, CEL, feeddown)
+- :mod:`~.preprocess` -- Drift correction and di/dt current-ramp correction
+- :mod:`~.fourier` -- FFT-based harmonic extraction
+- :mod:`~.merge` -- Abs/Cmp channel merge recommendations
+- :mod:`~.kn_head` -- Kn computation from measurement-head CSV
+- :mod:`~.kn_bundle` -- Provenance-rich kn container
+- :mod:`~.utility_functions` -- Streaming analysis utilities (plateau detection,
+  pipeline wrapper, DataFrame builder)
 
 Legacy parity notes
 -------------------
@@ -39,6 +53,15 @@ from .kn_pipeline import SegmentKn, LegacyKnPerTurn, load_segment_kn_txt, comput
 from .merge import MergeDiagnostics, recommend_merge_choice
 from .kn_head import HeadKnData, compute_head_kn_from_csv, compute_segment_kn_from_head, write_segment_kn_txt
 from .kn_bundle import KnBundle, MergeResult, CHANNEL_ABS, CHANNEL_CMP, CHANNEL_EXT, CHANNEL_NAMES
+from .utility_functions import (
+    compute_block_averaged_range,
+    detect_plateau_turns,
+    classify_current,
+    find_contiguous_groups,
+    process_kn_pipeline,
+    build_harmonic_rows,
+    SPS_CURRENT_THRESHOLDS,
+)
 
 __all__ = [
     "TurnBlock",
@@ -80,4 +103,13 @@ __all__ = [
     "CHANNEL_CMP",
     "CHANNEL_EXT",
     "CHANNEL_NAMES",
+
+    # streaming analysis utilities
+    "compute_block_averaged_range",
+    "detect_plateau_turns",
+    "classify_current",
+    "find_contiguous_groups",
+    "process_kn_pipeline",
+    "build_harmonic_rows",
+    "SPS_CURRENT_THRESHOLDS",
 ]

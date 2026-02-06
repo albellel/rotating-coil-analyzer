@@ -65,6 +65,9 @@ outputs/
 # Generated notebook outputs
 # =========================
 rotating_coil_analyzer/notebooks/*_computed.txt
+rotating_coil_analyzer/notebooks/*_executed.ipynb
+rotating_coil_analyzer/notebooks/*.png
+
 
 # =========================
 # Data (raw measurement data should live outside repo)
