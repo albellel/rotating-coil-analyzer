@@ -40,8 +40,11 @@ class AnalysisProfile:
     merge_mode : str
         Merge strategy for abs/cmp channels.
     legacy_rotate_excludes_last : bool
-        If True, the rotation loop excludes the last harmonic (SM18 convention).
-        If False, all harmonics are rotated (BTP8 / C++ convention).
+        If False (default), all harmonics n=1..H are rotated, matching
+        Bottura Eq. AIV.6, the C++ analyzer, and the Pentella analyzer.
+        If True, the rotation loop excludes the last harmonic (n=H).
+        This was an off-by-one in some legacy SM18 code and has no
+        theoretical justification (harmonic H is far below Nyquist).
     min_main_field_T : float
         Epsilon for safe division by the main field component.
     abs_calib : float
@@ -50,6 +53,11 @@ class AnalysisProfile:
         Coil length in metres (used for provenance/export, not pipeline math).
     skew_main : bool
         If True, use Im(main_field) for normalization instead of Re.
+    max_zR : float
+        Maximum allowed |zR| (dimensionless centre offset) before clamping
+        to zero in the CEL step.  Default 1.0 preserves legacy behaviour.
+        Use 0.01 for dipoles with AC compensation to prevent feeddown
+        noise amplification.
     """
 
     magnet_order: int
@@ -60,7 +68,7 @@ class AnalysisProfile:
     options: Tuple[str, ...] = ("dri", "rot")
     drift_mode: str = "legacy"
     merge_mode: str = "abs_upto_m_cmp_above"
-    legacy_rotate_excludes_last: bool = True
+    legacy_rotate_excludes_last: bool = False
 
     min_main_field_T: float = 1e-20
     abs_calib: float = 1.0

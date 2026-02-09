@@ -109,7 +109,7 @@ This matches all harmonics simultaneously, correctly identifying the right turn 
 
 The Python pipeline is run with:
 - `options = ("dri", "rot", "cel", "fed")` -- no "nor" (normalise post-merge)
-- `legacy_rotate_excludes_last = False` -- rotate ALL harmonics including the last
+- `legacy_rotate_excludes_last = False` (now the default) -- rotate ALL harmonics including the last
 - Merge mode: `abs_upto_m_cmp_above` (ABS for n <= m, CMP for n > m)
 - Post-merge normalisation: `b_n = C_n.real / C_m.real * 10000` for n > m
 
@@ -173,7 +173,7 @@ The small residual differences (< 1.3e-2 relative for b9, b11) arise from:
 - **FFT normalisation**: Both use `2*FFT/N`.
 - **Kn application**: Both use `1/conj(kn) * R^(n-1)`.
 - **Drift correction**: Both use `cumsum(df - mean(df)) - mean(cumsum(df))` in legacy mode.
-- **Rotation**: Both rotate all H harmonics (the `legacy_rotate_excludes_last=False` setting is required).
+- **Rotation**: Both rotate all H harmonics (`legacy_rotate_excludes_last=False`, now the default).
 - **Feeddown**: Both use the same binomial expansion with zR from CEL.
 
 ## Conclusion
@@ -182,7 +182,7 @@ The Python pipeline matches the legacy C++ analyzer to GOOD or better for all ha
 
 1. The correct Kn file is used (must match compensation scheme)
 2. The correct samples-per-turn is used (512 for BTP8)
-3. `legacy_rotate_excludes_last=False` is set (rotate ALL harmonics)
+3. `legacy_rotate_excludes_last=False` is set (now the default -- rotate ALL harmonics)
 4. Turns are correctly identified (multi-harmonic matching handles the C++ quality filter)
 
 At |I| >= 10 A (162 turns), all harmonics n=2..15 achieve GOOD status (max relative difference < 1.3e-2). At |I| >= 50 A, 100% of turns have b3 within 0.001 units.

@@ -17,7 +17,7 @@ Output:
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 import os
 
 import numpy as np
@@ -33,8 +33,13 @@ from rotating_coil_analyzer.analysis.kn_pipeline import (
     LegacyKnPerTurn,
     compute_legacy_kn_per_turn,
     merge_coefficients,
+    safe_normalize_to_units,
 )
 from rotating_coil_analyzer.analysis.merge import recommend_merge_choice, MergeDiagnostics
+from rotating_coil_analyzer.analysis.utility_functions import (
+    ba_table_from_C,
+    mixed_format_table,
+)
 from rotating_coil_analyzer.analysis.kn_bundle import (
     KnBundle,
     MergeResult,
@@ -67,6 +72,13 @@ class HarmonicMergeState:
 
     # Applied merge result
     merge_result: Optional[MergeResult] = None
+
+    # Post-merge normalization results
+    C_units: Optional[np.ndarray] = None
+    ok_main: Optional[np.ndarray] = None
+
+    # Options used in last compute (to detect whether 'nor' was checked)
+    opts: Optional[Tuple[str, ...]] = None
 
     # Plot state
     fig: Optional[Any] = None
@@ -119,19 +131,6 @@ def _clear_button_handlers(btn: w.Button) -> None:
         btn._click_handlers.callbacks.clear()  # type: ignore[attr-defined]
     except Exception:
         pass
-
-
-def _ba_table_from_C(C: np.ndarray, orders: np.ndarray, *, prefix: str = "") -> pd.DataFrame:
-    """Convert complex coefficients to legacy B/A tables per turn.
-
-    Convention: M_n = 2*C_n (n>=1), B_n=Re(M_n), A_n=Im(M_n).
-    """
-    out: Dict[str, np.ndarray] = {}
-    for j, n in enumerate([int(x) for x in orders]):
-        M = 2.0 * C[:, j]
-        out[f"{prefix}normal_B{n}"] = np.real(M)
-        out[f"{prefix}skew_A{n}"] = np.imag(M)
-    return pd.DataFrame(out)
 
 
 def _ensure_full_turns(segf: SegmentFrame) -> Tuple[SegmentFrame, int]:
@@ -222,6 +221,21 @@ def build_phase3b_harmonic_merge_panel(
         layout=w.Layout(width="200px"),
     )
     skew_main = w.Checkbox(value=False, description="Skew main harmonic")
+    max_zR_widget = w.FloatText(
+        value=1.0,
+        description="max |zR|:",
+        style={"description_width": "110px"},
+        layout=w.Layout(width="200px"),
+    )
+
+    def _on_magnet_order_change(change) -> None:
+        """Auto-set max_zR to 0.01 for dipoles (m=1)."""
+        if change["new"] == 1:
+            max_zR_widget.value = 0.01
+        else:
+            max_zR_widget.value = 1.0
+
+    magnet_order.observe(_on_magnet_order_change, names="value")
 
     # ---- Processing options (legacy ordering) ----
     opt_dit = w.Checkbox(value=False, description="di/dt correction")
@@ -350,6 +364,7 @@ def build_phase3b_harmonic_merge_panel(
                     abs_calib.value = _profile.abs_calib
                     drift_mode.value = _profile.drift_mode
                     skew_main.value = _profile.skew_main
+                    max_zR_widget.value = _profile.max_zR
             except Exception:
                 pass
 
@@ -543,14 +558,18 @@ def build_phase3b_harmonic_merge_panel(
                 options=tuple(opts),
                 drift_mode=str(drift_mode.value),
                 skew_main=bool(skew_main.value),
+                max_zR=float(max_zR_widget.value),
             )
             st.result = res
+            st.opts = tuple(opts)
 
             # Reset merge state
             st.diag = None
             st.choice_recommended = None
             st.per_n_selection = None
             st.merge_result = None
+            st.C_units = None
+            st.ok_main = None
             approve_merge.value = False
 
             # Build per-n table
@@ -670,6 +689,26 @@ def build_phase3b_harmonic_merge_panel(
                     per_order_choice=st.per_n_selection.tolist(),
                 )
 
+            # Post-merge normalization to units (Bottura 3.7 mixed format).
+            # When 'nor' was checked, normalization already happened inside
+            # compute_legacy_kn_per_turn — C_merged is already in units.
+            # When 'nor' was NOT checked, C_merged is in Tesla and we need
+            # safe_normalize_to_units for the n>m columns.
+            nor_was_checked = st.opts is not None and "nor" in st.opts
+            if nor_was_checked:
+                # All harmonics already in units; C_units = C_merged
+                st.C_units = C_merged.copy()
+                st.ok_main = np.ones(C_merged.shape[0], dtype=bool)
+            else:
+                C_units, ok_main = safe_normalize_to_units(
+                    C_merged,
+                    magnet_order=int(magnet_order.value),
+                    absCalib=float(abs_calib.value),
+                    skew_main=bool(skew_main.value),
+                )
+                st.C_units = C_units
+                st.ok_main = ok_main
+
             # Create MergeResult with full provenance
             merge_result = MergeResult(
                 C_merged=C_merged,
@@ -752,8 +791,8 @@ def build_phase3b_harmonic_merge_panel(
             })
 
             # Pre-merge tables
-            df_abs = pd.concat([scalars, _ba_table_from_C(res.C_abs, res.orders, prefix="abs_")], axis=1)
-            df_cmp = pd.concat([scalars, _ba_table_from_C(res.C_cmp, res.orders, prefix="cmp_")], axis=1)
+            df_abs = pd.concat([scalars, ba_table_from_C(res.C_abs, res.orders, prefix="abs_")], axis=1)
+            df_cmp = pd.concat([scalars, ba_table_from_C(res.C_cmp, res.orders, prefix="cmp_")], axis=1)
 
             abs_path = f"{root}_ABS.csv"
             cmp_path = f"{root}_CMP.csv"
@@ -762,8 +801,18 @@ def build_phase3b_harmonic_merge_panel(
             log.write(f"Saved: {abs_path}")
             log.write(f"Saved: {cmp_path}")
 
-            # Merged table
-            df_m = pd.concat([scalars, _ba_table_from_C(mr.C_merged, mr.orders, prefix="mrg_")], axis=1)
+            # Merged table (Bottura 3.7 mixed format)
+            nor_was_checked = st.opts is not None and "nor" in st.opts
+            df_m = pd.concat([
+                scalars,
+                mixed_format_table(
+                    mr.C_merged,
+                    st.C_units,
+                    mr.orders,
+                    int(magnet_order.value),
+                    nor_was_checked=nor_was_checked,
+                ),
+            ], axis=1)
             mrg_path = f"{root}_MERGED.csv"
             df_m.to_csv(mrg_path, index=False)
             log.write(f"Saved: {mrg_path}")
@@ -833,7 +882,7 @@ def build_phase3b_harmonic_merge_panel(
     params_box = w.VBox([
         w.HTML("<b>Parameters</b>"),
         w.HBox([rref_mm, abs_calib, magnet_order]),
-        w.HBox([skew_main]),
+        w.HBox([skew_main, max_zR_widget]),
     ])
 
     opts_box = w.VBox([

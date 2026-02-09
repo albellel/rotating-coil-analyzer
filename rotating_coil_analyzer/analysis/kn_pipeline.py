@@ -183,7 +183,7 @@ def compute_legacy_kn_per_turn(
     drift_mode: DriftMode = "legacy",
     skew_main: bool = False,
     eps_main: float = 1e-20,
-    legacy_rotate_excludes_last: bool = True,
+    legacy_rotate_excludes_last: bool = False,
     max_zR: float = 1.0,
 ) -> LegacyKnPerTurn:
     """Compute legacy per-turn harmonics with $k_n$ application.
@@ -210,7 +210,8 @@ def compute_legacy_kn_per_turn(
         If True, main component is taken from Im(main_field) instead of Re(main_field)
         in the normalization step (legacy "skw" option).
     legacy_rotate_excludes_last:
-        If True, replicate the legacy loop bounds which do not rotate the last harmonic.
+        If False (default), rotate all harmonics n=1..H (Bottura Eq. AIV.6, C++, Pentella).
+        If True, exclude the last harmonic from rotation (legacy SM18 off-by-one).
     max_zR:
         Maximum allowed |zR| (center offset / R_ref) before clamping to 0.
         Default 1.0 preserves legacy behaviour.  For dipoles with AC
@@ -297,7 +298,7 @@ def compute_legacy_kn_per_turn(
 
     # --- rotation (optional) ---
     if "rot" in opt:
-        # replicate legacy loop bounds (k = 1..H-1) by default
+        # default: rotate ALL harmonics (Bottura AIV.6, C++, Pentella)
         k_max = H - 1 if legacy_rotate_excludes_last else H
         for k in range(1, k_max + 1):
             # harmonic order k corresponds to column k-1

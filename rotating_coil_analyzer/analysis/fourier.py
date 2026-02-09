@@ -1,3 +1,16 @@
+"""FFT-based harmonic extraction for rotating-coil measurements.
+
+Provides per-turn discrete Fourier transform with standard ``FFT/Ns``
+normalisation and optional plateau-grouped statistical summaries.
+
+Functions
+---------
+dft_per_turn
+    Compute complex Fourier coefficients per turn on the implicit angular grid.
+summarize_harmonics
+    Mean and standard deviation of harmonics, optionally grouped by plateau id.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

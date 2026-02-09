@@ -1,10 +1,10 @@
 """Reusable utility functions for streaming rotating-coil analysis.
 
 These functions extract common logic from the Jupyter analysis notebooks
-so that notebook code stays concise and multiple notebooks can share the
-same tested implementations.  They are designed for CERN accelerator-magnet
-rotating-coil measurements across all machine complexes (LHC, SPS, PS, PSB,
-transfer lines, test benches such as SM18).
+and the GUI so that notebook code stays concise and multiple notebooks /
+the GUI can share the same tested implementations.  They are designed for
+CERN accelerator-magnet rotating-coil measurements across all machine
+complexes (LHC, SPS, PS, PSB, transfer lines, test benches such as SM18).
 
 Functions
 ---------
@@ -22,11 +22,20 @@ process_kn_pipeline
 build_harmonic_rows
     Build a list of dicts (one per turn) from pipeline results, ready for
     ``pd.DataFrame()``.
+build_run_averages
+    Per-run mean b3 with run ordering (for hysteresis / ramp analysis).
+ba_table_from_C
+    Convert complex coefficients to legacy B/A DataFrame (all Tesla).
+mixed_format_table
+    Bottura Section 3.7 mixed-format DataFrame (Tesla for n<=m, units for n>m).
 """
 
 from __future__ import annotations
 
+from typing import Dict
+
 import numpy as np
+import pandas as pd
 
 from .kn_pipeline import (
     compute_legacy_kn_per_turn,
@@ -364,3 +373,121 @@ def build_harmonic_rows(
             row.update(extra_columns[t])
         rows.append(row)
     return rows
+
+
+# =====================================================================
+#  Run-level aggregation
+# =====================================================================
+
+def build_run_averages(df_in: pd.DataFrame) -> pd.DataFrame:
+    """Build per-run mean b3 with run ordering.
+
+    Parameters
+    ----------
+    df_in : DataFrame
+        Must contain columns ``run``, ``I_mean_A``, ``I_nom_A``,
+        ``b3_units``, and ``turn_in_run``.
+
+    Returns
+    -------
+    DataFrame
+        One row per run with columns: ``run``, ``I_mean``, ``I_nom``,
+        ``b3_mean``, ``b3_std``, ``n_turns``.  Sorted by ``run``.
+    """
+    avgs = df_in.groupby("run").agg(
+        I_mean=("I_mean_A", "mean"),
+        I_nom=("I_nom_A", "first"),
+        b3_mean=("b3_units", "mean"),
+        b3_std=("b3_units", "std"),
+        n_turns=("turn_in_run", "count"),
+    ).reset_index().sort_values("run")
+    return avgs
+
+
+# =====================================================================
+#  DataFrame export helpers (shared by GUI and notebooks)
+# =====================================================================
+
+def ba_table_from_C(
+    C: np.ndarray,
+    orders: np.ndarray,
+    *,
+    prefix: str = "",
+) -> pd.DataFrame:
+    """Convert complex coefficients to legacy B/A tables per turn.
+
+    Convention: B_n = Re(C_n), A_n = Im(C_n).
+    The pipeline ``C_n`` already includes the 2/N FFT fold factor.
+
+    Parameters
+    ----------
+    C : ndarray, shape (n_turns, H)
+        Complex harmonic coefficients.
+    orders : ndarray, shape (H,)
+        Harmonic orders (1-based).
+    prefix : str
+        Column name prefix (e.g. ``"abs_"``, ``"cmp_"``).
+
+    Returns
+    -------
+    DataFrame
+        Columns ``{prefix}normal_B{n}`` and ``{prefix}skew_A{n}``.
+    """
+    out: Dict[str, np.ndarray] = {}
+    for j, n in enumerate([int(x) for x in orders]):
+        out[f"{prefix}normal_B{n}"] = np.real(C[:, j])
+        out[f"{prefix}skew_A{n}"] = np.imag(C[:, j])
+    return pd.DataFrame(out)
+
+
+def mixed_format_table(
+    C_merged: np.ndarray,
+    C_units: np.ndarray,
+    orders: np.ndarray,
+    magnet_order: int,
+    *,
+    nor_was_checked: bool = False,
+    prefix: str = "mrg_",
+) -> pd.DataFrame:
+    """Build a Bottura Section 3.7 mixed-format table.
+
+    * ``n <= m``: columns ``B{n}_T`` / ``A{n}_T`` from *C_merged* (Tesla).
+    * ``n > m``: columns ``b{n}_units`` / ``a{n}_units`` from *C_units*.
+
+    When *nor_was_checked* is True (legacy SM18 workflow where normalization
+    happened inside ``compute_legacy_kn_per_turn``), ALL harmonics are
+    exported as units (``b{n}_units`` / ``a{n}_units``).
+
+    Parameters
+    ----------
+    C_merged : ndarray, shape (n_turns, H)
+        Merged complex coefficients (Tesla when nor not checked, units when
+        nor checked).
+    C_units : ndarray, shape (n_turns, H)
+        Normalised coefficients in units.
+    orders : ndarray, shape (H,)
+        Harmonic orders (1-based).
+    magnet_order : int
+        Main harmonic order m.
+    nor_was_checked : bool
+        True if the ``"nor"`` option was active in the pipeline.
+    prefix : str
+        Column name prefix.
+
+    Returns
+    -------
+    DataFrame
+    """
+    out: Dict[str, np.ndarray] = {}
+    m = int(magnet_order)
+    for j, n in enumerate([int(x) for x in orders]):
+        if nor_was_checked:
+            out[f"{prefix}b{n}_units"] = np.real(C_merged[:, j])
+            out[f"{prefix}a{n}_units"] = np.imag(C_merged[:, j])
+        elif n <= m:
+            out[f"{prefix}B{n}_T"] = np.real(C_merged[:, j])
+            out[f"{prefix}A{n}_T"] = np.imag(C_merged[:, j])
+        else:
+            out[f"{prefix}b{n}_units"] = np.real(C_units[:, j])
+            out[f"{prefix}a{n}_units"] = np.imag(C_units[:, j])
+    return pd.DataFrame(out)

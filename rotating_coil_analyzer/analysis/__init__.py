@@ -60,6 +60,9 @@ from .utility_functions import (
     find_contiguous_groups,
     process_kn_pipeline,
     build_harmonic_rows,
+    build_run_averages,
+    ba_table_from_C,
+    mixed_format_table,
     SPS_CURRENT_THRESHOLDS,
 )
 
@@ -111,5 +114,8 @@ __all__ = [
     "find_contiguous_groups",
     "process_kn_pipeline",
     "build_harmonic_rows",
+    "build_run_averages",
+    "ba_table_from_C",
+    "mixed_format_table",
     "SPS_CURRENT_THRESHOLDS",
 ]

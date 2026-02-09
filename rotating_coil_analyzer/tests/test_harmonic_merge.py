@@ -365,3 +365,92 @@ class TestMergeEndToEnd:
         assert "kn_source_type" in meta
         assert "merge_compensation_scheme" in meta
         assert "merge_per_n_source_map" in meta
+
+
+class TestBaTableFromC:
+    """Tests for the ba_table_from_C helper (2x bug regression)."""
+
+    def testba_table_from_C_no_spurious_factor(self) -> None:
+        """Regression: ba_table_from_C must NOT multiply by 2.
+
+        The pipeline C_n already includes the 2/N FFT fold factor.
+        Before the fix, the function applied M = 2*C, doubling all values.
+        """
+        from rotating_coil_analyzer.analysis.utility_functions import ba_table_from_C
+
+        n_turns, H = 5, 3
+        orders = np.arange(1, H + 1)
+        C = np.array([
+            [1.0 + 2.0j, 3.0 + 4.0j, 5.0 + 6.0j],
+        ] * n_turns)
+
+        df = ba_table_from_C(C, orders)
+
+        # B_n = Re(C_n), A_n = Im(C_n) — no factor of 2
+        np.testing.assert_allclose(df["normal_B1"].values, 1.0)
+        np.testing.assert_allclose(df["skew_A1"].values, 2.0)
+        np.testing.assert_allclose(df["normal_B2"].values, 3.0)
+        np.testing.assert_allclose(df["skew_A2"].values, 4.0)
+        np.testing.assert_allclose(df["normal_B3"].values, 5.0)
+        np.testing.assert_allclose(df["skew_A3"].values, 6.0)
+
+
+class TestMixedFormatTable:
+    """Tests for mixed_format_table (Bottura 3.7 mixed format)."""
+
+    def testmixed_format_table_splits_tesla_and_units(self) -> None:
+        """n<=m columns use Tesla from C_merged, n>m use units from C_units."""
+        from rotating_coil_analyzer.analysis.utility_functions import mixed_format_table
+
+        n_turns, H = 4, 5
+        orders = np.arange(1, H + 1)
+        m = 2
+
+        # C_merged in Tesla
+        C_merged = np.ones((n_turns, H), dtype=complex) * (10.0 + 1.0j)
+        # C_units (normalized) — different values
+        C_units = np.ones((n_turns, H), dtype=complex) * (100.0 + 10.0j)
+
+        df = mixed_format_table(C_merged, C_units, orders, m, nor_was_checked=False)
+
+        # n=1, n=2 (<=m): Tesla columns from C_merged
+        assert "mrg_B1_T" in df.columns
+        assert "mrg_A1_T" in df.columns
+        assert "mrg_B2_T" in df.columns
+        assert "mrg_A2_T" in df.columns
+        np.testing.assert_allclose(df["mrg_B1_T"].values, 10.0)
+        np.testing.assert_allclose(df["mrg_A2_T"].values, 1.0)
+
+        # n=3, 4, 5 (>m): units columns from C_units
+        assert "mrg_b3_units" in df.columns
+        assert "mrg_a3_units" in df.columns
+        assert "mrg_b5_units" in df.columns
+        np.testing.assert_allclose(df["mrg_b3_units"].values, 100.0)
+        np.testing.assert_allclose(df["mrg_a4_units"].values, 10.0)
+
+        # Should NOT have Tesla columns for n>m or units columns for n<=m
+        assert "mrg_b1_units" not in df.columns
+        assert "mrg_B3_T" not in df.columns
+
+    def testmixed_format_table_nor_all_units(self) -> None:
+        """When nor was checked, ALL harmonics are exported as units."""
+        from rotating_coil_analyzer.analysis.utility_functions import mixed_format_table
+
+        n_turns, H = 4, 5
+        orders = np.arange(1, H + 1)
+        m = 2
+
+        C_merged = np.ones((n_turns, H), dtype=complex) * (50.0 + 5.0j)
+        C_units = np.ones((n_turns, H), dtype=complex) * (999.0 + 99.0j)
+
+        df = mixed_format_table(C_merged, C_units, orders, m, nor_was_checked=True)
+
+        # ALL columns should be units (from C_merged, since nor already normalised)
+        for n in range(1, H + 1):
+            assert f"mrg_b{n}_units" in df.columns
+            assert f"mrg_a{n}_units" in df.columns
+            assert f"mrg_B{n}_T" not in df.columns
+            assert f"mrg_A{n}_T" not in df.columns
+
+        np.testing.assert_allclose(df["mrg_b1_units"].values, 50.0)
+        np.testing.assert_allclose(df["mrg_a1_units"].values, 5.0)

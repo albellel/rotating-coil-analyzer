@@ -35,7 +35,7 @@ df_corrected_k = df_k * w_k
 
 The numerator uses |I_mean| so that the correction works for both positive and negative ramps. The denominator keeps the sign of I_k.
 
-**Code:** `preprocess.py:139-207` (`di_dt_weights`), applied at `kn_pipeline.py:243-244`.
+**Code:** `preprocess.py:139-207` (`di_dt_weights`), applied at `kn_pipeline.py:250-252`.
 
 ### 2. Drift Correction + Integration to Flux (`dri`)
 
@@ -79,7 +79,7 @@ f_n = 2 * FFT(flux)[n] / N_s     for n = 1, 2, ..., H
 
 DC component (n=0) is dropped. The factor of 2 accounts for the two-sided spectrum.
 
-**Code:** `kn_pipeline.py:258-262`.
+**Code:** `kn_pipeline.py:265-270`.
 
 **Theory:** Bottura Eq. 18.
 
@@ -93,7 +93,7 @@ C_n = f_n / conj(kn_n) * R_ref^(n-1)
 
 Where `kn_n` is the complex sensitivity of the coil for harmonic order *n*. The conjugate and power-of-R scaling follow the CERN convention.
 
-**Code:** `kn_pipeline.py:264-277`.
+**Code:** `kn_pipeline.py:272-285`.
 
 **Theory:** Bottura Eq. 18.
 
@@ -108,7 +108,7 @@ phi_m = angle(C_abs[m])
 phi_wrapped = wrap_to_[-pi/2, +pi/2](phi_m)
 phi = phi_wrapped / m
 
-C_n = C_n * exp(-i * n * phi)     for n = 1, ..., H-1
+C_n = C_n * exp(-i * n * phi)     for n = 1, ..., H
 ```
 
 Wrapping to [-pi/2, +pi/2] is done by adding or subtracting pi:
@@ -118,9 +118,9 @@ if phi > pi/2:  phi -= pi
 if phi < -pi/2: phi += pi
 ```
 
-The last harmonic (n=H) is excluded from rotation by default (`legacy_rotate_excludes_last=True`), matching the C++ loop bounds.
+All harmonics n=1..H are rotated by default (`legacy_rotate_excludes_last=False`), matching Bottura Eq. AIV.6, the C++ analyzer, and the Pentella analyzer. Setting `legacy_rotate_excludes_last=True` excludes the last harmonic, which was an off-by-one in some legacy SM18 code.
 
-**Code:** `kn_pipeline.py:283-303`.
+**Code:** `kn_pipeline.py:291-308`.
 
 **Theory:** Bottura Eq. AIV.5-6.
 
@@ -138,7 +138,7 @@ x = Re(z),  y = Im(z)
 
 For dipoles (m=1), uses compensated harmonics n=10 and n=11 (legacy convention).
 
-**Code:** `kn_pipeline.py:306-329`.
+**Code:** `kn_pipeline.py:310-342`.
 
 **Theory:** Bottura Eq. AIII.4.
 
@@ -152,7 +152,7 @@ C'_n = sum_{k=n}^{H-1} C(k,n) * zR^(k-n) * C_k
 
 Where C(k,n) is the binomial coefficient "k choose n" and zR is the dimensionless centre from the CEL step.
 
-**Code:** `kn_pipeline.py:332-350`.
+**Code:** `kn_pipeline.py:343-362`.
 
 **Theory:** Bottura Eq. AIII.6.
 
@@ -167,7 +167,9 @@ C_n = C_n * scale          for all n
 
 If `skew_main=True`, Im(C_m) is used instead of Re(C_m).
 
-**Code:** `kn_pipeline.py:352-361`.
+**Important:** The in-pipeline `nor` option normalises **all** harmonics (including n <= m) in-place. This is used by SM18 and some validation workflows where the reference output is fully normalised. For the standard Bottura Section 3.7 record format (Tesla for n <= m, units for n > m), omit `nor` from the pipeline options and use `safe_normalize_to_units` post-merge instead — this is exactly what `process_kn_pipeline()` does by default.
+
+**Code:** `kn_pipeline.py:364-374`.
 
 **Theory:** Bottura Eq. AIV.8.
 
@@ -182,7 +184,7 @@ The standard merge mode for parity validation is `abs_upto_m_cmp_above`:
 
 Other modes: `abs_all`, `cmp_all`, `abs_main_cmp_others`, `custom`.
 
-**Code:** `kn_pipeline.py:384-458`.
+**Code:** `kn_pipeline.py:396-469`.
 
 ## Cross-Implementation Comparison
 
@@ -192,29 +194,32 @@ Five implementations have been compared step by step:
 |------|------------------------|---------------------------------|-------------------------------------|--------------------------|---------------|
 | di/dt | `preprocess.py:139` | `computeHarmonics()` | `diDtCorrection()` | `correct_di_dt()` | Eq. AII.12 |
 | Drift | `preprocess.py:265` | Line ~127 | `driftCorrection()` | `remove_drift()` | Eq. AII.14 |
-| FFT | `kn_pipeline.py:258` | Line ~145 | `fft()` call | `np.fft.fft()` | Eq. 18 |
-| Kn | `kn_pipeline.py:269` | Lines 149-156 | `applySensitivity()` | `apply_kn()` | Eq. 18 |
-| Rotation | `kn_pipeline.py:295` | Lines 160-175 | `rotateHarmonics()` | `rotate()` | Eq. AIV.5-6 |
-| CEL | `kn_pipeline.py:310` | Lines 180-195 | `centerLocation()` | `center_location()` | Eq. AIII.4 |
-| Feeddown | `kn_pipeline.py:336` | Lines 200-220 | `feeddown()` | `feeddown()` | Eq. AIII.6 |
-| Normalisation | `kn_pipeline.py:355` | Lines 225-235 | `normalize()` | `normalize()` | Eq. AIV.8 |
-| Merge | `kn_pipeline.py:384` | Post-pipeline | Post-pipeline | Post-pipeline | N/A |
+| FFT | `kn_pipeline.py:265` | Line ~145 | `fft()` call | `np.fft.fft()` | Eq. 18 |
+| Kn | `kn_pipeline.py:272` | Lines 149-156 | `applySensitivity()` | `apply_kn()` | Eq. 18 |
+| Rotation | `kn_pipeline.py:299` | Lines 160-175 | `rotateHarmonics()` | `rotate()` | Eq. AIV.5-6 |
+| CEL | `kn_pipeline.py:315` | Lines 180-195 | `centerLocation()` | `center_location()` | Eq. AIII.4 |
+| Feeddown | `kn_pipeline.py:344` | Lines 200-220 | `feeddown()` | `feeddown()` | Eq. AIII.6 |
+| Normalisation | `kn_pipeline.py:367` | Lines 225-235 | `normalize()` | `normalize()` | Eq. AIV.8 |
+| Merge | `kn_pipeline.py:396` | Post-pipeline | Post-pipeline | Post-pipeline | N/A |
 
 **All five implementations are mathematically identical for every pipeline step.** The only differences are language-specific (indexing conventions, array layout) and do not affect numerical results.
 
 ## Known Differences
 
-### Rotation loop bounds
+### Rotation loop bounds (resolved)
 
-The C++ code rotates ALL harmonics k=1..H. Parity validation confirms that `legacy_rotate_excludes_last=False` is required to match the C++ output. The Python default (`True`) excludes the last harmonic; set it to `False` for golden-standard parity.
+The C++ code, Pentella analyzer, and Bottura Eq. AIV.6 all rotate ALL harmonics k=1..H. The Python default is now `legacy_rotate_excludes_last=False`, matching all three references. The `True` option is retained for legacy SM18 parity where the original C++ code had an off-by-one in the rotation loop.
 
-### Normalisation source
+### Normalisation source (resolved)
 
-The reference output uses a mixed format: Tesla for n <= m, normalised units for n > m. To reproduce this, run the pipeline *without* the `nor` option, then normalise n > m manually after merging:
+The standard Bottura Section 3.7 record format uses Tesla for n <= m and normalised units for n > m. The `process_kn_pipeline()` wrapper now handles this automatically:
 
-```python
-b_n = C_merged[n].real / C_merged[m].real * 10000
-```
+1. Runs `compute_legacy_kn_per_turn` **without** `nor` — harmonics stay in Tesla
+2. Merges channels in Tesla via `merge_coefficients`
+3. Normalises post-merge via `safe_normalize_to_units` — produces units array
+4. `build_harmonic_rows()` picks Tesla for n <= m and units for n > m
+
+The in-pipeline `nor` option (which normalises ALL harmonics in-place) is still available for SM18 and validation workflows where the reference output is fully normalised.
 
 ### Pentella offset
 
@@ -232,7 +237,7 @@ Flux files typically contain more turns than the reference. The legacy software 
 |----------|------|---------|
 | `load_segment_kn_txt` | 108 | Load Kn from text file |
 | `compute_legacy_kn_per_turn` | 172 | Main pipeline entry point |
-| `merge_coefficients` | 384 | ABS/CMP channel merge |
+| `merge_coefficients` | 396 | ABS/CMP channel merge |
 | `_wrap_arg_to_pm_pi_over_2` | 159 | Rotation angle wrapping |
 
 ### Python (`preprocess.py`)
@@ -240,8 +245,8 @@ Flux files typically contain more turns than the reference. The legacy software 
 | Function | Line | Purpose |
 |----------|------|---------|
 | `di_dt_weights` | 139 | Compute di/dt correction weights |
-| `apply_di_dt_to_channels` | 210 | Apply di/dt to both channels |
-| `integrate_to_flux` | 228 | Drift correction + integration |
+| `apply_di_dt_to_channels` | 211 | Apply di/dt to both channels |
+| `integrate_to_flux` | 229 | Drift correction + integration |
 | `estimate_linear_slope_per_turn` | 105 | Least-squares dI/dt per turn |
 
 ### C++ (`MatlabAnalyzerRotCoil.cpp`)
@@ -277,7 +282,7 @@ I_range[turn] = max(I_blocks[turn, :]) - min(I_blocks[turn, :])
 
 This measures real current drift or ramp contamination while filtering out sample-level noise spikes. Raw `max(I) - min(I)` over 1024 samples is dominated by ADC noise and would reject even perfectly flat plateaus.
 
-**Code:** `utility_functions.py:39-75` (`compute_block_averaged_range`)
+**Code:** `utility_functions.py:51-87` (`compute_block_averaged_range`)
 
 #### Step 2: Three-rule plateau detection (`detect_plateau_turns`)
 
@@ -291,7 +296,7 @@ A turn is accepted as "on a plateau" only if **all three** rules pass:
 
 Rules (b) and (c) reject turns that straddle a ramp-to-plateau or plateau-to-ramp boundary. A turn that passes rule (a) but fails (b) or (c) is flagged as "boundary-rejected".
 
-**Code:** `utility_functions.py:78-124` (`detect_plateau_turns`)
+**Code:** `utility_functions.py:90-136` (`detect_plateau_turns`)
 
 #### Step 3: Current-level classification (`classify_current`)
 
@@ -308,7 +313,7 @@ Each plateau turn is classified by its mean current into a machine cycle-type la
 
 Custom thresholds can be provided for other machines (PS, PSB, LHC, ...) via the `thresholds` parameter.
 
-**Code:** `utility_functions.py:131-167` (`classify_current`)
+**Code:** `utility_functions.py:155-189` (`classify_current`)
 
 ### Pipeline Wrapper
 
@@ -322,7 +327,7 @@ compute_legacy_kn_per_turn  -->  merge_coefficients  -->  safe_normalize_to_unit
 
 Returns the full `LegacyKnPerTurn` result, merged complex coefficients, normalised units, and the `ok_main` boolean mask.
 
-**Code:** `utility_functions.py:213-293` (`process_kn_pipeline`)
+**Code:** `utility_functions.py:235-315` (`process_kn_pipeline`)
 
 #### `build_harmonic_rows`
 
@@ -333,7 +338,7 @@ Converts pipeline results into a list of dicts (one per turn) suitable for `pd.D
 - bn/an (units) for higher orders
 - Optional extra columns (e.g. `global_turn`, `label`, `I_range_A`)
 
-**Code:** `utility_functions.py:296-353` (`build_harmonic_rows`)
+**Code:** `utility_functions.py:318-375` (`build_harmonic_rows`)
 
 ### General-Purpose Utilities
 
@@ -343,18 +348,41 @@ Finds contiguous runs of `True` values in a boolean array. Used to identify inje
 
 Returns a list of `(start, end)` tuples (inclusive indices), optionally filtered by minimum group length.
 
-**Code:** `utility_functions.py:174-206` (`find_contiguous_groups`)
+**Code:** `utility_functions.py:196-228` (`find_contiguous_groups`)
+
+### Run-Level Aggregation and Export
+
+#### `build_run_averages`
+
+Computes per-run mean b3 with run ordering, suitable for hysteresis and ramp analysis. Requires columns `run`, `I_mean_A`, `I_nom_A`, `b3_units`, and `turn_in_run` in the input DataFrame.
+
+**Code:** `utility_functions.py:382-404` (`build_run_averages`)
+
+#### `ba_table_from_C`
+
+Converts complex harmonic coefficients to a legacy B/A DataFrame (all values in Tesla). Convention: B_n = Re(C_n), A_n = Im(C_n). Shared by the GUI Harmonic Merge tab and analysis notebooks.
+
+**Code:** `utility_functions.py:411-440` (`ba_table_from_C`)
+
+#### `mixed_format_table`
+
+Builds a Bottura Section 3.7 mixed-format DataFrame: Tesla for n <= m (main and lower orders), normalised units for n > m (higher orders). When the `nor` option was active in the pipeline, all harmonics are exported as units. Shared by the GUI Harmonic Merge tab and analysis notebooks.
+
+**Code:** `utility_functions.py:443-493` (`mixed_format_table`)
 
 ### Code References
 
 | Function | Line | Purpose |
 |----------|------|---------|
-| `compute_block_averaged_range` | 39 | Noise-robust current range per turn |
-| `detect_plateau_turns` | 78 | Three-rule plateau detection |
-| `classify_current` | 142 | Current-level classification |
-| `find_contiguous_groups` | 174 | Contiguous True-run finder |
-| `process_kn_pipeline` | 213 | Full pipeline wrapper |
-| `build_harmonic_rows` | 296 | DataFrame row builder |
+| `compute_block_averaged_range` | 51 | Noise-robust current range per turn |
+| `detect_plateau_turns` | 90 | Three-rule plateau detection |
+| `classify_current` | 155 | Current-level classification |
+| `find_contiguous_groups` | 196 | Contiguous True-run finder |
+| `process_kn_pipeline` | 235 | Full pipeline wrapper |
+| `build_harmonic_rows` | 318 | DataFrame row builder |
+| `build_run_averages` | 382 | Per-run mean b3 with run ordering |
+| `ba_table_from_C` | 411 | Complex coefficients to legacy B/A DataFrame |
+| `mixed_format_table` | 443 | Bottura 3.7 mixed-format DataFrame |
 
 ## References
 

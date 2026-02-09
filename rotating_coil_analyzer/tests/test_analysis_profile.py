@@ -32,7 +32,7 @@ def test_profile_defaults() -> None:
     assert p.options == ("dri", "rot")
     assert p.drift_mode == "legacy"
     assert p.merge_mode == "abs_upto_m_cmp_above"
-    assert p.legacy_rotate_excludes_last is True
+    assert p.legacy_rotate_excludes_last is False
     assert p.min_main_field_T == 1e-20
     assert p.abs_calib == 1.0
     assert p.l_coil_m is None

@@ -61,6 +61,9 @@ The GUI has five tabs:
 - Apply kn calibration to compute calibrated harmonics
 - Select Abs/Cmp source per harmonic order
 - Preset modes: "main from Abs, others from Cmp", etc.
+- Configurable `max_zR` control for centre-location clamping (prevents feeddown noise amplification in dipoles with AC compensation)
+- Post-merge normalisation: Tesla for n <= m, units for n > m (Bottura Section 3.7)
+- Bottura 3.7 mixed-format CSV export via `mixed_format_table()`
 - Record compensation scheme metadata
 - Export with full traceability (kn provenance, per-n source map)
 
@@ -141,6 +144,9 @@ For **streaming (continuous) acquisition** measurements where the magnet current
 | `find_contiguous_groups` | Find contiguous runs of True in a boolean mask (e.g. injection plateau groups) |
 | `process_kn_pipeline` | Full Kn pipeline in one call: dit -> drift -> FFT -> kn -> merge -> normalise |
 | `build_harmonic_rows` | Convert pipeline results into a list of dicts, ready for `pd.DataFrame()` |
+| `build_run_averages` | Per-run mean b3 with run ordering (for hysteresis / ramp analysis) |
+| `ba_table_from_C` | Convert complex coefficients to legacy B/A DataFrame (all Tesla) |
+| `mixed_format_table` | Bottura Section 3.7 mixed-format DataFrame (Tesla for n <= m, units for n > m) |
 
 ### Quick example
 
@@ -151,6 +157,9 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     classify_current,
     process_kn_pipeline,
     build_harmonic_rows,
+    build_run_averages,
+    ba_table_from_C,
+    mixed_format_table,
 )
 
 # Block-averaged current range per turn (filters ADC noise)
@@ -191,7 +200,7 @@ label = classify_current(I_value, thresholds=psb_thresholds)
 ## Running Tests
 
 ```bash
-# Run all tests (96 tests)
+# Run all tests (99 tests)
 python -m pytest rotating_coil_analyzer/tests/ -v
 
 # Run specific test file
@@ -256,7 +265,7 @@ rotating_coil_analyzer/
 │   └── discovery.py         #   Measurement folder discovery
 ├── models/                 # Data models (SegmentFrame, MeasurementCatalog, AnalysisProfile)
 ├── notebooks/              # Jupyter analysis & example notebooks
-├── tests/                  # Unit tests (96 tests)
+├── tests/                  # Unit tests (99 tests)
 └── validation/             # Golden reference validation (C++ parity)
 ```
 
@@ -280,7 +289,7 @@ The analysis algorithms follow the standard procedures described in:
 Key formulas implemented:
 - FFT-based harmonic extraction: `f_n = 2 * FFT(flux) / N`
 - Kn application: `C_n = f_n / conj(kn) * Rref^(n-1)`
-- Phase rotation: `C_rotated = C * exp(-i * phi * k)`
+- Phase rotation: `C_rotated = C * exp(-i * phi * k)` for all harmonics k=1..H (Bottura Eq. AIV.6)
 - Center location (CEL) and feeddown corrections
 
-The implementation has been validated against the legacy C++ analyzer (ffmm/MatlabAnalyzerRotCoil.cpp) across multiple magnet types and CERN machine complexes.
+The implementation has been validated step-by-step against all five reference implementations: the legacy C++ analyzer (ffmm/MatlabAnalyzerRotCoil.cpp), the MATLAB Coder path (RotatingCoilAnalysisTurn.m), the Pentella analyzer (rotcoil_lib.py), and Bottura's theory. All five are mathematically identical for every pipeline step (see `docs/analysis_pipeline.md` for the full cross-implementation comparison table).
