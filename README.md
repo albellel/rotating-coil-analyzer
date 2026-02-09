@@ -116,7 +116,10 @@ Example and analysis notebooks are in `rotating_coil_analyzer/notebooks/`:
 4. **b3_from_kn_20251212_171026_SPS_MBA_CS.ipynb** -- b3 from Kn for SPS MBA (CS segment)
 5. **b3_from_kn_20251212_171026_SPS_MBA_NCS.ipynb** -- b3 from Kn for SPS MBA (NCS segment)
 6. **analysis_20260206_142231_SPS_MBB_NCS.ipynb** -- Full harmonic analysis for SPS MBB dipole (NCS, single plateau)
-7. **analysis_20260206_144537_SPS_MBB_NCS_supercycle.ipynb** -- Streaming supercycle analysis for SPS MBB dipole (NCS, multi-plateau with automatic plateau detection)
+7. **analysis_20260206_144537_SPS_MBB_NCS_supercycle.ipynb** -- Streaming supercycle analysis for SPS MBB dipole (NCS). Supercycle structure: LHC_pilot -> MD1 -> SFTPRO x20. Includes automatic plateau detection, hysteresis evolution tracking, within-plateau settling analysis (eddy currents vs current ramp). Key finding: MD1 is a true current plateau (drift < 0.1 A), SFTPRO is not (current ramps ~5 A).
+
+### Eddy-current analysis notebooks
+10. **eddy_current_b3_settling_200GeV.ipynb** -- Eddy-current b3 settling time at the MD1 injection plateau (exponential fit of sextupole decay after LHC excitation)
 
 ### Validation notebooks
 8. **golden_standard_parity.ipynb** -- Validation against legacy C++ results (LIU BTP8 quadrupole)

@@ -57,7 +57,6 @@ processed_data/
 plots/
 reports/
 tmp/
-outputs/
 *.log
 *.bak
 
@@ -67,6 +66,17 @@ outputs/
 rotating_coil_analyzer/notebooks/*_computed.txt
 rotating_coil_analyzer/notebooks/*_executed.ipynb
 rotating_coil_analyzer/notebooks/*.png
+
+# =========================
+# Executed notebooks (large, regenerated on demand)
+# =========================
+rotating_coil_analyzer/notebooks/executed_*.ipynb
+
+# =========================
+# Temp plots from interactive analysis
+# =========================
+*.png
+!docs/*.png
 
 
 # =========================
