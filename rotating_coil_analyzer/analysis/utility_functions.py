@@ -28,10 +28,26 @@ ba_table_from_C
     Convert complex coefficients to legacy B/A DataFrame (all Tesla).
 mixed_format_table
     Bottura Section 3.7 mixed-format DataFrame (Tesla for n<=m, units for n>m).
+mad_sigma_clip
+    MAD-based outlier removal per operating point.
+discover_runs
+    Parse Run_XX_I_YYA filenames from a measurement directory.
+plateau_summary
+    Per-run/per-level mean+std of B1, TF, and all harmonics.
+plot_hysteresis
+    Hysteresis loop with run-order gradient coloring.
+eddy_model
+    Exponential eddy-current settling model for curve_fit.
+compute_level_stats
+    Mean/std of I, B1, b2, b3, TF for a given operating point.
+diff_sigma
+    Difference, propagated error, and sigma significance.
 """
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
@@ -491,3 +507,334 @@ def mixed_format_table(
             out[f"{prefix}b{n}_units"] = np.real(C_units[:, j])
             out[f"{prefix}a{n}_units"] = np.imag(C_units[:, j])
     return pd.DataFrame(out)
+
+
+# =====================================================================
+#  Outlier removal (MAD sigma clip)
+# =====================================================================
+
+def mad_sigma_clip(
+    df: pd.DataFrame,
+    col: str,
+    n_sigma: float = 5,
+    label_col: str = "label",
+) -> tuple[pd.DataFrame, dict]:
+    """Remove outliers per operating-point label using MAD.
+
+    For each unique value in *label_col*, computes the median and MAD
+    (median absolute deviation) of *col*, then flags rows more than
+    *n_sigma* scaled-MAD from the median as outliers.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Input data.
+    col : str
+        Column to test for outliers.
+    n_sigma : float
+        Number of MAD-scaled sigmas for the clipping threshold.
+    label_col : str
+        Column containing operating-point labels.
+
+    Returns
+    -------
+    df_clean : DataFrame
+        Copy of *df* with outliers removed.
+    removed : dict
+        ``{label: count}`` of removed rows per operating point.
+    """
+    keep = pd.Series(True, index=df.index)
+    removed: dict = {}
+    for lab in df[label_col].unique():
+        mask = df[label_col] == lab
+        vals = df.loc[mask, col]
+        if len(vals) < 5:
+            continue
+        med = vals.median()
+        mad = np.median(np.abs(vals - med))
+        sigma = 1.4826 * mad
+        if sigma < 1e-15:
+            continue
+        outlier = np.abs(vals - med) > n_sigma * sigma
+        n_out = outlier.sum()
+        if n_out > 0:
+            keep.loc[vals.index[outlier]] = False
+            removed[lab] = int(n_out)
+    return df[keep].copy(), removed
+
+
+# =====================================================================
+#  Run discovery
+# =====================================================================
+
+def discover_runs(
+    run_dir: str | Path,
+    pcb_label: str,
+    file_pattern: str | None = None,
+) -> list[dict]:
+    """Discover measurement runs by parsing filenames.
+
+    Scans *run_dir* for files matching
+    ``*_{pcb_label}_raw_measurement_data.txt`` and extracts run ID and
+    nominal current from the ``Run_XX_I_YYA`` portion of the filename.
+
+    Parameters
+    ----------
+    run_dir : path-like
+        Directory containing raw measurement files.
+    pcb_label : str
+        PCB segment label, e.g. ``"Integral"`` or ``"Central"``.
+    file_pattern : str, optional
+        Override glob pattern.  Default derives from *pcb_label*.
+
+    Returns
+    -------
+    list of dict
+        Each dict has keys ``run_id`` (int), ``I_nom`` (float), ``file``
+        (Path).
+    """
+    run_dir = Path(run_dir)
+    if file_pattern is None:
+        file_pattern = f"*_{pcb_label}_raw_measurement_data.txt"
+    files = sorted(run_dir.glob(file_pattern))
+    runs: list[dict] = []
+    for f in files:
+        m = re.search(r'Run_(\d+)_I_([-\d.]+)A', f.name)
+        if m:
+            runs.append({
+                "run_id": int(m.group(1)),
+                "I_nom": float(m.group(2)),
+                "file": f,
+            })
+    return runs
+
+
+# =====================================================================
+#  Plateau summary
+# =====================================================================
+
+def plateau_summary(
+    df: pd.DataFrame,
+    n_last: int,
+    harmonics_range=range(2, 16),
+) -> pd.DataFrame:
+    """Per-run mean and std of B1, TF, and all harmonics.
+
+    For each run, selects the last *n_last* turns, keeps only those with
+    ``ok_main == True``, and computes mean/std of B1 and every harmonic
+    column found in the DataFrame.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Must contain ``run_id``, ``turn_in_run``, ``ok_main``, ``I_nom``,
+        ``branch``, ``B1_T``, and harmonic columns ``b{n}_units`` /
+        ``a{n}_units``.
+    n_last : int
+        Number of last turns per run to average.
+    harmonics_range : range
+        Harmonic orders to include (default ``range(2, 16)``).
+
+    Returns
+    -------
+    DataFrame
+        One row per run with mean/std columns plus quality flag.
+    """
+    records: list[dict] = []
+    for run_id in sorted(df["run_id"].unique()):
+        rdf = df[df["run_id"] == run_id].sort_values("turn_in_run")
+        sel = rdf.tail(n_last)
+        ok = sel["ok_main"].astype(bool)
+        rec: dict = {
+            "run_id": run_id,
+            "I_nom": sel["I_nom"].iloc[0],
+            "branch": sel["branch"].iloc[0],
+            "n_total": len(rdf),
+            "n_selected": len(sel),
+            "n_ok": int(ok.sum()),
+        }
+        rec["B1_mean"] = sel.loc[ok, "B1_T"].mean() if ok.any() else np.nan
+        rec["B1_std"] = (
+            (sel.loc[ok, "B1_T"].std() if ok.sum() > 1 else 0.0)
+            if ok.any() else np.nan
+        )
+        for h in harmonics_range:
+            for prefix in ["b", "a"]:
+                col = f"{prefix}{h}_units"
+                if col in sel.columns and ok.any():
+                    rec[f"{col}_mean"] = sel.loc[ok, col].mean()
+                    rec[f"{col}_std"] = (
+                        sel.loc[ok, col].std() if ok.sum() > 1 else 0.0
+                    )
+                else:
+                    rec[f"{col}_mean"] = np.nan
+                    rec[f"{col}_std"] = np.nan
+        rec["TF"] = (
+            rec["B1_mean"] / (rec["I_nom"] / 1000.0)
+            if ok.any() and abs(rec["I_nom"]) > 1.0
+            else np.nan
+        )
+        rec["quality"] = "good" if rec["n_ok"] >= max(1, n_last // 2) else "bad"
+        records.append(rec)
+    return pd.DataFrame(records)
+
+
+# =====================================================================
+#  Hysteresis plotting
+# =====================================================================
+
+def plot_hysteresis(
+    ax,
+    summ: pd.DataFrame,
+    xcol: str,
+    ycol: str,
+    yerr_col: str | None = None,
+    branch_col: str = "branch",
+    branch_colors: dict | None = None,
+):
+    """Plot a hysteresis loop with run-order gradient coloring.
+
+    Parameters
+    ----------
+    ax : matplotlib Axes
+    summ : DataFrame
+        Summary table (one row per run), must contain *xcol*, *ycol*,
+        *branch_col*, and ``"quality"`` and ``"run_id"`` columns.
+    xcol, ycol : str
+        Column names for x and y data.
+    yerr_col : str, optional
+        Column name for y error bars.
+    branch_col : str
+        Column identifying ascending / descending branch.
+    branch_colors : dict, optional
+        ``{branch_label: color}``.  Defaults to
+        ``{"ascending": "tab:blue", "descending": "tab:red"}``.
+    """
+    if branch_colors is None:
+        branch_colors = {"ascending": "tab:blue", "descending": "tab:red"}
+
+    s = summ.sort_values("run_id")
+    valid = (s["quality"] == "good") & s[ycol].notna()
+    if valid.sum() > 1:
+        sv = s[valid].reset_index(drop=True)
+        xg, yg = sv[xcol].values, sv[ycol].values
+        n = len(xg)
+        for i in range(n - 1):
+            frac = i / max(n - 2, 1)
+            ax.plot(
+                [xg[i], xg[i + 1]], [yg[i], yg[i + 1]], "-",
+                color=branch_colors.get(sv[branch_col].iloc[i + 1], "grey"),
+                lw=1.0 + 2.5 * frac,
+                alpha=0.15 + 0.75 * frac,
+                solid_capstyle="round",
+                zorder=2,
+            )
+    for br, col in branch_colors.items():
+        good = (
+            (s[branch_col] == br)
+            & (s["quality"] == "good")
+            & s[ycol].notna()
+        )
+        if good.any():
+            kw = dict(yerr=s.loc[good, yerr_col]) if yerr_col else {}
+            ax.errorbar(
+                s.loc[good, xcol], s.loc[good, ycol],
+                fmt="o", color=col, ms=4, capsize=2,
+                label=br, zorder=4, **kw,
+            )
+
+
+# =====================================================================
+#  Eddy-current model
+# =====================================================================
+
+def eddy_model(t, B_inf, A, tau):
+    r"""Exponential eddy-current settling model.
+
+    .. math:: B(t) = B_\infty + A \, e^{-t/\tau}
+
+    Intended for use with :func:`scipy.optimize.curve_fit`.
+    """
+    return B_inf + A * np.exp(-t / tau)
+
+
+# =====================================================================
+#  Statistical comparison helpers
+# =====================================================================
+
+def compute_level_stats(
+    df: pd.DataFrame,
+    label: str,
+    ok_col: str = "ok_main",
+    label_col: str = "label",
+) -> dict:
+    """Mean/std of I, B1, b2, b3, TF for a given operating point.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Settled / cleaned data with columns ``label``, ``ok_main``,
+        ``I_mean_A``, ``B1_T``, ``b2_units``, ``b3_units``.
+    label : str
+        Operating-point label to filter on.
+    ok_col : str
+        Boolean column for quality gate.
+    label_col : str
+        Column containing operating-point labels.
+
+    Returns
+    -------
+    dict
+        Keys: ``N``, ``I_mean``, ``B1_mean``, ``B1_std``,
+        ``b2_mean``, ``b2_std``, ``b3_mean``, ``b3_std``,
+        ``TF_mean``, ``TF_std``.  Empty dict if no data.
+    """
+    sub = df[(df[label_col] == label) & df[ok_col]].copy()
+    if len(sub) == 0:
+        return {}
+    tf = sub["B1_T"] / (sub["I_mean_A"] / 1000.0)
+    return {
+        "N": len(sub),
+        "I_mean": sub["I_mean_A"].mean(),
+        "B1_mean": sub["B1_T"].mean(),
+        "B1_std": sub["B1_T"].std(),
+        "b2_mean": sub["b2_units"].mean(),
+        "b2_std": sub["b2_units"].std(),
+        "b3_mean": sub["b3_units"].mean(),
+        "b3_std": sub["b3_units"].std(),
+        "TF_mean": tf.mean(),
+        "TF_std": tf.std(),
+    }
+
+
+def diff_sigma(
+    stats1: dict,
+    stats2: dict,
+    key: str,
+) -> tuple[float, float, float]:
+    """Compute difference, propagated error, and sigma significance.
+
+    Parameters
+    ----------
+    stats1, stats2 : dict
+        Output of :func:`compute_level_stats`.
+    key : str
+        Base key (e.g. ``"B1"``).  The dicts must contain
+        ``{key}_mean``, ``{key}_std``, and ``N``.
+
+    Returns
+    -------
+    diff : float
+        ``stats1[key_mean] - stats2[key_mean]``
+    error : float
+        Propagated standard error of the difference.
+    sigma : float
+        ``|diff| / error`` (0 if error is zero).
+    """
+    d = stats1[f"{key}_mean"] - stats2[f"{key}_mean"]
+    err = np.sqrt(
+        (stats1[f"{key}_std"] ** 2 / stats1["N"])
+        + (stats2[f"{key}_std"] ** 2 / stats2["N"])
+    )
+    sig = abs(d) / err if err > 0 else 0.0
+    return d, err, sig

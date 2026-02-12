@@ -106,3 +106,9 @@ measurements/
 # Local analysis output (notebook exports, plots, etc.)
 # =========================
 output/
+
+# =========================
+# Presentation template & generator
+# =========================
+presentation_template/
+create_mc62_presentation.py
