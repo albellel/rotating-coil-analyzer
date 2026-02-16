@@ -53,11 +53,6 @@ class AnalysisProfile:
         Coil length in metres (used for provenance/export, not pipeline math).
     skew_main : bool
         If True, use Im(main_field) for normalization instead of Re.
-    max_zR : float
-        Maximum allowed |zR| (dimensionless centre offset) before clamping
-        to zero in the CEL step.  Default 1.0 preserves legacy behaviour.
-        Use 0.01 for dipoles with AC compensation to prevent feeddown
-        noise amplification.
     """
 
     magnet_order: int
@@ -74,7 +69,6 @@ class AnalysisProfile:
     abs_calib: float = 1.0
     l_coil_m: Optional[float] = None
     skew_main: bool = False
-    max_zR: float = 1.0
 
     # ------------------------------------------------------------------
     # Factory

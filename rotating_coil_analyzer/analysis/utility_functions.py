@@ -259,7 +259,6 @@ def process_kn_pipeline(
     options: tuple[str, ...] = ("dri", "rot", "cel", "fed"),
     drift_mode: str = "legacy",
     min_b1_T: float = 1e-4,
-    max_zr: float = 0.01,
     merge_mode: str = "abs_upto_m_cmp_above",
 ):
     """Run the full Kn pipeline on selected turns.
@@ -285,8 +284,6 @@ def process_kn_pipeline(
         ``"legacy"`` or ``"weighted"``.
     min_b1_T : float
         Minimum |B1| for normalisation.
-    max_zr : float
-        Maximum z-rotation for CEL step.
     merge_mode : str
         Channel merge strategy.
 
@@ -312,7 +309,6 @@ def process_kn_pipeline(
         options=options,
         drift_mode=drift_mode,
         legacy_rotate_excludes_last=False,
-        max_zR=max_zr,
     )
 
     C_merged, _ = merge_coefficients(

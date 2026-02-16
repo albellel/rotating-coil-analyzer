@@ -184,7 +184,6 @@ def compute_legacy_kn_per_turn(
     skew_main: bool = False,
     eps_main: float = 1e-20,
     legacy_rotate_excludes_last: bool = False,
-    max_zR: float = 1.0,
 ) -> LegacyKnPerTurn:
     """Compute legacy per-turn harmonics with $k_n$ application.
 
@@ -212,12 +211,6 @@ def compute_legacy_kn_per_turn(
     legacy_rotate_excludes_last:
         If False (default), rotate all harmonics n=1..H (Bottura Eq. AIV.6, C++, Pentella).
         If True, exclude the last harmonic from rotation (legacy SM18 off-by-one).
-    max_zR:
-        Maximum allowed |zR| (center offset / R_ref) before clamping to 0.
-        Default 1.0 preserves legacy behaviour.  For dipoles with AC
-        compensation where the CEL uses noise-level compensated harmonics
-        (n=10, 11), a tighter value (e.g. 0.01) prevents feeddown Taylor
-        expansion from amplifying noise.
 
     Returns
     -------
@@ -329,10 +322,7 @@ def compute_legacy_kn_per_turn(
                 zR[ok_cel] = -(Cn_1[ok_cel] / ((m - 1.0) * Cn_2[ok_cel]))
             # else: zR stays 0+0j
 
-        # Clamp physically unreasonable center offsets.  The feeddown Taylor
-        # expansion amplifies noise as comb(k,n) * zR^(k-n); for H=15,
-        # comb(14,7)*|zR|^7 ~ 27 at |zR|=0.5.  Use max_zR to control.
-        bad_zR = ~np.isfinite(zR) | (np.abs(zR) > float(max_zR))
+        bad_zR = ~np.isfinite(zR)
         if np.any(bad_zR):
             zR[bad_zR] = 0.0
 
@@ -559,5 +549,4 @@ def compute_from_profile(
         skew_main=profile.skew_main,
         eps_main=profile.min_main_field_T,
         legacy_rotate_excludes_last=profile.legacy_rotate_excludes_last,
-        max_zR=profile.max_zR,
     )

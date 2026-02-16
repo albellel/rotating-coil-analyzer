@@ -61,7 +61,6 @@ The GUI has five tabs:
 - Apply kn calibration to compute calibrated harmonics
 - Select Abs/Cmp source per harmonic order
 - Preset modes: "main from Abs, others from Cmp", etc.
-- Configurable `max_zR` control for centre-location clamping (prevents feeddown noise amplification in dipoles with AC compensation)
 - Post-merge normalisation: Tesla for n <= m, units for n > m (Bottura Section 3.7)
 - Bottura 3.7 mixed-format CSV export via `mixed_format_table()`
 - Record compensation scheme metadata

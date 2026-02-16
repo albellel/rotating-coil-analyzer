@@ -221,21 +221,6 @@ def build_phase3b_harmonic_merge_panel(
         layout=w.Layout(width="200px"),
     )
     skew_main = w.Checkbox(value=False, description="Skew main harmonic")
-    max_zR_widget = w.FloatText(
-        value=1.0,
-        description="max |zR|:",
-        style={"description_width": "110px"},
-        layout=w.Layout(width="200px"),
-    )
-
-    def _on_magnet_order_change(change) -> None:
-        """Auto-set max_zR to 0.01 for dipoles (m=1)."""
-        if change["new"] == 1:
-            max_zR_widget.value = 0.01
-        else:
-            max_zR_widget.value = 1.0
-
-    magnet_order.observe(_on_magnet_order_change, names="value")
 
     # ---- Processing options (legacy ordering) ----
     opt_dit = w.Checkbox(value=False, description="di/dt correction")
@@ -364,7 +349,6 @@ def build_phase3b_harmonic_merge_panel(
                     abs_calib.value = _profile.abs_calib
                     drift_mode.value = _profile.drift_mode
                     skew_main.value = _profile.skew_main
-                    max_zR_widget.value = _profile.max_zR
             except Exception:
                 pass
 
@@ -558,7 +542,6 @@ def build_phase3b_harmonic_merge_panel(
                 options=tuple(opts),
                 drift_mode=str(drift_mode.value),
                 skew_main=bool(skew_main.value),
-                max_zR=float(max_zR_widget.value),
             )
             st.result = res
             st.opts = tuple(opts)
@@ -882,7 +865,7 @@ def build_phase3b_harmonic_merge_panel(
     params_box = w.VBox([
         w.HTML("<b>Parameters</b>"),
         w.HBox([rref_mm, abs_calib, magnet_order]),
-        w.HBox([skew_main, max_zR_widget]),
+        w.HBox([skew_main]),
     ])
 
     opts_box = w.VBox([

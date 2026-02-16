@@ -77,7 +77,6 @@ Ns = SAMPLES_PER_TURN
 OPTIONS = ("dri", "rot", "cel", "fed")
 DRIFT_MODE = "legacy"
 MIN_B1_T = 1e-4
-MAX_ZR = 0.01
 N_BLOCKS = 10
 PLATEAU_I_RANGE_MAX = 2.5
 
@@ -169,7 +168,7 @@ def load_and_process(session_dir, meas_subdir, kn, dataset_label=""):
         I_turns=I_all[idx],
         kn=kn, r_ref=R_REF, magnet_order=MAGNET_ORDER,
         options=OPTIONS, drift_mode=DRIFT_MODE,
-        min_b1_T=MIN_B1_T, max_zr=MAX_ZR,
+        min_b1_T=MIN_B1_T,
     )
 
     extra = [
