@@ -63,14 +63,14 @@ tmp/
 # =========================
 # Generated notebook outputs
 # =========================
-rotating_coil_analyzer/notebooks/*_computed.txt
-rotating_coil_analyzer/notebooks/*_executed.ipynb
-rotating_coil_analyzer/notebooks/*.png
+rotating_coil_analyzer/notebooks/**/*_computed.txt
+rotating_coil_analyzer/notebooks/**/*_executed.ipynb
+rotating_coil_analyzer/notebooks/**/*.png
 
 # =========================
 # Executed notebooks (large, regenerated on demand)
 # =========================
-rotating_coil_analyzer/notebooks/executed_*.ipynb
+rotating_coil_analyzer/notebooks/**/executed_*.ipynb
 
 # =========================
 # Temp plots from interactive analysis
@@ -111,4 +111,8 @@ output/
 # Presentation template & generator
 # =========================
 presentation_template/
-create_mc62_presentation.py
+
+# =========================
+# Generated presentations (PPTX, regenerated from notebooks)
+# =========================
+rotating_coil_analyzer/notebooks/**/*.pptx

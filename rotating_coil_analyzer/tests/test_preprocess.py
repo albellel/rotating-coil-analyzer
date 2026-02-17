@@ -42,6 +42,26 @@ def test_di_dt_weights_applied_only_on_ramp_and_high_current() -> None:
     assert np.allclose(res.weights[1, :], 1.0)
 
 
+def test_di_dt_weights_negative_current_gives_positive_weights() -> None:
+    """Unsigned mode must produce positive weights even when current is negative.
+
+    Regression: the old formula ``|I_mean| / I[k]`` produced negative weights
+    for negative currents because only the numerator was absolute-valued.
+    The correct formula is ``I_mean / I[k]`` (both signed), which always gives
+    positive weights when all samples have the same sign.
+    """
+    t = np.array([[0.0, 1.0, 2.0, 3.0, 4.0]])
+
+    # Descending ramp with negative current: slope ~ -1 A/s, mean ~ -22 A
+    I = np.array([[-20.0, -21.0, -22.0, -23.0, -24.0]])
+
+    res = di_dt_weights(t_turns=t, I_turns=I, signed=False)
+
+    assert bool(res.applied[0]) is True, "Should fire: |slope|>0.1 and |mean(I)|>10"
+    assert np.all(res.weights[0, :] > 0), "All weights must be positive"
+    assert np.allclose(res.weights[0, :], np.mean(I[0]) / I[0])
+
+
 def test_integrate_to_flux_legacy_matches_definition() -> None:
     # One turn with a non-zero mean so that drift correction does something.
     df = np.array([[1.0, 2.0, 3.0, 4.0]])

@@ -68,6 +68,6 @@ This notebook includes a `diagnose_cel_fed()` check. See `correction_options_ref
 | 04 (no shims, 2 Hz, morning) | TBD | TBD | TBD |
 
 ## Suggestions
-- Run the companion comparison notebook (`compare_MC62_03_vs_04_staircase_2Hz.ipynb`) to quantify reproducibility.
+- Run the companion comparison notebook (`LEAR_MC62/comparison/2026-02-17_03_vs_04_reproducibility.ipynb`) to quantify reproducibility.
 - If results match test 03, this confirms the measurement procedure is stable and reliable.
 - Any systematic differences may point to thermal drift (magnet temperature difference morning vs afternoon).

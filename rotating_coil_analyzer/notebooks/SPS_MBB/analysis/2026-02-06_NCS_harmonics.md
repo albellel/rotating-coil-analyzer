@@ -9,7 +9,7 @@ Analysis of a single NCS streaming file from the SPS MBB dipole measurement sess
 |-----------|-------|
 | Magnet | SPS MBB dipole (m=1) |
 | Segment | NCS |
-| Kn calibration | `Kn_values_Seg_Main_A_AC.txt` (cross-session from MBA, same coil) |
+| Kn calibration | `Kn_values_Seg_Main_A_AC.txt` (cross-session from Dec 2025, same coil) |
 | Reference radius | 0.02 m |
 | Samples/turn | 1024 |
 | Pipeline options | `dri`, `rot`, `cel`, `fed` |
@@ -48,7 +48,7 @@ This notebook includes a `diagnose_cel_fed()` check that verifies the centre-loc
 
 ## Suggestions
 
-1. **Use this notebook as a data quality preview only**, not for harmonic analysis. The supercycle notebook (`analysis_20260206_144537_SPS_MBB_NCS_supercycle.ipynb`) applies proper plateau detection and is the correct tool for quantitative analysis.
+1. **Use this notebook as a data quality preview only**, not for harmonic analysis. The supercycle notebook (`SPS_MBB/analysis/2026-02-06_NCS_supercycle.ipynb`) applies proper plateau detection and is the correct tool for quantitative analysis.
 2. **Add per-current-bin statistics** if this notebook is to be used for streaming data exploration.
 
 ## Output Files

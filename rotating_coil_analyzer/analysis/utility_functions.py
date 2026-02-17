@@ -929,6 +929,17 @@ def eddy_model(t, B_inf, A, tau):
     return B_inf + A * np.exp(-t / tau)
 
 
+def double_eddy_model(t, B_inf, A1, tau1, A2, tau2):
+    r"""Double-exponential eddy-current settling model.
+
+    .. math:: B(t) = B_\infty + A_1 e^{-t/\tau_1} + A_2 e^{-t/\tau_2}
+
+    Two time constants capture fast (iron) and slow (beam-screen / yoke)
+    eddy currents.  Intended for use with :func:`scipy.optimize.curve_fit`.
+    """
+    return B_inf + A1 * np.exp(-t / tau1) + A2 * np.exp(-t / tau2)
+
+
 # =====================================================================
 #  Statistical comparison helpers
 # =====================================================================

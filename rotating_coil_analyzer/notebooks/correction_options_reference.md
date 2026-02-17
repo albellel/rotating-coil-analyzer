@@ -271,7 +271,7 @@ and are similarly robust.
 2. **SM18 end segments** (segments 1 and 5, dipole): fringe field ~5 mT at
    1740 A. Absolute agreement is machine-precision, but ppb ratios are large.
 
-3. **SPS MBA CS/NCS** (dipole): outlier turns at specific current levels show
+3. **SPS MBB CS/NCS** (dipole): outlier turns at specific current levels show
    extreme harmonic values -- ADC glitches amplified through cel/fed.
 
 4. **BTP8** (quadrupole): cel/fed works correctly at all current levels because
@@ -318,9 +318,15 @@ returns a structured `CelFedDiagnostic` result with:
 
 **Usage in notebooks:**
 
+All analysis notebooks run `diagnose_cel_fed()` early (before the main
+pipeline) and conditionally strip `cel`/`fed` from `OPTIONS` if the
+diagnostic says `UNSAFE`.  This ensures that the pipeline always runs
+with the appropriate correction set, without manual intervention.
+
 ```python
 from rotating_coil_analyzer.analysis.utility_functions import diagnose_cel_fed
 
+# --- Run diagnostic on highest-current data ---
 diag = diagnose_cel_fed(
     flux_abs_turns, flux_cmp_turns, t_turns, I_turns,
     kn=kn, r_ref=R_REF, magnet_order=1,
@@ -329,14 +335,31 @@ diag = diagnose_cel_fed(
 print(f"Recommendation: {diag.recommendation}")
 print(f"Reason: {diag.reason}")
 print(f"Suspect turns: {diag.n_suspect}/{diag.n_total}")
-print(f"|zR| median: {np.median(diag.zR_abs):.4f}, max: {np.max(diag.zR_abs):.4f}")
 
-# User decides which result to use
-if diag.recommendation == "SAFE":
-    result = diag.result_with_fed
+# --- Act on diagnostic: disable cel/fed if unsafe ---
+if diag.recommendation == "UNSAFE":
+    OPTIONS = tuple(o for o in OPTIONS if o not in ("cel", "fed"))
+    print(f"  -> cel/fed disabled, OPTIONS = {OPTIONS}")
 else:
-    result = diag.result_without_fed
+    print(f"  -> cel/fed safe, keeping OPTIONS = {OPTIONS}")
 ```
+
+For notebooks with multiple PCB segments (Integral + Central), the
+diagnostic runs on both and disables cel/fed if *either* is unsafe:
+
+```python
+diag_int = _cel_fed_check(runs_integral, kn_integral, "Integral")
+diag_cen = _cel_fed_check(runs_central,  kn_central,  "Central")
+
+if diag_int.recommendation == "UNSAFE" or diag_cen.recommendation == "UNSAFE":
+    OPTIONS = tuple(o for o in OPTIONS if o not in ("cel", "fed"))
+```
+
+**Note:** The config cell always starts with the full set
+`OPTIONS = ("dri", "rot", "cel", "fed")`.  The diagnostic cell then
+strips cel/fed at runtime if needed.  This way, re-running the notebook
+on different data (e.g., a quadrupole) will automatically keep cel/fed
+when the diagnostic says SAFE.
 
 ---
 
@@ -354,11 +377,10 @@ Add `"dit"` only when analyzing ramp turns.
 ### Dipole (m = 1)
 
 ```python
-# Standard analysis -- cel/fed safe on Integral PCB at moderate-to-high current
+# Start with full OPTIONS -- let the diagnostic decide at runtime
 OPTIONS = ("dri", "rot", "cel", "fed")
 
-# If Central PCB shows corrupt values at low current, consider:
-OPTIONS = ("dri", "rot")   # disable cel/fed for Central PCB
+# diagnose_cel_fed() will strip cel/fed if UNSAFE (see diagnostic section)
 ```
 
 cel/fed is fragile for dipoles because it relies on compensated-channel
@@ -369,8 +391,8 @@ n=10 and n=11, which are weak high-order harmonics. In practice:
 - **Central PCB (small coils)**: often unreliable at any current (SNR ~ 3)
 
 When cel/fed corrupts dipole data, you see wildly wrong B_main values
-(orders of magnitude too large). If this happens, disable `fed` or use
-a `max_zR` clamp.
+(orders of magnitude too large). All notebooks now run `diagnose_cel_fed()`
+and conditionally disable cel/fed when the diagnostic says `UNSAFE`.
 
 ### Summary Table
 
@@ -398,3 +420,281 @@ a `max_zR` clamp.
 | SM18 HCMCBXFB012 | Dipole (cold) | `dri rot nor cel dit` | ON | OFF | dit never fires (constant I) |
 | MC62 (tests 01-02) | Dipole (warm) | `dri rot nor cel fed` | OFF | ON | Plateau-averaged comparison |
 | MC62 (test 03, 2Hz) | Dipole (warm) | `dri rot nor cel fed dit` | ON | ON | Streaming with ramps |
+
+---
+
+## Benchmark Comparison: Bottura Theory, Pentella Analyzer, FFMM
+
+This section documents a systematic stage-by-stage comparison of our pipeline
+against the three reference implementations:
+
+- **Bottura**: L. Bottura, *Standard Analysis Procedures for Field Quality
+  Measurement of the LHC Magnets - Part I: Harmonics*, MTA-IN-97-007 (1997,
+  rev. 2000).  The theoretical reference.
+- **Pentella**: `golden_standards/pentella_analyzer/rotcoil_lib.py`.
+  A modern Python library with DC and pulsed modes.
+- **FFMM**: `golden_standards/ffmm/` (C++ core + Matlab prototype).
+  The CERN production analyzer.
+
+### Stage-by-Stage Agreement
+
+Every core algorithm is consistent across all four implementations.
+
+#### 1. FFT Normalization
+
+All four use the same one-sided DFT convention:
+
+```
+f_n = (2 / Ns) * FFT(flux)[n]      n = 1 .. H
+```
+
+Drop DC (index 0).  Factor of 2 folds the negative-frequency half of the
+symmetric real-signal spectrum.  This follows Bottura Eq. AII.20 / AI.10.
+
+#### 2. Kn Calibration (Conjugate-Reciprocal)
+
+```
+C_n = f_n * Rref^(n-1) / conj(kn_n)
+```
+
+- `conj(kn)` preserves the complex phase relationship between the coil
+  sensitivity and the measured flux.
+- `Rref^(n-1)` converts from unit-radius calibration to the physical
+  reference radius.
+- Bottura writes `C_n = Xi_n / (kappa_n * Rref^(n-1))`, but his `kappa_n`
+  is a real scalar defined differently (it already absorbs the coil length L
+  and geometric factor chi_n).  When complex kn values are used (as in all
+  modern implementations), the conjugate-reciprocal form is the correct
+  generalization.
+
+| Implementation | Formula | Matches? |
+|---------------|---------|----------|
+| Bottura Eq. AII.22 | `Xi_n / (kappa_n * Rref^(n-1))` | Equivalent (real kappa) |
+| Pentella | `Rref^(n-1) * f_n / conj(kn)` | Identical |
+| FFMM (C++ & Matlab) | `(1/conj(Kn)) * Rref^(n-1) * F_n` | Identical |
+| This code | `f_n * (Rref^idx / conj(kn))` | Identical |
+
+#### 3. Drift Correction
+
+Two modes implemented, both validated:
+
+| Mode | Formula | Matches |
+|------|---------|---------|
+| `legacy` | `cumsum(df - mean(df)) - mean(cumsum(df))` | FFMM C++ line ~127 |
+| `weighted` | `offset = sum(df)/sum(dt); df -= offset*dt; cumsum` | Bottura Eq. AII.14, Pentella |
+
+Default is `legacy` for FFMM parity.  For encoder-triggered systems with
+uniform timing, both modes give equivalent results.  The `weighted` mode
+(Bottura AII.14) is theoretically better when sample timing is non-uniform.
+
+#### 4. Rotation Phase Extraction
+
+```
+phi_m = angle(C_m)                        (Bottura AIV.2-3)
+if phi_m >  pi/2:  phi_m -= pi            (Bottura AIV.4)
+if phi_m < -pi/2:  phi_m += pi
+alpha_m = phi_m / m                       (Bottura AIV.5)
+```
+
+Identical in all four implementations.  The wrapping to [-pi/2, pi/2]
+resolves the m-fold rotational symmetry ambiguity.
+
+#### 5. Rotation Application
+
+```
+C'_k = exp(-j * k * alpha_m) * C_k       (Bottura AIV.6)
+```
+
+Applied to **all** harmonics k = 1 .. H by default.
+
+| Implementation | Range | Notes |
+|---------------|-------|-------|
+| Bottura AIV.6 | All orders | Theory |
+| Pentella | k = 1 .. N | All harmonics |
+| FFMM Matlab | k = 1 .. 15 | All harmonics |
+| FFMM C++ | k = 1 .. 14 | Off-by-one (`k < nrHarmonics` with nrH=15) |
+| This code (default) | k = 1 .. H | `legacy_rotate_excludes_last=False` |
+| This code (SM18 parity) | k = 1 .. H-1 | `legacy_rotate_excludes_last=True` |
+
+The FFMM C++ off-by-one is harmless in practice (harmonic H is near
+Nyquist, negligible amplitude), but the `True` option exists for
+exact SM18 parity when needed.
+
+#### 6. Center Localization (CEL)
+
+**Quadrupole and higher (m >= 2):**
+
+```
+zR = -C_abs[m-1] / ((m-1) * C_abs[m])
+```
+
+Uses the **absolute** channel, robust.  The denominator factor is
+`(m-1)`, the binomial coefficient C(m-1, m-2) = m-1.
+
+**Dipole (m = 1):**
+
+```
+zR = -C_cmp[10] / (10 * C_cmp[11])
+```
+
+Uses the **compensated** channel, fragile at low SNR (see cel/fed
+section above).  The denominator factor 10 = C(10, 9) = 10.
+
+Both formulas are the linear approximation of Bottura AIII.1-4.
+All four implementations agree.
+
+#### 7. Feeddown Correction (FED)
+
+```
+C'_n = sum_{k=n}^{H-1} C(k,n) * zR^{k-n} * C_k
+```
+
+where `C(k,n) = k! / (n! * (k-n)!)` is the binomial coefficient
+with **0-indexed** k and n (array indices).  This equals `C(p-1, q-1)`
+with 1-indexed harmonic orders p, q -- i.e., the Taylor expansion
+coefficients of `(z + dz)^{p-1}` for field `sum C_p * (z/Rref)^{p-1}`.
+
+Applied to **both** C_abs and C_cmp using the same zR from CEL.
+All four implementations agree on the binomial formula.
+
+#### 8. Normalization
+
+```
+scale = 10000 / Re(C_m)              (Bottura AIV.8-9)
+C_n_units = C_n * scale              for all n
+```
+
+- `Re(C_m)` for normal magnets, `Im(C_m)` for skew magnets.
+- All four implementations agree.
+- Our pipeline applies normalization **post-merge** via
+  `safe_normalize_to_units()`, not in-pipeline (see `nor` section above).
+
+#### 9. DIT (di/dt) Correction
+
+```
+w_k = I_mean / I_k                   weight per sample
+df_corrected = df * w
+```
+
+Activation thresholds:
+
+| Mode | Slope threshold | Current threshold |
+|------|----------------|------------------|
+| `signed=True` (FFMM C++) | `dI/dt > 0.1` | `mean(I) > 10` |
+| `signed=False` (our default) | `\|dI/dt\| > 0.1` | `\|mean(I)\| > 10` |
+| Pentella | `RR > 0.1` and `curr_AVG > 10` | Same as `signed=True` |
+
+The weight formula `I_mean / I_k` is the same in all implementations.
+The `signed=False` mode extends it to negative-current ramps by using
+absolute-value thresholds.
+
+---
+
+### Deliberate Differences from Benchmarks
+
+These are intentional design decisions, not bugs.
+
+#### D1. No in-pipeline `nor` (normalization)
+
+Our pipeline runs **without** `nor` in OPTIONS.  Normalization happens
+post-merge via `safe_normalize_to_units()`.  This preserves B_main in
+Tesla throughout and implements the Bottura Section 3.7 "record" format
+(Tesla for n <= m, units for n > m).  See the `nor` section above.
+
+**FFMM** and **Pentella** normalize in-pipeline (`nor` in options).  The
+harmonic ratios are mathematically identical; the difference is B_main
+retention.
+
+#### D2. Feeddown allowed for dipoles (with diagnostic guard)
+
+**FFMM C++** skips feeddown entirely when `MagOrder == 1`.  Our code
+applies feeddown if requested, but `diagnose_cel_fed()` flags unsafe
+turns and notebooks auto-disable cel/fed when the diagnostic says
+`UNSAFE`.  This is more flexible: dipole feeddown IS valid when
+compensated SNR is sufficient (large coils, high current).
+
+#### D3. No impedance gain correction in pipeline
+
+**Pentella** applies a circuit impedance correction before harmonic
+analysis: `gain = (Z_coil + Z_inst) / Z_inst`.  This compensates for
+the voltage-divider effect of the coil impedance against the instrument
+input impedance (typically 400 kOhm).
+
+Our pipeline does **not** include this correction because:
+- The kn calibration values can absorb the impedance factor
+- The correction is hardware-specific (depends on cabling)
+- For high-impedance instruments (Z_inst >> Z_coil), the gain is ~1
+
+If needed for a specific measurement setup, the correction can be
+applied during data ingestion (before the pipeline).
+
+#### D4. No encoder-step phase offset
+
+**Pentella** subtracts `2*pi/encStep` from the computed roll angle after
+rotation, compensating for a half-sample (or one-sample) phase offset
+in the FFT grid.  This is small (~6 mrad for 1024 encoder steps) and
+affects only the **reported roll angle**, not harmonic amplitudes.
+
+Neither Bottura nor FFMM include this correction.  Our code follows
+the FFMM convention (no offset).
+
+#### D5. No revolve_z transformation
+
+**Pentella** offers a `rev` option that flips signs of specific harmonic
+components (even b_n, odd a_n) for special cross-coil geometries.
+This is not needed for standard rotating-coil measurements and is
+not implemented.
+
+#### D6. No external (Ext) coil channel
+
+**Pentella** supports a 3-coil system (Abs, Cmp, Ext) where the external
+coil provides an independent gradient reference.  Our pipeline handles
+the standard 2-channel case (Abs + Cmp), which covers all measurements
+in this project.
+
+#### D7. No bucking ratio overwrite
+
+**FFMM** overwrites C_cmp harmonics 1..m with the bucking ratio
+`|FFT_abs[k] / FFT_cmp[k]|` after analysis.  This is a diagnostic
+metric (compensation quality), not a harmonic correction.  Our code
+preserves the original C_cmp values and computes merge diagnostics
+separately via `recommend_merge_choice()`.
+
+---
+
+### Bug Fixes Triggered by This Comparison
+
+#### BF1. DIT unsigned weight formula (fixed)
+
+**Before:** `w_k = |I_mean| / I_k` (unsigned mode).  Produced negative
+weights when current was negative (descending ramps), because only the
+numerator had the absolute value.
+
+**After:** `w_k = I_mean / I_k` (same formula for both modes).  The
+signed vs unsigned distinction is **only** in the activation thresholds,
+not in the weight formula.  This matches the physics: the ratio
+`I_mean / I_k` is always positive when all samples have the same sign
+(guaranteed by the `min(|I|) > eps` check).
+
+**Impact:** Only affected unsigned mode with negative currents.  No
+golden standard tests use this path (FFMM uses signed mode, Pentella
+uses positive-only thresholds).  A regression test was added:
+`test_di_dt_weights_negative_current_gives_positive_weights()`.
+
+---
+
+### Verification Summary
+
+| Pipeline Stage | Bottura | Pentella | FFMM | This Code |
+|---------------|---------|----------|------|-----------|
+| FFT: `2*FFT/N` | Eq. AII.20 | `2*fft/N` | `2*fft/N` | `2*fft/N` |
+| Kn: `f/conj(kn)*R^(n-1)` | Eq. AII.22 | `conj(kn)` | `conj(kn)` | `conj(kn)` |
+| Drift (legacy) | -- | -- | C++ line ~127 | Matches C++ |
+| Drift (weighted) | Eq. AII.14 | `sum(df)/sum(dT)*dT` | -- | Matches Bottura |
+| Phase wrap [-pi/2,pi/2] | Eq. AIV.4 | Same | Same | Same |
+| Rotation: `exp(-j*k*phi)` | Eq. AIV.6 | All k | All k (Matlab) | All k (default) |
+| CEL (m>=2): `C[m-1]/((m-1)*C[m])` | AIII.4 | Same | Same | Same |
+| CEL (dipole): `C10/(10*C11)` | AIII.3 | Same | Same | Same |
+| Feeddown: `binom(k,n)*zR^(k-n)` | AIII.6 | Same | Same | Same |
+| Normalization: `10000/B_main` | Eq. AIV.8 | Same | Same | Same |
+| DIT: `I_mean / I_k` | -- | Same | Same | Same |

@@ -1,13 +1,13 @@
-# SPS MBA Dipole -- NCS Segment Harmonic Analysis
+# SPS MBB Dipole -- NCS Segment Harmonic Analysis
 
 ## Overview
-Analysis of the SPS MBA dipole NCS (non-compensated side) segment from session `20251212_171026_SPS_MBA`. Processes 125 plateau files with both legacy and weighted drift correction modes.
+Analysis of the SPS MBB dipole NCS (non-compensated side) segment from session `20251212_171026_SPS_MBA`. Processes 125 plateau files with both legacy and weighted drift correction modes.
 
 ## Configuration
 
 | Parameter | Value |
 |-----------|-------|
-| Magnet | SPS MBA dipole (m=1) |
+| Magnet | SPS MBB dipole (m=1) |
 | Segment | NCS |
 | Session | `20251212_171026_SPS_MBA` |
 | Kn calibration | `Kn_values_Seg_Main_A_AC.txt` (AC compensation) |
@@ -72,5 +72,5 @@ This notebook includes a `diagnose_cel_fed()` check that verifies the centre-loc
 2. **Report medians alongside means**: For robustness against potential future outliers.
 
 ## Output Files
-- `output/20251212_171026_SPS_MBA/MBA_NCS_computed_legacy_drift.csv` (3,502 rows)
-- `output/20251212_171026_SPS_MBA/MBA_NCS_computed_weighted_drift.csv` (3,502 rows)
+- `output/20251212_171026_SPS_MBA/MBB_NCS_computed_legacy_drift.csv` (3,502 rows)
+- `output/20251212_171026_SPS_MBA/MBB_NCS_computed_weighted_drift.csv` (3,502 rows)

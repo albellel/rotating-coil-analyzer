@@ -109,23 +109,30 @@ gui  # Display the GUI
 
 Example and analysis notebooks are in `rotating_coil_analyzer/notebooks/`:
 
-### GUI & workflow notebooks
-1. **02_analysis_gui.ipynb** -- Combined GUI (Catalog + Harmonics workflow)
-2. **03_kn_from_mh_csv.ipynb** -- Compute kn calibration coefficients from measurement-head CSV
+### Tools
+- `tools/analysis_gui.ipynb` -- Combined GUI (Catalog + Harmonics workflow)
+- `tools/kn_from_mh_csv.ipynb` -- Compute kn calibration coefficients from measurement-head CSV
 
-### Harmonic analysis notebooks
-3. **b3_analysis_LIU_BTP8.ipynb** -- b3 sextupole analysis for a LIU BTP8 quadrupole
-4. **b3_from_kn_20251212_171026_SPS_MBA_CS.ipynb** -- b3 from Kn for SPS MBA (CS segment)
-5. **b3_from_kn_20251212_171026_SPS_MBA_NCS.ipynb** -- b3 from Kn for SPS MBA (NCS segment)
-6. **analysis_20260206_142231_SPS_MBB_NCS.ipynb** -- Full harmonic analysis for SPS MBB dipole (NCS, single plateau)
-7. **analysis_20260206_144537_SPS_MBB_NCS_supercycle.ipynb** -- Streaming supercycle analysis for SPS MBB dipole (NCS). Supercycle structure: LHC_pilot -> MD1 -> SFTPRO x20. Includes automatic plateau detection, hysteresis evolution tracking, within-plateau settling analysis (eddy currents vs current ramp). Key finding: MD1 is a true current plateau (drift < 0.1 A), SFTPRO is not (current ramps ~5 A).
+### SPS MBB dipole
+- `SPS_MBB/analysis/2025-12-12_CS_harmonics.ipynb` -- CS segment harmonic analysis (Dec 2025 session)
+- `SPS_MBB/analysis/2025-12-12_NCS_harmonics.ipynb` -- NCS segment harmonic analysis (Dec 2025 session)
+- `SPS_MBB/analysis/2026-02-06_NCS_harmonics.ipynb` -- NCS segment full analysis (Feb 2026 session)
+- `SPS_MBB/analysis/2026-02-06_NCS_supercycle.ipynb` -- Streaming supercycle analysis (Feb 2026)
+- `SPS_MBB/comparison/2026-02-06_200GeV_vs_26GeV.ipynb` -- Cross-session comparison (Dec 2025 vs Feb 2026)
+- `SPS_MBB/eddy_current/2026-02-06_b3_settling_200GeV.ipynb` -- Eddy-current b3 settling at MD1 plateau
 
-### Eddy-current analysis notebooks
-10. **eddy_current_b3_settling_200GeV.ipynb** -- Eddy-current b3 settling time at the MD1 injection plateau (exponential fit of sextupole decay after LHC excitation)
+### LEAR MC62 quadrupole
+- `LEAR_MC62/analysis/` -- Staircase analysis notebooks (tests 00--04)
+- `LEAR_MC62/comparison/` -- Shims effect and reproducibility comparisons
+- `LEAR_MC62/eddy_current/` -- Eddy-current settling analysis
+- `LEAR_MC62/validation/` -- FFMM parity validation
 
-### Validation notebooks
-8. **golden_standard_parity.ipynb** -- Validation against legacy C++ results (LIU BTP8 quadrupole)
-9. **golden_standard_SM18_parity.ipynb** -- Validation against legacy results (SM18 test bench)
+### LIU BTP8 quadrupole
+- `LIU_BTP8/analysis/2019-07-17_b3_sextupole.ipynb` -- b3 sextupole analysis
+- `LIU_BTP8/analysis/2019-07-17_parity_validation.ipynb` -- Validation against legacy C++ results
+
+### SM18 test bench
+- `SM18/validation/2024-12-04_parity_validation.ipynb` -- Validation against legacy results
 
 All notebooks use `%matplotlib widget` for interactive zoomable plots.
 
@@ -144,6 +151,7 @@ For **streaming (continuous) acquisition** measurements where the magnet current
 | `process_kn_pipeline` | Full Kn pipeline in one call: dit -> drift -> FFT -> kn -> merge -> normalise |
 | `build_harmonic_rows` | Convert pipeline results into a list of dicts, ready for `pd.DataFrame()` |
 | `build_run_averages` | Per-run mean b3 with run ordering (for hysteresis / ramp analysis) |
+| `diagnose_cel_fed` | Run pipeline with/without cel+fed, return diagnostic with SAFE/UNSAFE/MIXED recommendation |
 | `ba_table_from_C` | Convert complex coefficients to legacy B/A DataFrame (all Tesla) |
 | `mixed_format_table` | Bottura Section 3.7 mixed-format DataFrame (Tesla for n <= m, units for n > m) |
 
@@ -157,6 +165,7 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     process_kn_pipeline,
     build_harmonic_rows,
     build_run_averages,
+    diagnose_cel_fed,
     ba_table_from_C,
     mixed_format_table,
 )
@@ -199,7 +208,7 @@ label = classify_current(I_value, thresholds=psb_thresholds)
 ## Running Tests
 
 ```bash
-# Run all tests (99 tests)
+# Run all tests (121 tests)
 python -m pytest rotating_coil_analyzer/tests/ -v
 
 # Run specific test file
@@ -231,7 +240,7 @@ One row per harmonic order (n=1, 2, 3, ...).
 The MH CSV contains only coil geometry data (radius, angles, turns, magnetic surface, etc.), not wiring or connection metadata. The compensation scheme describes how coils are electrically connected to form the compensated channel.
 
 **You must specify the compensation scheme explicitly** when:
-- Computing kn from a measurement-head CSV (see `notebooks/03_kn_from_mh_csv.ipynb`)
+- Computing kn from a measurement-head CSV (see `notebooks/tools/kn_from_mh_csv.ipynb`)
 - Creating a KnBundle for the Harmonic Merge workflow
 
 The scheme is stored in `KnBundle.extra["compensation_scheme"]` and propagated to all downstream exports.
@@ -264,7 +273,7 @@ rotating_coil_analyzer/
 │   └── discovery.py         #   Measurement folder discovery
 ├── models/                 # Data models (SegmentFrame, MeasurementCatalog, AnalysisProfile)
 ├── notebooks/              # Jupyter analysis & example notebooks
-├── tests/                  # Unit tests (99 tests)
+├── tests/                  # Unit tests (121 tests)
 └── validation/             # Golden reference validation (C++ parity)
 ```
 

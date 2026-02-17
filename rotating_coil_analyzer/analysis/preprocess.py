@@ -160,7 +160,7 @@ def di_dt_weights(
       - all samples are finite and min(|I|) > eps_I_A
 
     The weights are:
-      w_k = |I_mean| / I_k
+      w_k = I_mean / I_k
 
     C++ native parity mode (``signed=True``)
     -----------------------------------------
@@ -208,7 +208,12 @@ def di_dt_weights(
 
     weights = np.ones_like(I, dtype=float)
     if np.any(applied):
-        numerator = I_mean if signed else I_mean_abs
+        # Both modes use I_mean / I[k] for the weight formula.
+        # The signed vs unsigned distinction is ONLY in the activation
+        # thresholds (lines 202-205).  Using |I_mean| in the numerator
+        # with raw I[k] in the denominator would produce negative weights
+        # when the current is negative (descending ramps).
+        numerator = I_mean
         weights[applied, :] = numerator[applied, None] / I[applied, :]
 
     # Guard against NaN/inf weights.
