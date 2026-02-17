@@ -53,6 +53,9 @@ Compares harmonic results between two measurement sessions of the SPS MBB dipole
 2. b3 and b2 differences are well within measurement uncertainty.
 3. The tiny B1 difference at injection may reflect residual magnetisation or temperature drift.
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Output Files
 - `output/.../compare_200_vs_26/summary_comparison_settled.csv` (4 rows)
 - Per-supercycle and per-turn CSV files for both sessions

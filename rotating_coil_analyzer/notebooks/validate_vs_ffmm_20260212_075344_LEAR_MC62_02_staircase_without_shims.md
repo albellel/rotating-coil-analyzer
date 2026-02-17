@@ -6,6 +6,8 @@ Validates our Python rotating-coil analyzer against the reference FFMM C++ pipel
 ## Configuration
 - FLIP_FIELD_SIGN = False (raw sign for comparison)
 - FFMM reference: `MC62_Integral_Average_results.txt`, `MC62_Central_Average_results.txt`
+- FFMM options: `dri rot nor cel fed dit`
+- Our OPTIONS: `dri rot cel fed` -- `dit` is N/A (plateau-averaged comparison, `dI/dt ~ 0`)
 
 ## Results
 
@@ -41,6 +43,9 @@ FFMM averages all 350 turns per plateau (confirmed by sweep). At N_LAST = 350:
 1. **Sub-microtesla B_main agreement** when matching the same averaging window (350 turns).
 2. The 72 uT difference at N_LAST=170 is intentional (we exclude settling turns; FFMM does not).
 3. **Central PCB validation unreliable** -- both pipelines have corrupt values at low current.
+
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
 
 ## Suggestions
 1. The `max_zR` clamping that was removed was the correct decision -- without it, all harmonics match to machine precision (0.003 units worst case).

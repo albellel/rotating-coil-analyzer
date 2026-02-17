@@ -37,6 +37,9 @@ Runs 10, 11, 12, 30, 31, 32, 33 -- reversal points near peak current where |delt
 | 170 | 3.55 | 0.03 |
 | 250 | 9.75 | 0.05 |
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Key Findings
 1. **Clear mu_r dependence**: tau drops from ~33 s (low I, high mu_r) to ~12 s (near saturation, low mu_r).
 2. **Positive/negative symmetric**: both branches show matching tau values.

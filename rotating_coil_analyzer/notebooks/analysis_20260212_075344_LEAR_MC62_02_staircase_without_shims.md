@@ -31,6 +31,9 @@ Full hysteresis staircase measurement of MC62 without shimming plates. Current c
 3. **TF** and **hysteresis** patterns match test 01 closely (as expected -- shims affect field quality, not main field).
 4. **Central PCB** has similar corrupt-value issues at low current as in test 01.
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Suggestions
 1. **Compare b2 systematically** between 01 (with shims) and 02 (without shims) to evaluate shimming effectiveness.
 2. **The b2 ~ -152 with shims vs -15 without** is counterintuitive -- verify shim orientation and position.

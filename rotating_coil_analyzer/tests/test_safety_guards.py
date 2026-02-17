@@ -19,6 +19,7 @@ from rotating_coil_analyzer.analysis.kn_pipeline import (
     safe_normalize_to_units,
 )
 from rotating_coil_analyzer.analysis.preprocess import di_dt_weights
+from rotating_coil_analyzer.analysis.utility_functions import diagnose_cel_fed
 
 
 def _make_kn(H: int = 15) -> SegmentKn:
@@ -198,3 +199,160 @@ def test_didt_eps_floor() -> None:
 
     result = di_dt_weights(t, I, eps_I_A=0.0)
     assert np.all(np.isfinite(result.weights)), "weights should be finite even with eps_I_A=0"
+
+
+# -----------------------------------------------------------------------
+# max_zR clamp tests
+# -----------------------------------------------------------------------
+
+
+def test_max_zR_clamp_flags_large_zR() -> None:
+    """Turns with |zR| > max_zR should be flagged and have zR set to 0."""
+    H = 15
+    Ns = 128
+    n_turns = 5
+    kn = _make_kn(H)
+
+    # Create a signal with a strong quadrupole (m=2) and a dipole component
+    # that produces a large zR via the absolute-channel formula.
+    theta = np.linspace(0, 2 * np.pi, Ns, endpoint=False)
+    flux_quad = np.cos(2 * theta)  # strong C_2
+    flux_dip = 0.5 * np.cos(theta)  # strong C_1 -> large zR = -C_1/(1*C_2)
+
+    df_quad = np.empty_like(flux_quad)
+    df_quad[0] = flux_quad[0]
+    df_quad[1:] = flux_quad[1:] - flux_quad[:-1]
+
+    df_dip = np.empty_like(flux_dip)
+    df_dip[0] = flux_dip[0]
+    df_dip[1:] = flux_dip[1:] - flux_dip[:-1]
+
+    df_abs = np.tile(df_quad + df_dip, (n_turns, 1))
+    df_cmp = np.zeros_like(df_abs)
+    t = np.tile(np.linspace(0, 1.0, Ns, endpoint=False), (n_turns, 1))
+    t += np.arange(n_turns)[:, None]
+    I = np.full((n_turns, Ns), 100.0)
+
+    # Without clamp — should get large |zR|
+    result_no_clamp = compute_legacy_kn_per_turn(
+        df_abs_turns=df_abs, df_cmp_turns=df_cmp,
+        t_turns=t, I_turns=I, kn=kn,
+        Rref_m=0.05, magnet_order=2,
+        options=("cel",),
+        max_zR=None,
+    )
+    assert np.all(np.abs(result_no_clamp.zR) > 0.01), \
+        "Expected large |zR| without clamp"
+    assert not np.any(result_no_clamp.zR_clamped), \
+        "No turns should be flagged without clamp"
+
+    # With clamp — should flag and zero out
+    result_clamped = compute_legacy_kn_per_turn(
+        df_abs_turns=df_abs, df_cmp_turns=df_cmp,
+        t_turns=t, I_turns=I, kn=kn,
+        Rref_m=0.05, magnet_order=2,
+        options=("cel",),
+        max_zR=0.01,
+    )
+    assert np.all(result_clamped.zR_clamped), \
+        "All turns should be flagged as clamped"
+    assert np.all(result_clamped.zR == 0.0), \
+        "Clamped zR should be set to 0"
+    assert np.all(result_clamped.x_m == 0.0)
+    assert np.all(result_clamped.y_m == 0.0)
+
+
+def test_max_zR_none_backward_compatible() -> None:
+    """Default max_zR=None should give identical results to old behavior."""
+    H = 15
+    Ns = 64
+    n_turns = 3
+    kn = _make_kn(H)
+    df_abs, df_cmp, t, I = _make_turns(n_turns, Ns, H)
+
+    result = compute_legacy_kn_per_turn(
+        df_abs_turns=df_abs, df_cmp_turns=df_cmp,
+        t_turns=t, I_turns=I, kn=kn,
+        Rref_m=0.05, magnet_order=1,
+        options=("dri", "rot", "cel", "fed"),
+        max_zR=None,
+    )
+
+    # zR_clamped should exist and be all-False
+    assert result.zR_clamped.shape == (n_turns,)
+    assert not np.any(result.zR_clamped)
+    # All outputs should be finite
+    assert np.all(np.isfinite(result.C_abs))
+    assert np.all(np.isfinite(result.zR))
+
+
+# -----------------------------------------------------------------------
+# diagnose_cel_fed tests
+# -----------------------------------------------------------------------
+
+
+def test_diagnose_cel_fed_safe() -> None:
+    """Quadrupole with well-centred signal should produce SAFE diagnostic."""
+    H = 15
+    Ns = 128
+    n_turns = 10
+    kn = _make_kn(H)
+
+    # Pure quadrupole signal — cel gives zR ~ 0 (no dipole component).
+    # Use Rref=1.0 to avoid Rref^n scaling amplifying tiny leakage into
+    # a large zR ratio.
+    theta = np.linspace(0, 2 * np.pi, Ns, endpoint=False)
+    df_abs = np.tile(np.sin(2 * theta) * 10.0, (n_turns, 1))
+    df_cmp = np.zeros_like(df_abs)
+    t = np.tile(np.linspace(0, 1.0, Ns, endpoint=False), (n_turns, 1))
+    t += np.arange(n_turns)[:, None]
+    I = np.full((n_turns, Ns), 100.0)
+
+    diag = diagnose_cel_fed(
+        df_abs, df_cmp, t, I,
+        kn=kn, r_ref=1.0, magnet_order=2,
+        max_zR=0.01,
+    )
+
+    assert diag.recommendation == "SAFE"
+    assert diag.n_suspect == 0
+    assert diag.n_total == n_turns
+    assert diag.max_zR_threshold == 0.01
+    assert diag.zR_abs.shape == (n_turns,)
+    assert diag.B_main_with_fed.shape == (n_turns,)
+    assert diag.B_main_without_fed.shape == (n_turns,)
+
+
+def test_diagnose_cel_fed_unsafe() -> None:
+    """Dipole with noisy compensated channel should produce UNSAFE diagnostic."""
+    H = 15
+    Ns = 128
+    n_turns = 10
+    kn = _make_kn(H)
+
+    # Dipole signal in absolute channel + random noise in compensated channel
+    # to simulate poor compensated SNR
+    rng = np.random.default_rng(42)
+    theta = np.linspace(0, 2 * np.pi, Ns, endpoint=False)
+    flux = np.cos(theta)  # dipole
+    df = np.empty_like(flux)
+    df[0] = flux[0]
+    df[1:] = flux[1:] - flux[:-1]
+
+    df_abs = np.tile(df, (n_turns, 1))
+    # Large noise in compensated channel — cel uses C_cmp[10]/C_cmp[11]
+    # which will be pure noise -> large |zR|
+    df_cmp = rng.normal(0, 1.0, (n_turns, Ns))
+    t = np.tile(np.linspace(0, 1.0, Ns, endpoint=False), (n_turns, 1))
+    t += np.arange(n_turns)[:, None]
+    I = np.full((n_turns, Ns), 100.0)
+
+    diag = diagnose_cel_fed(
+        df_abs, df_cmp, t, I,
+        kn=kn, r_ref=0.05, magnet_order=1,
+        max_zR=0.01,
+    )
+
+    assert diag.recommendation == "UNSAFE"
+    assert diag.n_suspect > n_turns // 2
+    assert diag.n_total == n_turns

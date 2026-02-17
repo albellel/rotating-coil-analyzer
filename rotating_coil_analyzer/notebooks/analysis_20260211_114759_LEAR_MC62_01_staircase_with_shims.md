@@ -42,6 +42,9 @@ Several Central runs show corrupt B1 values (e.g., +34 T, +3,065 T, -5.5e6 T). T
 3. **Hysteresis**: ~0.7 mT at 100 A between ascending/descending.
 4. **With shims** vs without: compare with notebook 02 to evaluate shimming effectiveness.
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Suggestions
 1. **Central PCB needs outlier filtering** before use at low currents.
 2. **Compare with 02_without_shims** to quantify shimming effect on b2.

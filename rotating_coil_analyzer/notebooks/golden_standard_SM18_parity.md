@@ -40,7 +40,7 @@ Validates the Python pipeline against the SM18 legacy C++/MATLAB analyzer for th
 - **Segment 3 (center)**: all harmonics agree to < 1e-10 relative -- **machine-precision parity**
 
 ## Key Caveats
-1. `dit` OFF because binary files are pre-corrected; applying dit would double-correct.
+1. `dit` OFF because binary files are pre-corrected; applying dit would double-correct. The sweep tests dit with `dit_signed=True` (matching C++ `crr > 0.1 && cm > 10`) but it never fires because current is constant per turn (`dI/dt ~ 0`).
 2. `legacy_rotate_excludes_last=True` is SM18-specific (off-by-one in legacy C++ rotation loop). The BTP8 notebook uses `False`.
 3. End segments (1,5) see ~5 mT field at 1,740 A, amplifying ppb ratios. In absolute terms, agreement is machine-precision.
 4. Ramp turns (~0.6%) show large differences -- expected, not a pipeline defect.

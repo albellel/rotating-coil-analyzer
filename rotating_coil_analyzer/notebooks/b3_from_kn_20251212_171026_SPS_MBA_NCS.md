@@ -63,6 +63,9 @@ Analysis of the SPS MBA dipole NCS (non-compensated side) segment from session `
 3. **Current-dependent b3**: The b3 varies from -2.1 units at 50 A to +0.18 units at ~1650 A, showing clear saturation-driven nonlinearity.
 4. **Small hysteresis**: b3 hysteresis width is < 0.3 units, primarily visible at low currents.
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Suggestions
 
 1. **Benchmark dataset**: The NCS segment could serve as a clean reference dataset for pipeline validation (no outliers, 100% ok_main, excellent drift parity).

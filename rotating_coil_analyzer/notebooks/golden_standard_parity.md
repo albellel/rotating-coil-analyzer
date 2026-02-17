@@ -8,7 +8,7 @@ Step-by-step validation of the Python pipeline against the legacy C++ analyzer (
 | Parameter | Value |
 |-----------|-------|
 | Magnet | LIU BTP8 quadrupole (m=2) |
-| Reference | C++ analyzer with options `dri rot nor cel fed` |
+| Reference | C++ analyzer with options `dri rot nor cel fed` (no `dit`) |
 | Reference file | `BTP8_20190717_161332_results.txt` (222 turns) |
 | Computed turns | 519 (222 aligned to reference) |
 | `legacy_rotate_excludes_last` | False (C++ rotates ALL harmonics) |
@@ -34,3 +34,7 @@ Step-by-step validation of the Python pipeline against the legacy C++ analyzer (
 ## Observations
 1. The quality-based turn selection in legacy C++ is replicated by greedy matching, not exact algorithm reproduction.
 2. `legacy_rotate_excludes_last=False` is the correct setting for this dataset (matches C++ behavior).
+3. `dit` (di/dt correction) is not used: the FFMM reference did not enable it (BTP8 is stop-and-measure with constant current per turn, so `dI/dt ~ 0` and the correction never fires).
+
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.

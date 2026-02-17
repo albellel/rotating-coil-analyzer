@@ -29,6 +29,9 @@ Runs 11, 12, 31, 32 -- reversal points near +/-200 A.
 | 170 | 2.97 | 0.03 |
 | 250 | 8.27 | 0.03 |
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Key Findings
 1. **Tau values match test 01** closely (26.0 vs 26.4 s mean), confirming shims do not affect eddy-current dynamics.
 2. **Same mu_r dependence**: 33 s at low I, 13 s near saturation.

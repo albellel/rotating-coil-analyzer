@@ -47,6 +47,7 @@ diff_sigma
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict
 
@@ -54,6 +55,8 @@ import numpy as np
 import pandas as pd
 
 from .kn_pipeline import (
+    LegacyKnPerTurn,
+    SegmentKn,
     compute_legacy_kn_per_turn,
     merge_coefficients,
     safe_normalize_to_units,
@@ -260,6 +263,8 @@ def process_kn_pipeline(
     drift_mode: str = "legacy",
     min_b1_T: float = 1e-4,
     merge_mode: str = "abs_upto_m_cmp_above",
+    dit_signed: bool = False,
+    max_zR: float | None = None,
 ):
     """Run the full Kn pipeline on selected turns.
 
@@ -286,6 +291,14 @@ def process_kn_pipeline(
         Minimum |B1| for normalisation.
     merge_mode : str
         Channel merge strategy.
+    dit_signed : bool
+        If True, use signed thresholds for the dit correction matching
+        the FFMM C++ native path.  Default False uses absolute-value
+        thresholds.
+    max_zR : float or None
+        If not None, clamp |zR| after cel and before fed.  Turns with
+        |zR| > max_zR have zR set to 0 and are flagged in
+        ``result.zR_clamped``.
 
     Returns
     -------
@@ -309,6 +322,8 @@ def process_kn_pipeline(
         options=options,
         drift_mode=drift_mode,
         legacy_rotate_excludes_last=False,
+        dit_signed=dit_signed,
+        max_zR=max_zR,
     )
 
     C_merged, _ = merge_coefficients(
@@ -385,6 +400,160 @@ def build_harmonic_rows(
             row.update(extra_columns[t])
         rows.append(row)
     return rows
+
+
+# =====================================================================
+#  cel/fed diagnostic
+# =====================================================================
+
+@dataclass(frozen=True)
+class CelFedDiagnostic:
+    """Diagnostic result from :func:`diagnose_cel_fed`.
+
+    Compares the pipeline with and without cel/fed to help the user
+    decide whether the centre-location / feeddown correction is safe
+    for their data.
+    """
+
+    zR_abs: np.ndarray  # (n_turns,) — |zR| per turn (from cel run)
+    n_suspect: int  # turns with |zR| > max_zR_threshold
+    n_total: int
+    max_zR_threshold: float
+    recommendation: str  # "SAFE", "UNSAFE", or "MIXED"
+    reason: str  # human-readable explanation
+    # comparison data (for plotting / inspection)
+    B_main_with_fed: np.ndarray  # (n_turns,) — B_main from cel+fed pipeline
+    B_main_without_fed: np.ndarray  # (n_turns,) — B_main from dri+rot pipeline
+    result_with_fed: LegacyKnPerTurn
+    result_without_fed: LegacyKnPerTurn
+
+
+def diagnose_cel_fed(
+    flux_abs_turns: np.ndarray,
+    flux_cmp_turns: np.ndarray,
+    t_turns: np.ndarray,
+    I_turns: np.ndarray,
+    *,
+    kn: SegmentKn,
+    r_ref: float,
+    magnet_order: int,
+    max_zR: float = 0.01,
+    dit_signed: bool = False,
+    drift_mode: str = "legacy",
+) -> CelFedDiagnostic:
+    """Diagnose whether cel/fed is safe for the given data.
+
+    Runs the pipeline twice — once with ``("dri", "rot", "cel", "fed")``
+    and once with ``("dri", "rot")`` — then compares the results and
+    produces a recommendation.
+
+    Parameters
+    ----------
+    flux_abs_turns, flux_cmp_turns : ndarray, shape (n_turns, Ns)
+        Incremental absolute and compensated signals.
+    t_turns, I_turns : ndarray, shape (n_turns, Ns)
+        Time and current per turn.
+    kn : SegmentKn
+        Calibration coefficients.
+    r_ref : float
+        Reference radius (m).
+    magnet_order : int
+        Main harmonic order (1 for dipole, 2 for quadrupole, ...).
+    max_zR : float
+        Threshold for suspect |zR| values (dimensionless).  Default
+        0.01 (~0.33 mm for a 33 mm coil).
+    dit_signed : bool
+        Passed through to the pipeline.
+    drift_mode : str
+        Passed through to the pipeline.
+
+    Returns
+    -------
+    CelFedDiagnostic
+        Structured diagnostic with recommendation and comparison data.
+    """
+    # Run with cel+fed (no clamping — we want the raw zR values)
+    result_with = compute_legacy_kn_per_turn(
+        df_abs_turns=flux_abs_turns,
+        df_cmp_turns=flux_cmp_turns,
+        t_turns=t_turns,
+        I_turns=I_turns,
+        kn=kn,
+        Rref_m=r_ref,
+        magnet_order=magnet_order,
+        options=("dri", "rot", "cel", "fed"),
+        drift_mode=drift_mode,
+        legacy_rotate_excludes_last=False,
+        dit_signed=dit_signed,
+    )
+
+    # Run without cel/fed
+    result_without = compute_legacy_kn_per_turn(
+        df_abs_turns=flux_abs_turns,
+        df_cmp_turns=flux_cmp_turns,
+        t_turns=t_turns,
+        I_turns=I_turns,
+        kn=kn,
+        Rref_m=r_ref,
+        magnet_order=magnet_order,
+        options=("dri", "rot"),
+        drift_mode=drift_mode,
+        legacy_rotate_excludes_last=False,
+        dit_signed=dit_signed,
+    )
+
+    # Analyse zR from the cel run
+    zR_abs = np.abs(result_with.zR)
+    n_total = len(zR_abs)
+    suspect = zR_abs > float(max_zR)
+    n_suspect = int(np.sum(suspect))
+
+    # B_main comparison
+    m = int(magnet_order)
+    B_main_with = np.real(result_with.C_abs[:, m - 1])
+    B_main_without = np.real(result_without.C_abs[:, m - 1])
+
+    # Recommendation logic
+    frac_suspect = n_suspect / n_total if n_total > 0 else 0.0
+    median_zR = float(np.median(zR_abs))
+    max_zR_val = float(np.max(zR_abs)) if n_total > 0 else 0.0
+
+    if frac_suspect == 0:
+        recommendation = "SAFE"
+        reason = (
+            f"All {n_total} turns have |zR| <= {max_zR:.4f} "
+            f"(median {median_zR:.4f}, max {max_zR_val:.4f}). "
+            f"cel/fed is reliable — apply it."
+        )
+    elif frac_suspect > 0.5:
+        recommendation = "UNSAFE"
+        reason = (
+            f"{n_suspect}/{n_total} turns ({100*frac_suspect:.0f}%) have "
+            f"|zR| > {max_zR:.4f} (median {median_zR:.4f}, max {max_zR_val:.4f}). "
+            f"cel/fed produces unreliable offsets — skip it and use "
+            f"OPTIONS = ('dri', 'rot')."
+        )
+    else:
+        recommendation = "MIXED"
+        reason = (
+            f"{n_suspect}/{n_total} turns ({100*frac_suspect:.0f}%) have "
+            f"|zR| > {max_zR:.4f} (median {median_zR:.4f}, max {max_zR_val:.4f}). "
+            f"Some turns are reliable, some are not — use max_zR={max_zR} "
+            f"to clamp suspect turns."
+        )
+
+    return CelFedDiagnostic(
+        zR_abs=zR_abs,
+        n_suspect=n_suspect,
+        n_total=n_total,
+        max_zR_threshold=float(max_zR),
+        recommendation=recommendation,
+        reason=reason,
+        B_main_with_fed=B_main_with,
+        B_main_without_fed=B_main_without,
+        result_with_fed=result_with,
+        result_without_fed=result_without,
+    )
 
 
 # =====================================================================
@@ -613,12 +782,14 @@ def plateau_summary(
     df: pd.DataFrame,
     n_last: int,
     harmonics_range=range(2, 16),
+    n_skip_end: int = 0,
 ) -> pd.DataFrame:
     """Per-run mean and std of B1, TF, and all harmonics.
 
-    For each run, selects the last *n_last* turns, keeps only those with
-    ``ok_main == True``, and computes mean/std of B1 and every harmonic
-    column found in the DataFrame.
+    For each run, drops the last *n_skip_end* turns (to avoid ramp-start
+    contamination), then selects the last *n_last* of the remaining turns,
+    keeps only those with ``ok_main == True``, and computes mean/std of
+    B1 and every harmonic column found in the DataFrame.
 
     Parameters
     ----------
@@ -627,9 +798,11 @@ def plateau_summary(
         ``branch``, ``B1_T``, and harmonic columns ``b{n}_units`` /
         ``a{n}_units``.
     n_last : int
-        Number of last turns per run to average.
+        Number of turns per run to average (after dropping the tail).
     harmonics_range : range
         Harmonic orders to include (default ``range(2, 16)``).
+    n_skip_end : int
+        Number of turns to drop from the end of each run (default 0).
 
     Returns
     -------
@@ -639,6 +812,8 @@ def plateau_summary(
     records: list[dict] = []
     for run_id in sorted(df["run_id"].unique()):
         rdf = df[df["run_id"] == run_id].sort_values("turn_in_run")
+        if n_skip_end > 0 and len(rdf) > n_skip_end:
+            rdf = rdf.iloc[:-n_skip_end]
         sel = rdf.tail(n_last)
         ok = sel["ok_main"].astype(bool)
         rec: dict = {

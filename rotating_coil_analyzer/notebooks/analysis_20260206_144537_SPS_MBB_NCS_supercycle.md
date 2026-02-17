@@ -57,6 +57,9 @@ Full streaming supercycle analysis of the SPS MBB dipole (NCS segment). The meas
 4. **Eddy-current settling at MD1 is negligible**: B1 shift from turn 0 to turn 2 is only +13.6 uT; b3 bias < 0.003 units.
 5. All 562 turns (488 injection + 74 flat-high) passed ok_main at 100%.
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Suggestions
 
 1. **Use MD1 injection for systematic measurements**: stable current, negligible eddy currents, 24 turns/SC.

@@ -43,6 +43,9 @@ Because this is a streaming acquisition (not a DC plateau), the 116 turns span a
 2. **Median vs mean divergence**: The median b3 (-31.2 units) is far more representative of plateau behavior than the mean (+618 units), confirming that outlier ramp turns dominate the mean.
 3. **Not suitable for quantitative harmonic analysis without plateau detection**: See the companion supercycle notebook for proper plateau-aware analysis.
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Suggestions
 
 1. **Use this notebook as a data quality preview only**, not for harmonic analysis. The supercycle notebook (`analysis_20260206_144537_SPS_MBB_NCS_supercycle.ipynb`) applies proper plateau detection and is the correct tool for quantitative analysis.

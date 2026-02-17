@@ -87,6 +87,7 @@ class LegacyKnPerTurn:
     phi_bad: np.ndarray  # (n_turns,) bool
 
     zR: np.ndarray  # (n_turns,) complex  (dimensionless center)
+    zR_clamped: np.ndarray  # (n_turns,) bool — True where |zR| was clamped by max_zR
     z_m: np.ndarray  # (n_turns,) complex  (meters)
     x_m: np.ndarray  # (n_turns,) float
     y_m: np.ndarray  # (n_turns,) float
@@ -184,6 +185,8 @@ def compute_legacy_kn_per_turn(
     skew_main: bool = False,
     eps_main: float = 1e-20,
     legacy_rotate_excludes_last: bool = False,
+    dit_signed: bool = False,
+    max_zR: float | None = None,
 ) -> LegacyKnPerTurn:
     """Compute legacy per-turn harmonics with $k_n$ application.
 
@@ -211,6 +214,15 @@ def compute_legacy_kn_per_turn(
     legacy_rotate_excludes_last:
         If False (default), rotate all harmonics n=1..H (Bottura Eq. AIV.6, C++, Pentella).
         If True, exclude the last harmonic from rotation (legacy SM18 off-by-one).
+    dit_signed:
+        If True, use signed thresholds for the dit correction matching the
+        FFMM C++ native path (``crr > 0.1 && cm > 10``).  Default False
+        uses absolute-value thresholds.
+    max_zR:
+        If not None, clamp |zR| to this value after cel and before fed.
+        Turns where |zR| exceeds the threshold are flagged in
+        ``zR_clamped`` and their zR is set to 0.  Default None means no
+        clamping (backward compatible).
 
     Returns
     -------
@@ -242,7 +254,9 @@ def compute_legacy_kn_per_turn(
 
     # --- di/dt correction (optional) ---
     if "dit" in opt:
-        df_abs, df_cmp, _ = apply_di_dt_to_channels(df_abs, df_cmp, t, I)
+        df_abs, df_cmp, _ = apply_di_dt_to_channels(
+            df_abs, df_cmp, t, I, signed=bool(dit_signed),
+        )
 
     # For reporting (match C++: polyfit slope and mean current)
     I_mean = np.mean(I, axis=1)
@@ -330,6 +344,18 @@ def compute_legacy_kn_per_turn(
         x = np.real(z)
         y = np.imag(z)
 
+    # --- max_zR clamp (optional, after cel, before fed) ---
+    zR_clamped = np.zeros(n_turns, dtype=bool)
+    if max_zR is not None:
+        suspect = np.abs(zR) > float(max_zR)
+        zR_clamped = suspect
+        if np.any(suspect):
+            zR[suspect] = 0.0
+            # recompute z, x, y for clamped turns
+            z = Rref * zR
+            x = np.real(z)
+            y = np.imag(z)
+
     # --- feeddown (optional) ---
     if "fed" in opt:
         # tmp[n] = sum_{k=n..H-1} comb(k,n) * zR^{k-n} * C[k]
@@ -371,6 +397,7 @@ def compute_legacy_kn_per_turn(
         phi_out_rad=phi_out,
         phi_bad=bad_phi,
         zR=zR,
+        zR_clamped=zR_clamped,
         z_m=z,
         x_m=x,
         y_m=y,

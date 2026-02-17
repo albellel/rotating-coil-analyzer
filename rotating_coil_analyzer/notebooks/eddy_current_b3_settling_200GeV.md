@@ -45,6 +45,9 @@ Investigates b3 (sextupole) eddy-current settling at the MD1 injection plateau (
 2. The per-supercycle fits are wildly inconsistent (tau ranges from 0.1 s to 1,000 s), confirming the exponential model is not appropriate for this data.
 3. This contrasts with the MC62 dipole where tau = 12-36 s and R2 > 0.98 -- the SPS MBB is a laminated warm magnet with much faster eddy-current decay at 301 A.
 
+### cel/fed Safety Diagnostic
+This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
+
 ## Suggestions
 
 1. **Higher excitation levels may show measurable settling**: At 4,815 A (SFTPRO), mu_r is lower and the eddy-current amplitude relative to noise may be different, but the short SFTPRO flat-top (3-4 turns) prevents fitting.

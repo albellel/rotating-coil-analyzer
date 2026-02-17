@@ -19,11 +19,16 @@ Implemented steps
    signal prior to integration/FFT. When the current is ramping and the mean
    current is sufficiently large, incremental samples are reweighted by:
 
-    w_k = |I_mean| / I_k
+    w_k = |I_mean| / I_k          (default, absolute thresholds)
+    w_k =  I_mean  / I_k          (signed=True, matching FFMM C++ native)
 
     A turn is considered "on a ramp" if:
      - |dI/dt| > 0.1 A/s   (works for both positive and negative ramps)
      - |mean(I)| > 10 A
+
+   When ``signed=True``, the C++ native thresholds are used instead:
+     - dI/dt > 0.1 A/s     (ascending ramps only)
+     - mean(I) > 10 A      (positive current only)
 
 2) Drift correction and integration (optional)
 
@@ -143,11 +148,12 @@ def di_dt_weights(
     min_slope_A_per_s: float = 0.1,
     min_mean_I_A: float = 10.0,
     eps_I_A: float = 1e-12,
+    signed: bool = False,
 ) -> DiDtResult:
     """Compute per-sample weights for the legacy ``dit`` / ``di/dt`` correction.
 
-    Legacy-compatible behavior
-    --------------------------
+    Legacy-compatible behavior (``signed=False``, default)
+    ------------------------------------------------------
     A turn is corrected if:
       - |dI/dt| > min_slope_A_per_s      (apply on both up-ramps and down-ramps)
       - |mean(I)| > min_mean_I_A
@@ -156,11 +162,19 @@ def di_dt_weights(
     The weights are:
       w_k = |I_mean| / I_k
 
-    Notes
-    -----
-    - The numerator uses |I_mean| to avoid disabling the correction on negative
-      ramps. The denominator keeps the sign of I_k.
-    - This follows the intent of the legacy analyzers for "outer_negative" data.
+    C++ native parity mode (``signed=True``)
+    -----------------------------------------
+    Matches the FFMM C++ ``RotatingCoilAnalyzerFunc`` which uses **signed**
+    threshold checks::
+
+        if (crr > 0.1 && cm > 10) { c_dit = cm / c; ... }
+
+    A turn is corrected only if:
+      - dI/dt > min_slope_A_per_s   (positive ascending ramps only)
+      - mean(I) > min_mean_I_A      (positive current only)
+
+    The weights are:
+      w_k = I_mean / I_k            (signed numerator)
 
     Returns
     -------
@@ -185,13 +199,17 @@ def di_dt_weights(
     finite = np.all(np.isfinite(t), axis=1) & np.all(np.isfinite(I), axis=1)
     ok_I = I_min_abs > float(eps_I_A)
 
-    on_ramp = (slope_abs > float(min_slope_A_per_s)) & (I_mean_abs > float(min_mean_I_A))
+    if signed:
+        on_ramp = (slope > float(min_slope_A_per_s)) & (I_mean > float(min_mean_I_A))
+    else:
+        on_ramp = (slope_abs > float(min_slope_A_per_s)) & (I_mean_abs > float(min_mean_I_A))
 
     applied = finite & ok_I & on_ramp
 
     weights = np.ones_like(I, dtype=float)
     if np.any(applied):
-        weights[applied, :] = I_mean_abs[applied, None] / I[applied, :]
+        numerator = I_mean if signed else I_mean_abs
+        weights[applied, :] = numerator[applied, None] / I[applied, :]
 
     # Guard against NaN/inf weights.
     bad_w = ~np.all(np.isfinite(weights), axis=1)
