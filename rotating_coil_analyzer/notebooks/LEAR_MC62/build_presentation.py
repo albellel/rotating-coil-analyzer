@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build the MC62 staircase presentation from executed notebooks.
+"""Build the MC62 measurement campaign presentation from executed notebooks.
 
 Extracts PNG images from Jupyter notebooks that have already been
 executed in-place (with outputs embedded), then assembles a PPTX
@@ -31,10 +31,11 @@ from pptx.enum.text import PP_ALIGN
 REPO = Path(r"C:\Users\albellel\python-projects\rotating-coil-analyzer")
 NB_DIR = REPO / "rotating_coil_analyzer" / "notebooks" / "LEAR_MC62"
 TEMPLATE_PPTX = NB_DIR / "MC62_2Hz_staircase_presentation.pptx"
-OUTPUT_PPTX = NB_DIR / "MC62_staircase_presentation.pptx"
+OUTPUT_PPTX = NB_DIR / "MC62_measurement_campaign.pptx"
 
 # Executed notebooks -- in-place in the repository
 EXEC_NBS = {
+    "analysis_00": NB_DIR / "analysis" / "2026-02-11_00_test.ipynb",
     "analysis_01": NB_DIR / "analysis" / "2026-02-11_01_staircase_with_shims.ipynb",
     "analysis_02": NB_DIR / "analysis" / "2026-02-12_02_staircase_without_shims.ipynb",
     "analysis_03": NB_DIR / "analysis" / "2026-02-16_03_staircase_2Hz.ipynb",
@@ -42,6 +43,7 @@ EXEC_NBS = {
     "eddy_01": NB_DIR / "eddy_current" / "2026-02-11_01_staircase_with_shims.ipynb",
     "eddy_02": NB_DIR / "eddy_current" / "2026-02-12_02_staircase_without_shims.ipynb",
     "eddy_03": NB_DIR / "eddy_current" / "2026-02-16_03_staircase_2Hz.ipynb",
+    "validation_02": NB_DIR / "validation" / "2026-02-12_02_vs_ffmm.ipynb",
     "compare_01v02": NB_DIR / "comparison" / "2026-02-12_01_vs_02_shims_effect.ipynb",
     "compare_03v04": NB_DIR / "comparison" / "2026-02-17_03_vs_04_reproducibility.ipynb",
 }
@@ -66,33 +68,6 @@ def extract_images(nb_path: Path) -> list[bytes]:
                     b64 = "".join(b64)
                 images.append(base64.b64decode(b64))
     return images
-
-
-def extract_text_output(nb_path: Path, cell_index: int) -> str:
-    """Extract text output from a specific code cell (0-indexed among code cells)."""
-    with open(nb_path, encoding="utf-8") as f:
-        nb = json.load(f)
-
-    code_idx = 0
-    for cell in nb["cells"]:
-        if cell["cell_type"] != "code":
-            continue
-        if code_idx == cell_index:
-            texts = []
-            for output in cell.get("outputs", []):
-                if output.get("output_type") in ("stream", "execute_result"):
-                    text = output.get("text", "")
-                    if isinstance(text, list):
-                        text = "".join(text)
-                    texts.append(text)
-                elif output.get("output_type") == "display_data":
-                    text = output.get("data", {}).get("text/plain", "")
-                    if isinstance(text, list):
-                        text = "".join(text)
-                    texts.append(text)
-            return "\n".join(texts)
-        code_idx += 1
-    return ""
 
 
 def count_images_all():
@@ -247,23 +222,59 @@ def build():
             print(f"  {key}: NOT FOUND at {path}")
 
     # ==================================================================
-    # Slide 1: Title
+    # Title Slide
     # ==================================================================
     add_title_slide(
         prs,
         "MC62 Rotating Coil Measurement Campaign",
         "LEAR C-shaped Dipole\n"
-        "Staircase Tests -- Feb 11-17, 2026\n"
+        "Staircase Tests -- Feb 11\u201317, 2026\n"
         "A. Bellelli -- CERN",
     )
 
     # ==================================================================
-    # Chapter 1: Test 01 -- 1 Hz Staircase with Shims (Feb 11)
+    # Setup & Pipeline Choices
+    # ==================================================================
+    add_text_slide(prs, "Measurement Setup & Analysis Pipeline",
+        "5 staircase tests: 00 (check), 01 (shims, 1 Hz), "
+        "02 (no shims, 1 Hz), 03 (2 Hz PM), 04 (2 Hz AM)\n\n"
+        "Pipeline: dri + rot (cel/fed auto-disabled -- UNSAFE for dipole)\n"
+        "R_ref = 33.0 mm, legacy drift mode, external Kn calibration\n"
+        "Averaging: N_LAST = 170 (1 Hz) / 340 (2 Hz)\n\n"
+        "PCBs: Integral (R45, 30 harmonics) + Central (DQ, 15 harmonics)\n"
+        "Current cycle: 0\u2192+200\u21920\u2192\u2212200\u21920 A, "
+        "20 A steps, 1 A/s ramp")
+
+    # ==================================================================
+    # Chapter 1: Test 00 -- System Check (Feb 11)
     # ==================================================================
     add_chapter_slide(prs, 1,
+        "Test 00\nFeb 11, 2026 -- System Check",
+        "Quick verification: 9 plateaus x 10 turns\n"
+        "Short staircase: 0\u2192+200\u21920\u2192\u2212200\u21920 A\n"
+        "With shims, 1 Hz rotation")
+
+    # analysis_00 (7 images):
+    # 0: current profile, 1: settling
+    # 2: B1 hyst, 3: b2, 4: b3, 5: TF
+    # 6: zoomed 2x2
+    a00 = images.get("analysis_00", [])
+    if _safe(a00, 6):
+        add_image_slide(prs, "Test 00 -- Harmonic Hysteresis (I != 0)",
+                        a00[6],
+                        "System check: 10 turns/plateau, eddy currents not resolved")
+    if _safe(a00, 2):
+        add_image_slide(prs, "Test 00 -- B1 vs Current",
+                        a00[2],
+                        "b2 ~ \u2212152 units (C-shape asymmetry detected)")
+
+    # ==================================================================
+    # Chapter 2: Test 01 -- With Shims (Feb 11)
+    # ==================================================================
+    add_chapter_slide(prs, 2,
         "Test 01\nFeb 11, 2026 -- With Shims",
-        "1 Hz staircase, 0->+200->0->-200->0 A in 20 A steps\n"
-        "41 plateaus, 350 turns each at -60 rpm\n"
+        "1 Hz staircase, 0\u2192+200\u21920\u2192\u2212200\u21920 A in 20 A steps\n"
+        "41 plateaus, 350 turns each at \u221260 rpm\n"
         "Integral (R45) + Central (DQ) PCBs")
 
     # analysis_01 (run-based, 9 images):
@@ -274,7 +285,7 @@ def build():
     if _safe(a01, 7):
         add_image_slide(prs, "Test 01 -- Harmonic Hysteresis (I != 0)",
                         a01[7],
-                        "B1, b2, b3, TF vs current -- excluding I = 0 plateaus")
+                        "B1, b2, b3, TF vs current -- b2 ~ \u2212151 units (with shims)")
     if _safe(a01, 2):
         add_image_slide(prs, "Test 01 -- B1 vs Current (Full Range)",
                         a01[2])
@@ -282,10 +293,23 @@ def build():
         add_image_slide(prs, "Test 01 -- Multipole Spectrum at Peak Current",
                         a01[8])
 
+    # Eddy current -- Test 01
+    # eddy_01 (6 images): 0: settling, 1: fits, 2: tau vs I,
+    # 3: bias (3-panel), 4: sensitivity, 5: double-exp
+    e01 = images.get("eddy_01", [])
+    if _safe(e01, 2):
+        add_image_slide(prs, "Test 01 -- Eddy Current: \u03c4 vs Current",
+                        e01[2],
+                        "\u03c4 = 26.4 \u00b1 8.5 s (mean), "
+                        "\u03bc_r dependence: 33 s (low I) \u2192 12 s (saturation)")
+    if _safe(e01, 4):
+        add_image_slide(prs, "Test 01 -- N_LAST_TURNS Sensitivity",
+                        e01[4])
+
     # ==================================================================
-    # Chapter 2: Test 02 -- 1 Hz Staircase without Shims (Feb 12)
+    # Chapter 3: Test 02 -- Without Shims (Feb 12)
     # ==================================================================
-    add_chapter_slide(prs, 2,
+    add_chapter_slide(prs, 3,
         "Test 02\nFeb 12, 2026 -- Without Shims",
         "1 Hz staircase, same cycle as Test 01\n"
         "Shims removed between Test 01 and Test 02")
@@ -295,7 +319,7 @@ def build():
     if _safe(a02, 7):
         add_image_slide(prs, "Test 02 -- Harmonic Hysteresis (I != 0)",
                         a02[7],
-                        "B1, b2, b3, TF vs current -- excluding I = 0 plateaus")
+                        "B1, b2, b3, TF vs current -- b2 ~ \u221215 units (no shims!)")
     if _safe(a02, 2):
         add_image_slide(prs, "Test 02 -- B1 vs Current (Full Range)",
                         a02[2])
@@ -303,28 +327,44 @@ def build():
         add_image_slide(prs, "Test 02 -- Multipole Spectrum at Peak Current",
                         a02[8])
 
+    # Eddy current -- Test 02
+    e02 = images.get("eddy_02", [])
+    if _safe(e02, 2):
+        add_image_slide(prs, "Test 02 -- Eddy Current: \u03c4 vs Current",
+                        e02[2],
+                        "\u03c4 = 26.0 \u00b1 8.1 s -- matches Test 01 "
+                        "(shims do not affect eddy-current dynamics)")
+    if _safe(e02, 4):
+        add_image_slide(prs, "Test 02 -- N_LAST_TURNS Sensitivity",
+                        e02[4])
+
     # ==================================================================
-    # Chapter 3: Shims Effect -- 01 vs 02
+    # Chapter 4: Shims Effect -- 01 vs 02
     # ==================================================================
-    add_chapter_slide(prs, 3,
+    add_chapter_slide(prs, 4,
         "Shims Effect\nTest 01 vs Test 02",
         "Quantify the effect of removing iron shims\n"
-        "on B1, b2, b3, and the transfer function")
+        "Blue = Test 01 (with shims), Red = Test 02 (without shims)\n"
+        "Dark shade = ascending, Light shade = descending")
 
-    # compare_01v02 images:
+    # compare_01v02 (6 images):
     # 0: B1 overlay, 1: b2 overlay, 2: b3 overlay, 3: TF overlay
     # 4: difference bar charts (2x2), 5: multipole spectrum
     c12 = images.get("compare_01v02", [])
     if _safe(c12, 0):
         add_image_slide(prs, "Shims Effect -- B1 vs Current",
-                        c12[0],
-                        "Circles = with shims, Squares = without shims")
+                        c12[0])
     if _safe(c12, 1):
         add_image_slide(prs, "Shims Effect -- b2 (Quadrupole) vs Current",
-                        c12[1])
+                        c12[1],
+                        "b2 ~ \u2212151 with shims vs \u221215 without: "
+                        "shims WORSENED the quadrupole")
     if _safe(c12, 2):
         add_image_slide(prs, "Shims Effect -- b3 (Sextupole) vs Current",
                         c12[2])
+    if _safe(c12, 3):
+        add_image_slide(prs, "Shims Effect -- Transfer Function vs Current",
+                        c12[3])
     if _safe(c12, 4):
         add_image_slide(prs, "Shims Effect -- Per-Level Differences",
                         c12[4],
@@ -333,13 +373,55 @@ def build():
         add_image_slide(prs, "Shims Effect -- Multipole Spectrum Comparison",
                         c12[5])
 
+    add_text_slide(prs, "Shims Effect -- Key Findings",
+        "Comparing Test 01 (with shims) vs Test 02 (without shims):\n\n"
+        "\u2022 b2 shift: ~133 units -- shims INCREASED |b2| "
+        "from 15 to 151 units\n"
+        "\u2022 b2 correlation r = \u22120.515 -- field symmetry inverted\n"
+        "\u2022 b3 shift: ~15 units (secondary, saturation redistribution)\n"
+        "\u2022 B1 shift: ~5 mT (small -- shims affect homogeneity, "
+        "not total flux)\n"
+        "\u2022 TF shift: ~0.06 T/kA (~5%)\n\n"
+        "\u2192 No-shims configuration has better field quality.\n"
+        "   Shims need repositioning or removal.")
+
     # ==================================================================
-    # Chapter 4: Test 03 -- 2 Hz Staircase (Feb 16 afternoon)
+    # Chapter 5: Validation -- Python vs FFMM C++ (Test 02)
     # ==================================================================
-    add_chapter_slide(prs, 4,
+    add_chapter_slide(prs, 5,
+        "Pipeline Validation\nPython vs FFMM C++ (Test 02)",
+        "Run-based comparison: 41 plateaus x 350 turns\n"
+        "FFMM options: dri rot nor cel fed dit\n"
+        "Our options: dri rot cel fed (dit N/A on plateaus)")
+
+    # validation_02 (5 images):
+    # 0: N_LAST sweep, 1: parity scatter, 2: per-harmonic bars,
+    # 3: per-run residuals, 4: Central PCB comparison
+    v02 = images.get("validation_02", [])
+    if _safe(v02, 0):
+        add_image_slide(prs, "Validation -- N_LAST Averaging Window Sweep",
+                        v02[0],
+                        "FFMM uses all 350 turns. "
+                        "Our 170-turn default differs by 72 \u00b5T (eddy settling)")
+    if _safe(v02, 1):
+        add_image_slide(prs, "Validation -- B_main Parity (N_LAST=350)",
+                        v02[1],
+                        "RMS = 0.6 \u00b5T -- sub-microtesla agreement")
+    if _safe(v02, 2):
+        add_image_slide(prs, "Validation -- Per-Harmonic Residuals",
+                        v02[2],
+                        "All harmonics < 0.003 units -- machine-precision parity")
+    if _safe(v02, 3):
+        add_image_slide(prs, "Validation -- Per-Run B_main Residuals",
+                        v02[3])
+
+    # ==================================================================
+    # Chapter 6: Test 03 -- 2 Hz Staircase (Feb 16 afternoon)
+    # ==================================================================
+    add_chapter_slide(prs, 6,
         "Test 03\nFeb 16, 2026 -- Afternoon",
         "2 Hz staircase (120 rpm), 512 samples/turn\n"
-        "~800 turns per plateau, streaming binary format\n"
+        "~740 turns per plateau, streaming binary format\n"
         "No shims, same current cycle")
 
     # analysis_03 (streaming, 13 images):
@@ -349,6 +431,9 @@ def build():
     # 6: B1 hyst, 7: b2 hyst, 8: b3 hyst, 9: TF hyst
     # 10: zoomed 2x2 (I!=0), 11: multipole spectrum, 12: FFMM parity
     a03 = images.get("analysis_03", [])
+    if _safe(a03, 1):
+        add_image_slide(prs, "Test 03 -- Current Profile & Plateau Detection",
+                        a03[1])
     if _safe(a03, 2):
         add_image_slide(prs, "Test 03 -- Turn Classification Map",
                         a03[2],
@@ -356,10 +441,7 @@ def build():
     if _safe(a03, 10):
         add_image_slide(prs, "Test 03 -- Harmonic Hysteresis (I != 0)",
                         a03[10],
-                        "B1, b2, b3, TF vs current -- excluding I = 0 plateaus")
-    if _safe(a03, 1):
-        add_image_slide(prs, "Test 03 -- Current Profile & Plateau Detection",
-                        a03[1])
+                        "B1, b2, b3, TF vs current -- b2 ~ \u221216, b3 ~ \u221212 units")
     if _safe(a03, 6):
         add_image_slide(prs, "Test 03 -- B1 vs Current (Full Range)",
                         a03[6])
@@ -374,157 +456,199 @@ def build():
         add_image_slide(prs, "Test 03 -- All Turns: Field vs Time",
                         a03[4],
                         "Including ramp turns -- full current-harmonic correlation")
+    if _safe(a03, 12):
+        add_image_slide(prs, "Test 03 -- FFMM C++ Parity Check",
+                        a03[12],
+                        "B_main max |diff| = 1.81e-13 T (machine precision)")
 
     # Eddy current results for test 03
     e03 = images.get("eddy_03", [])
     # eddy_03 (7 images): 0: settling curves, 1: representative fits,
     # 2: tau vs current, 3: settling bias (3-panel),
     # 4: sensitivity study, 5: precycle, 6: double-exp comparison
+    if _safe(e03, 0):
+        add_image_slide(prs, "Test 03 -- Eddy Current: Settling Curves",
+                        e03[0])
+    if _safe(e03, 1):
+        add_image_slide(prs, "Test 03 -- Eddy Current: Representative Fits",
+                        e03[1])
     if _safe(e03, 2):
         add_image_slide(prs, "Test 03 -- Eddy Current: \u03c4 vs Current",
                         e03[2],
-                        "\u03c4 decreases with |I| (permeability effect)")
+                        "\u03c4 = 13.2 \u00b1 8.7 s; "
+                        "\u03bc_r dependence: 17 s (low I) \u2192 5 s (saturation)")
+    if _safe(e03, 3):
+        add_image_slide(prs, "Test 03 -- Settling Bias Analysis",
+                        e03[3])
     if _safe(e03, 4):
-        add_image_slide(prs, "Test 03 -- Sensitivity Study: N_LAST_TURNS",
-                        e03[4])
-    if _safe(e03, 6):
-        add_image_slide(prs, "Test 03 -- Single vs Double Exponential Fit",
-                        e03[6],
-                        "R\u00b2 comparison, \u0394R\u00b2 distribution, "
-                        "\u03c4\u2081 vs \u03c4\u2082")
+        add_image_slide(prs, "Test 03 -- N_LAST_TURNS Sensitivity Study",
+                        e03[4],
+                        "b3 bias < 0.02 units for all N_LAST values")
 
     # ==================================================================
-    # Chapter 5: Test 04 -- 2 Hz Staircase (Feb 17 morning)
+    # Chapter 7: Test 04 -- 2 Hz Staircase (Feb 17 morning)
     # ==================================================================
-    add_chapter_slide(prs, 5,
+    add_chapter_slide(prs, 7,
         "Test 04\nFeb 17, 2026 -- Morning",
         "2 Hz staircase, repeat of Test 03\n"
-        "Morning measurement for reproducibility check\n"
+        "Morning measurement for reproducibility check (~16 h apart)\n"
         "N_SKIP_END = 20 (trim last 20 turns)")
 
     # analysis_04 (streaming, 13 images): same layout as analysis_03
     a04 = images.get("analysis_04", [])
+    if _safe(a04, 1):
+        add_image_slide(prs, "Test 04 -- Current Profile & Plateau Detection",
+                        a04[1])
     if _safe(a04, 2):
         add_image_slide(prs, "Test 04 -- Turn Classification Map",
                         a04[2],
-                        "Green = plateau, Orange = ramp, Grey = precycle")
+                        "Green = plateau, Orange = ramp "
+                        "(no precycle -- systematic stepping from start)")
     if _safe(a04, 10):
         add_image_slide(prs, "Test 04 -- Harmonic Hysteresis (I != 0)",
                         a04[10],
-                        "B1, b2, b3, TF vs current -- excluding I = 0 plateaus")
+                        "B1, b2, b3, TF -- closely matches Test 03")
     if _safe(a04, 6):
         add_image_slide(prs, "Test 04 -- B1 vs Current (Full Range)",
                         a04[6])
+    if _safe(a04, 11):
+        add_image_slide(prs, "Test 04 -- Multipole Spectrum at Peak Current",
+                        a04[11])
     if _safe(a04, 3):
         add_image_slide(prs, "Test 04 -- Harmonics vs Turn Number",
-                        a04[3],
-                        "B1, b2, b3 per turn with classification overlay")
+                        a04[3])
     if _safe(a04, 4):
         add_image_slide(prs, "Test 04 -- All Turns: Field vs Time",
-                        a04[4],
-                        "Including ramp turns -- full current-harmonic correlation")
+                        a04[4])
+    if _safe(a04, 12):
+        add_image_slide(prs, "Test 04 -- FFMM C++ Parity Check",
+                        a04[12],
+                        "B_main max |diff| = 2.25e-12 T (machine precision)")
 
     # ==================================================================
-    # Chapter 6: Reproducibility -- 03 vs 04
+    # Chapter 8: Reproducibility -- 03 vs 04
     # ==================================================================
-    add_chapter_slide(prs, 6,
+    add_chapter_slide(prs, 8,
         "Reproducibility\nTest 03 vs Test 04",
         "Day-to-day: Feb 16 afternoon vs Feb 17 morning\n"
-        "Identical hardware, same cycle, same settings")
+        "Identical hardware, same cycle, same settings\n"
+        "Blue = Test 03, Red = Test 04")
 
-    # compare_03v04 images:
+    # compare_03v04 (8 images):
     # 0: B1 overlay, 1: b2 overlay, 2: b3 overlay, 3: TF overlay
     # 4: difference bars, 5: multipole spectrum, 6: hysteresis width
     # 7: B1 noise scatter
     c34 = images.get("compare_03v04", [])
     if _safe(c34, 0):
         add_image_slide(prs, "Reproducibility -- B1 vs Current",
-                        c34[0],
-                        "Circles = Test 03, Squares = Test 04")
+                        c34[0])
     if _safe(c34, 1):
         add_image_slide(prs, "Reproducibility -- b2 vs Current",
                         c34[1])
     if _safe(c34, 2):
         add_image_slide(prs, "Reproducibility -- b3 vs Current",
                         c34[2])
+    if _safe(c34, 3):
+        add_image_slide(prs, "Reproducibility -- Transfer Function vs Current",
+                        c34[3])
     if _safe(c34, 4):
         add_image_slide(prs, "Reproducibility -- Per-Level Differences",
                         c34[4],
                         "\u0394B1, \u0394b2, \u0394b3 (Test 04 \u2212 Test 03)")
+    if _safe(c34, 5):
+        add_image_slide(prs, "Reproducibility -- Multipole Spectrum Comparison",
+                        c34[5])
     if _safe(c34, 6):
-        add_image_slide(prs, "Reproducibility -- Hysteresis Width & Noise",
-                        c34[6])
+        add_image_slide(prs, "Reproducibility -- Hysteresis Width",
+                        c34[6],
+                        "Width reproducible to ~40 \u00b5T")
+    if _safe(c34, 7):
+        add_image_slide(prs, "Reproducibility -- Turn-to-Turn B1 Scatter",
+                        c34[7],
+                        "B1 std at each plateau -- measurement noise comparison")
+
+    add_text_slide(prs, "Reproducibility -- Summary",
+        "38 matched current levels at |I| > 0:\n\n"
+        "\u2022 \u0394B1: max 62 \u00b5T (0.03% relative) -- "
+        "ambient temperature drift\n"
+        "\u2022 \u0394b2: max 0.27 units -- well within scatter\n"
+        "\u2022 \u0394b3: max 0.05 units -- negligible\n"
+        "\u2022 \u0394TF: max 0.002 T/kA\n\n"
+        "Correlation: B1 r=1.0000, b2 r=0.9954, b3 r=0.9989\n\n"
+        "\u2192 Excellent day-to-day reproducibility confirmed.\n"
+        "   Measurement system is stable and reliable.")
 
     # ==================================================================
-    # Chapter 7: Eddy Current Comparison -- Single vs Double Tau
+    # Chapter 9: Eddy Current Comparison -- All Tests
     # ==================================================================
-    add_chapter_slide(prs, 7,
-        "Eddy Current Analysis\nSingle vs Double Exponential",
-        "Compare single-exp B1(t) = Binf + A exp(-t/\u03c4)\n"
-        "vs double-exp with two time constants \u03c4_1, \u03c4_2")
+    add_chapter_slide(prs, 9,
+        "Eddy Current Analysis\nAll Tests Compared",
+        "Single-exp: B1(t) = B_inf + A exp(\u2212t/\u03c4)\n"
+        "Double-exp: B1(t) = B_inf + A\u2081 exp(\u2212t/\u03c4\u2081) "
+        "+ A\u2082 exp(\u2212t/\u03c4\u2082)")
 
-    # eddy_01/02 (6 images each): 0: settling, 1: fits, 2: tau vs I,
-    # 3: bias (3-panel), 4: sensitivity, 5: double-exp
-    # eddy_03 (7 images): same + 5: precycle, 6: double-exp
-    e01 = images.get("eddy_01", [])
-    e02 = images.get("eddy_02", [])
     if _safe(e01, 2):
         add_image_slide(prs, "Test 01 (With Shims) -- \u03c4 vs Current",
                         e01[2])
+    if _safe(e02, 2):
+        add_image_slide(prs, "Test 02 (No Shims) -- \u03c4 vs Current",
+                        e02[2])
+
+    # Double-exp comparison
     if _safe(e01, 5):
         add_image_slide(prs, "Test 01 -- Single vs Double Exp Fit",
-                        e01[5],
-                        "R\u00b2 comparison and time-constant analysis")
+                        e01[5])
     if _safe(e02, 5):
-        add_image_slide(prs, "Test 02 (No Shims) -- Single vs Double Exp Fit",
+        add_image_slide(prs, "Test 02 -- Single vs Double Exp Fit",
                         e02[5])
     if _safe(e03, 6):
         add_image_slide(prs, "Test 03 (2 Hz) -- Single vs Double Exp Fit",
                         e03[6])
 
-    # ==================================================================
-    # Chapter 8: Observations
-    # ==================================================================
-    add_chapter_slide(prs, 8,
-        "Key Observations", "")
-
-    add_text_slide(prs, "Shims Effect -- Key Findings",
-        "Comparing Test 01 (with shims) vs Test 02 (without shims):\n\n"
-        "\u2022 b2 (quadrupole): primary target of shims -- "
-        "quantifiable difference in allowed harmonic\n"
-        "\u2022 B1 (main field): small change, shims affect "
-        "homogeneity not total flux\n"
-        "\u2022 b3 (sextupole): indirect changes through "
-        "saturation redistribution\n"
-        "\u2022 Transfer function: minimal impact on TF\n\n"
-        "cel/fed disabled for both tests (UNSAFE diagnostic)")
-
-    add_text_slide(prs, "2 Hz Streaming -- Key Findings",
-        "Streaming at 2 Hz (120 rpm) provides:\n\n"
-        "\u2022 Full supercycle visibility -- every turn captured\n"
-        "\u2022 Turn classification: automated plateau/ramp/precycle separation\n"
-        "\u2022 Eddy-current transients resolved with 0.5 s time resolution\n"
-        "\u2022 Harmonics vs time: real-time field quality evolution\n\n"
-        "All-turns analysis (including ramp turns) reveals\n"
-        "current-harmonic correlations invisible in plateau-only averages.")
+    add_text_slide(prs, "Eddy Current -- Key Findings",
+        "1 Hz tests (01, 02): \u03c4 = 26 \u00b1 8 s\n"
+        "2 Hz test (03): \u03c4 = 13 \u00b1 9 s\n\n"
+        "\u2022 Clear \u03bc_r dependence: \u03c4 drops with |I| "
+        "(higher permeability \u2192 lower time constant)\n"
+        "\u2022 Shims do NOT affect eddy-current dynamics "
+        "(01 vs 02: 26.4 vs 26.0 s)\n"
+        "\u2022 b3 bias from eddy currents is negligible "
+        "(< 0.03 units for all tests)\n"
+        "\u2022 N_LAST_TURNS = 170 (1 Hz) / 340 (2 Hz) -- "
+        "conservative, excludes 5\u00d7\u03c4_max\n"
+        "\u2022 Double-exp: marginal R\u00b2 improvement -- "
+        "single-exp adequate")
 
     # ==================================================================
-    # Chapter 9: Summary & Conclusions
+    # Chapter 10: Summary & Conclusions
     # ==================================================================
-    add_chapter_slide(prs, 9,
+    add_chapter_slide(prs, 10,
         "Summary\n& Conclusions", "")
 
-    add_text_slide(prs, "MC62 Measurement Campaign Summary",
-        "4 staircase tests: 01 (with shims, 1 Hz), 02 (no shims, 1 Hz), "
-        "03 (no shims, 2 Hz PM), 04 (no shims, 2 Hz AM)\n\n"
-        "Key findings:\n"
-        "\u2022 Shims effect: quantified via 01-vs-02 comparison\n"
-        "\u2022 Reproducibility: excellent (03 vs 04, "
-        "\u0394B1 < 62 \u00b5T, \u0394b3 < 0.05 units)\n"
-        "\u2022 Eddy currents: \u03c4 depends on |I| "
-        "(permeability effect, 2--40 s)\n"
-        "\u2022 Pipeline validation: machine-precision parity with FFMM C++\n"
-        "\u2022 cel/fed correctly auto-disabled for all 4 tests")
+    add_text_slide(prs, "MC62 Magnet Characterisation",
+        "B1 at 200 A: 0.2185 T (integral)\n"
+        "TF at 200 A: 1.093 T/kA\n"
+        "Saturation onset: ~120 A\n\n"
+        "b2 (no shims): \u221216 units (C-shape asymmetry)\n"
+        "b2 (with shims): \u2212151 units (shims worsened it!)\n"
+        "b3: \u221212 units (stable)\n\n"
+        "Eddy current \u03c4: 2\u201340 s (current-dependent)\n"
+        "Hysteresis width: 0.8\u20131.1 mT\n"
+        "Reproducibility: \u0394B1 < 62 \u00b5T, \u0394b3 < 0.05 units")
+
+    add_text_slide(prs, "Conclusions",
+        "1. Shims effect: shims dramatically WORSENED b2 "
+        "(151 vs 15 units). Need repositioning.\n\n"
+        "2. Reproducibility: excellent (\u0394B1 \u2264 62 \u00b5T, "
+        "\u0394b3 < 0.05 units) -- system is stable.\n\n"
+        "3. Eddy currents: \u03c4 = 2\u201340 s with \u03bc_r dependence. "
+        "N_LAST = 340 safely excludes transients.\n\n"
+        "4. Pipeline validation: machine-precision parity with FFMM C++ "
+        "(< 1 pT for B_main).\n\n"
+        "5. cel/fed correctly auto-disabled: dipole high-order harmonics "
+        "unreliable for centre-localisation.\n\n"
+        "6. C-shape signature: systematic b2 ~ \u221216 units "
+        "(inherent to open-gap geometry).")
 
     # -- Last slide --
     add_last_slide(prs)
