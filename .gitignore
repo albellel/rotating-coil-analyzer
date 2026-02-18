@@ -47,8 +47,10 @@ htmlcov/
 Thumbs.db
 .claude/
 
-# Windows reserved filenames (can't be deleted easily)
+# Windows reserved filenames (created when `> nul` is used in Git Bash
+# instead of `> /dev/null`; Git Bash treats "nul" as a literal filename)
 nul
+nul.*
 
 # =========================
 # Project outputs (do not version)
