@@ -66,6 +66,13 @@ FFMM Central results are all NaN (measurement-embedded Central Kn file is all-ze
 
 See `correction_options_reference.md` for background on dipole cel fragility.
 
+## Inductance Analysis (Section 10b)
+Compares apparent and differential inductance from the B-H curve:
+- **L_app = B1/I** (Transfer Function, proportional to apparent inductance = secant of B-H)
+- **L_diff = dB1/dI** (proportional to differential inductance = local slope of B-H)
+
+In a linear (unsaturated) magnet, L_app = L_diff = const. As iron saturates, L_diff drops faster than L_app because it tracks the local slope while L_app tracks the secant. The ratio L_diff/L_app < 1 quantifies the degree of saturation. Computed via `np.gradient(B1, I)` per branch (ascending/descending separately to preserve hysteresis information).
+
 ## Observations
 1. **Reproducibility vs test 03**: Results closely match test 03 (afternoon). B1 agrees to ~60 uT, b3 to ~0.05 units. See companion comparison notebook for detailed statistics.
 2. **b2 ~ -16 units** at high current, consistent with C-shape geometry.

@@ -31,6 +31,13 @@ Full hysteresis staircase measurement of MC62 without shimming plates. Current c
 3. **TF** and **hysteresis** patterns match test 01 closely (as expected -- shims affect field quality, not main field).
 4. **Central PCB** has similar corrupt-value issues at low current as in test 01.
 
+### Inductance Analysis (Section 10b)
+Compares apparent and differential inductance from the B-H curve:
+- **L_app = B1/I** (Transfer Function, proportional to apparent inductance = secant of B-H)
+- **L_diff = dB1/dI** (proportional to differential inductance = local slope of B-H)
+
+In a linear (unsaturated) magnet, L_app = L_diff = const. As iron saturates, L_diff drops faster than L_app because it tracks the local slope while L_app tracks the secant. The ratio L_diff/L_app < 1 quantifies the degree of saturation. Computed via `np.gradient(B1, I)` per branch (ascending/descending separately to preserve hysteresis information).
+
 ### cel/fed Safety Diagnostic
 This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
 

@@ -59,6 +59,7 @@ processed_data/
 plots/
 reports/
 tmp/
+temp/
 *.log
 *.bak
 
@@ -118,3 +119,8 @@ presentation_template/
 # Generated presentations (PPTX, regenerated from notebooks)
 # =========================
 rotating_coil_analyzer/notebooks/**/*.pptx
+
+# =========================
+# Old reports / documents (large PDFs, not for version control)
+# =========================
+rotating_coil_analyzer/notebooks/**/old_reports_and_documents/

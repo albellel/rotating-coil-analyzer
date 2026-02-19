@@ -38,6 +38,8 @@ plot_hysteresis
     Hysteresis loop with run-order gradient coloring.
 eddy_model
     Exponential eddy-current settling model for curve_fit.
+diagnose_fdi_transitions
+    Detect FDI stuck-channel issues between consecutive plateau runs.
 compute_level_stats
     Mean/std of I, B1, b2, b3, TF for a given operating point.
 diff_sigma
@@ -54,6 +56,7 @@ from typing import Dict
 import numpy as np
 import pandas as pd
 
+from ..ingest.channel_detect import robust_range
 from .kn_pipeline import (
     LegacyKnPerTurn,
     SegmentKn,
@@ -245,6 +248,174 @@ def find_contiguous_groups(
     if in_group:
         groups.append((start, len(mask) - 1))
     return [(s, e) for s, e in groups if (e - s + 1) >= min_length]
+
+
+# =====================================================================
+#  FDI stuck-channel diagnostic
+# =====================================================================
+
+@dataclass(frozen=True)
+class FdiTransitionCheck:
+    """Diagnostic result for one transition between consecutive plateau runs.
+
+    Detects Fast Digital Integrator (FDI) stuck-channel issues where the
+    flux signal fails to respond during current ramps, causing the field
+    at the start of the next plateau to remain at the previous level's
+    value.  This creates fake settling transients that corrupt
+    eddy-current fits.
+    """
+
+    run_before: int         #: run_id of the plateau before the gap
+    run_after: int          #: run_id of the plateau after the gap
+    I_before: float         #: I_nom of plateau before gap
+    I_after: float          #: I_nom of plateau after gap
+    delta_I: float          #: signed current change
+    n_gap_turns: int        #: turns in the ramp gap between plateaus
+    flux_rng_before: float  #: avg flux range at end of previous plateau
+    flux_rng_gap_mid: float #: avg flux range in middle of gap (NaN if gap < 5)
+    flux_rng_after_start: float   #: avg flux range at start of next plateau
+    flux_rng_after_settled: float #: avg flux range at settled part of next plateau
+    response_ratio: float   #: fraction of expected flux change seen at plateau start
+    is_stuck: bool           #: True if FDI appears stuck at this transition
+    severity: str            #: "OK", "PARTIAL", or "STUCK"
+    reason: str              #: human-readable explanation
+
+
+def diagnose_fdi_transitions(
+    flux_turns: np.ndarray,
+    I_mean: np.ndarray,
+    run_info: list[dict],
+    *,
+    n_boundary: int = 10,
+    stuck_threshold: float = 0.3,
+    partial_threshold: float = 0.7,
+    min_delta_I: float = 5.0,
+) -> list[FdiTransitionCheck]:
+    """Detect FDI stuck-channel issues between consecutive plateau runs.
+
+    For each consecutive pair of runs, compares the per-turn flux range
+    (``robust_range``) at the end of the previous run, the start of the
+    next run, and the settled portion of the next run.  If the flux
+    range at the start of a plateau hasn't changed as expected (given
+    the settled-value change), the FDI may have been stuck during the
+    ramp.
+
+    Parameters
+    ----------
+    flux_turns : ndarray, shape (n_total_turns, samples_per_turn)
+        One flux channel (absolute), reshaped into turns.
+    I_mean : ndarray, shape (n_total_turns,)
+        Per-turn mean current.
+    run_info : list of dict
+        Each dict must have keys ``run_id``, ``start``, ``end``,
+        ``I_nom``.  Runs must be in chronological order.
+    n_boundary : int
+        Number of turns to average at plateau boundaries (default 10).
+    stuck_threshold : float
+        ``|response_ratio|`` below this classifies as STUCK (default 0.3).
+    partial_threshold : float
+        ``|response_ratio|`` below this classifies as PARTIAL (default 0.7).
+    min_delta_I : float
+        Skip transitions with ``|delta_I| < min_delta_I`` (default 5 A)
+        since flux change would be too small to measure reliably.
+
+    Returns
+    -------
+    list of FdiTransitionCheck
+        One entry per consecutive run pair (skipping pairs with small
+        ``|delta_I|``).
+    """
+    n_total = flux_turns.shape[0]
+    # Pre-compute per-turn flux range for all turns
+    flux_rng = np.array([robust_range(flux_turns[t]) for t in range(n_total)])
+
+    checks: list[FdiTransitionCheck] = []
+
+    for i in range(len(run_info) - 1):
+        r_prev = run_info[i]
+        r_next = run_info[i + 1]
+
+        delta_I = r_next["I_nom"] - r_prev["I_nom"]
+        if abs(delta_I) < min_delta_I:
+            continue
+
+        s_prev, e_prev = r_prev["start"], r_prev["end"]
+        s_next, e_next = r_next["start"], r_next["end"]
+        n_gap = s_next - e_prev - 1
+
+        # Flux range at end of previous plateau
+        tail_prev = slice(max(s_prev, e_prev - n_boundary + 1), e_prev + 1)
+        flux_rng_before = float(np.mean(flux_rng[tail_prev]))
+
+        # Flux range at start of next plateau
+        head_next = slice(s_next, min(s_next + n_boundary, e_next + 1))
+        flux_rng_after_start = float(np.mean(flux_rng[head_next]))
+
+        # Flux range at settled portion of next plateau
+        tail_next = slice(max(s_next, e_next - n_boundary + 1), e_next + 1)
+        flux_rng_after_settled = float(np.mean(flux_rng[tail_next]))
+
+        # Flux range in middle of gap (if gap large enough)
+        if n_gap >= 5:
+            gap_start = e_prev + 1
+            gap_end = s_next
+            gap_mid_s = gap_start + (gap_end - gap_start) // 4
+            gap_mid_e = gap_end - (gap_end - gap_start) // 4
+            flux_rng_gap_mid = float(np.mean(flux_rng[gap_mid_s:gap_mid_e]))
+        else:
+            flux_rng_gap_mid = float("nan")
+
+        # Compute response ratio
+        expected_change = flux_rng_after_settled - flux_rng_before
+        actual_change = flux_rng_after_start - flux_rng_before
+
+        # Need a minimum expected change to avoid division by noise
+        noise_floor = 0.01 * max(abs(flux_rng_before), abs(flux_rng_after_settled), 1e-12)
+        if abs(expected_change) > noise_floor:
+            response_ratio = actual_change / expected_change
+        else:
+            # No significant expected change — cannot diagnose, assume OK
+            response_ratio = 1.0
+
+        # Classify
+        abs_rr = abs(response_ratio)
+        if abs_rr >= partial_threshold:
+            severity = "OK"
+            is_stuck = False
+            reason = f"response_ratio={response_ratio:.3f} >= {partial_threshold}"
+        elif abs_rr >= stuck_threshold:
+            severity = "PARTIAL"
+            is_stuck = False
+            reason = (
+                f"response_ratio={response_ratio:.3f} "
+                f"({stuck_threshold} <= |rr| < {partial_threshold})"
+            )
+        else:
+            severity = "STUCK"
+            is_stuck = True
+            reason = (
+                f"response_ratio={response_ratio:.3f} < {stuck_threshold} -- "
+                f"flux did not respond during ramp"
+            )
+
+        checks.append(FdiTransitionCheck(
+            run_before=r_prev["run_id"],
+            run_after=r_next["run_id"],
+            I_before=r_prev["I_nom"],
+            I_after=r_next["I_nom"],
+            delta_I=delta_I,
+            n_gap_turns=n_gap,
+            flux_rng_before=flux_rng_before,
+            flux_rng_gap_mid=flux_rng_gap_mid,
+            flux_rng_after_start=flux_rng_after_start,
+            flux_rng_after_settled=flux_rng_after_settled,
+            response_ratio=response_ratio,
+            is_stuck=is_stuck,
+            severity=severity,
+            reason=reason,
+        ))
+
+    return checks
 
 
 # =====================================================================
@@ -863,7 +1034,7 @@ def plot_hysteresis(
     branch_col: str = "branch",
     branch_colors: dict | None = None,
 ):
-    """Plot a hysteresis loop with run-order gradient coloring.
+    """Plot a hysteresis loop with lines connecting adjacent current levels.
 
     Parameters
     ----------
@@ -884,33 +1055,18 @@ def plot_hysteresis(
     if branch_colors is None:
         branch_colors = {"ascending": "tab:blue", "descending": "tab:red"}
 
-    s = summ.sort_values("run_id")
-    valid = (s["quality"] == "good") & s[ycol].notna()
-    if valid.sum() > 1:
-        sv = s[valid].reset_index(drop=True)
-        xg, yg = sv[xcol].values, sv[ycol].values
-        n = len(xg)
-        for i in range(n - 1):
-            frac = i / max(n - 2, 1)
-            ax.plot(
-                [xg[i], xg[i + 1]], [yg[i], yg[i + 1]], "-",
-                color=branch_colors.get(sv[branch_col].iloc[i + 1], "grey"),
-                lw=1.0 + 2.5 * frac,
-                alpha=0.15 + 0.75 * frac,
-                solid_capstyle="round",
-                zorder=2,
-            )
     for br, col in branch_colors.items():
         good = (
-            (s[branch_col] == br)
-            & (s["quality"] == "good")
-            & s[ycol].notna()
+            (summ[branch_col] == br)
+            & (summ["quality"] == "good")
+            & summ[ycol].notna()
         )
         if good.any():
-            kw = dict(yerr=s.loc[good, yerr_col]) if yerr_col else {}
+            seg = summ.loc[good].sort_values(xcol)
+            kw = dict(yerr=seg[yerr_col]) if yerr_col else {}
             ax.errorbar(
-                s.loc[good, xcol], s.loc[good, ycol],
-                fmt="o", color=col, ms=4, capsize=2,
+                seg[xcol], seg[ycol],
+                fmt="o-", color=col, ms=4, capsize=2,
                 label=br, zorder=4, **kw,
             )
 
@@ -938,6 +1094,232 @@ def double_eddy_model(t, B_inf, A1, tau1, A2, tau2):
     eddy currents.  Intended for use with :func:`scipy.optimize.curve_fit`.
     """
     return B_inf + A1 * np.exp(-t / tau1) + A2 * np.exp(-t / tau2)
+
+
+# =====================================================================
+#  Eddy-current per-run fit helper
+# =====================================================================
+
+@dataclass(frozen=True)
+class EddyFitResult:
+    """Result of single-exponential eddy-current fit on one run."""
+
+    run_id: int
+    I_nom: float
+    branch: str
+    B_inf: float          # asymptotic field [T]
+    A: float              # eddy amplitude [T]
+    tau: float            # time constant [turns]
+    tau_err: float        # fit uncertainty on tau
+    r2: float             # coefficient of determination
+    n_turns: int          # turns used in fit
+    n_outliers: int       # turns removed by MAD clip
+    n_trimmed: int        # leading ramp turns trimmed (0 if no I_mean given)
+    quality: str          # "GOOD", "WEAK_SIGNAL", "MARGINAL", "FIT_FAILED"
+    reason: str           # human-readable explanation for quality
+
+
+def fit_eddy_per_run(
+    turns: np.ndarray,
+    B1: np.ndarray,
+    run_id: int,
+    I_nom: float,
+    branch: str,
+    n_settled: int = 50,
+    tau_bounds: tuple = (0.5, 500),
+    mad_n_sigma: float = 5.0,
+    I_mean: np.ndarray | None = None,
+    I_ramp_threshold: float = 0.5,
+) -> EddyFitResult:
+    """Fit a single-exponential eddy model to one run's B1 data.
+
+    Uses a two-pass approach: (1) fit on all data, (2) MAD on residuals
+    to reject genuine spikes, (3) refit on cleaned data.  Classifies the
+    result as ``GOOD`` (R² >= 0.9), ``WEAK_SIGNAL`` (|A| below noise
+    floor), ``MARGINAL`` (everything else), or ``FIT_FAILED``.
+
+    Parameters
+    ----------
+    turns : array
+        Turn numbers (x-axis for the fit).
+    B1 : array
+        Dipole field values [T] for each turn.
+    run_id : int
+        Run identifier (for labelling).
+    I_nom : float
+        Nominal current [A].
+    branch : str
+        Hysteresis branch ("ascending" / "descending").
+    n_settled : int
+        Number of last turns used to estimate noise floor and B_inf.
+    tau_bounds : tuple
+        (lower, upper) bounds for tau in the fit.
+    mad_n_sigma : float
+        Number of MAD-scaled sigma for residual outlier rejection.
+    I_mean : array or None
+        Per-turn mean current [A].  If provided, leading turns where
+        ``|I_mean - I_settled| > I_ramp_threshold`` are trimmed before
+        fitting (removes ramp contamination from plateau detection).
+    I_ramp_threshold : float
+        Current deviation threshold [A] for ramp trimming (default 0.5).
+
+    Returns
+    -------
+    EddyFitResult
+    """
+    from scipy.optimize import curve_fit as _curve_fit
+    from scipy.stats import median_abs_deviation as _mad
+
+    n_total = len(B1)
+
+    # ── Trim leading ramp turns (if current data provided) ────────────
+    n_trimmed = 0
+    if I_mean is not None and len(I_mean) == len(B1):
+        n_tail_I = min(n_settled, len(I_mean))
+        I_settled = I_mean[-n_tail_I:].mean()
+        ramp_flags = np.abs(I_mean - I_settled) > I_ramp_threshold
+        # Only trim contiguous leading ramp turns
+        first_ok = 0
+        for i in range(len(ramp_flags)):
+            if not ramp_flags[i]:
+                first_ok = i
+                break
+        else:
+            first_ok = len(ramp_flags)
+        if first_ok > 0:
+            turns = turns[first_ok:]
+            B1 = B1[first_ok:]
+            n_trimmed = first_ok
+
+    if len(B1) < 10:
+        return EddyFitResult(
+            run_id=run_id, I_nom=I_nom, branch=branch,
+            B_inf=np.nan, A=np.nan, tau=np.nan, tau_err=np.nan,
+            r2=0.0, n_turns=n_total, n_outliers=0, n_trimmed=n_trimmed,
+            quality="FIT_FAILED",
+            reason=f"Only {len(B1)} turns after ramp trim",
+        )
+
+    # ── Trim leading "stuck" turns where field hasn't started moving ──
+    # In bulk iron magnets the field can lag the current by many turns;
+    # the first N turns may sit at the *previous* level's B1, violating
+    # the exponential assumption.  Detect and trim them.
+    n_tail_b = min(n_settled, len(B1))
+    _nf = B1[-n_tail_b:].std()
+    _transient = abs(B1[0] - B1[-n_tail_b:].mean())
+    if _nf > 0 and _transient > 10 * _nf:
+        stuck_thr = 5 * _nf
+        n_stuck = 0
+        for i in range(min(100, len(B1))):
+            if abs(B1[i] - B1[0]) > stuck_thr:
+                break
+            n_stuck = i + 1
+        if n_stuck > 5:
+            turns = turns[n_stuck:]
+            B1 = B1[n_stuck:]
+            if I_mean is not None and len(I_mean) > n_trimmed + n_stuck:
+                I_mean = I_mean[n_trimmed + n_stuck:]
+            n_trimmed += n_stuck
+
+    if len(B1) < 10:
+        return EddyFitResult(
+            run_id=run_id, I_nom=I_nom, branch=branch,
+            B_inf=np.nan, A=np.nan, tau=np.nan, tau_err=np.nan,
+            r2=0.0, n_turns=n_total, n_outliers=0, n_trimmed=n_trimmed,
+            quality="FIT_FAILED",
+            reason=f"Only {len(B1)} turns after stuck-field trim",
+        )
+
+    # ── Estimate B_inf and noise floor from settled region ─────────────
+    n_tail = min(n_settled, len(B1))
+    B_inf_est = B1[-n_tail:].mean()
+    noise_floor = B1[-n_tail:].std()
+    A_est = B1[0] - B_inf_est
+    tau_est = 20.0
+
+    # ── Pass 1: fit on all data ────────────────────────────────────────
+    try:
+        popt1, _ = _curve_fit(
+            eddy_model, turns, B1,
+            p0=[B_inf_est, A_est, tau_est],
+            bounds=([-np.inf, -np.inf, tau_bounds[0]],
+                    [np.inf, np.inf, tau_bounds[1]]),
+            maxfev=10000,
+        )
+    except (RuntimeError, ValueError):
+        return EddyFitResult(
+            run_id=run_id, I_nom=I_nom, branch=branch,
+            B_inf=np.nan, A=np.nan, tau=np.nan, tau_err=np.nan,
+            r2=0.0, n_turns=n_total, n_outliers=0, n_trimmed=n_trimmed,
+            quality="FIT_FAILED",
+            reason="curve_fit did not converge (pass 1)",
+        )
+
+    # ── MAD on residuals (removes spikes, not the transient) ──────────
+    residuals = B1 - eddy_model(turns, *popt1)
+    mad_val = _mad(residuals, scale="normal")
+    if mad_val > 0:
+        keep = np.abs(residuals) < mad_n_sigma * mad_val
+    else:
+        keep = np.ones(len(B1), dtype=bool)
+    n_outliers = int(np.sum(~keep))
+    turns_c = turns[keep]
+    B1_c = B1[keep]
+
+    if len(B1_c) < 10:
+        return EddyFitResult(
+            run_id=run_id, I_nom=I_nom, branch=branch,
+            B_inf=np.nan, A=np.nan, tau=np.nan, tau_err=np.nan,
+            r2=0.0, n_turns=n_total, n_outliers=n_outliers, n_trimmed=n_trimmed,
+            quality="FIT_FAILED",
+            reason=f"Only {len(B1_c)} turns after residual MAD clip",
+        )
+
+    # ── Pass 2: refit on cleaned data ─────────────────────────────────
+    try:
+        popt, pcov = _curve_fit(
+            eddy_model, turns_c, B1_c,
+            p0=popt1,
+            bounds=([-np.inf, -np.inf, tau_bounds[0]],
+                    [np.inf, np.inf, tau_bounds[1]]),
+            maxfev=10000,
+        )
+        perr = np.sqrt(np.diag(pcov))
+        B_inf, A, tau = popt
+        tau_err = perr[2]
+
+        # R² on cleaned data
+        B1_pred = eddy_model(turns_c, *popt)
+        ss_res = np.sum((B1_c - B1_pred) ** 2)
+        ss_tot = np.sum((B1_c - B1_c.mean()) ** 2)
+        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    except (RuntimeError, ValueError):
+        return EddyFitResult(
+            run_id=run_id, I_nom=I_nom, branch=branch,
+            B_inf=np.nan, A=np.nan, tau=np.nan, tau_err=np.nan,
+            r2=0.0, n_turns=n_total, n_outliers=n_outliers, n_trimmed=n_trimmed,
+            quality="FIT_FAILED",
+            reason="curve_fit did not converge (pass 2)",
+        )
+
+    # ── Classify quality ───────────────────────────────────────────────
+    if abs(A) < 3 * noise_floor:
+        quality = "WEAK_SIGNAL"
+        reason = (f"|A|={abs(A):.2e} T < 3*noise {noise_floor:.2e} T "
+                  f"-- no detectable transient")
+    elif r2 >= 0.9:
+        quality = "GOOD"
+        reason = f"R2={r2:.4f}"
+    else:
+        quality = "MARGINAL"
+        reason = f"R2={r2:.4f}, |A|={abs(A):.2e} T"
+
+    return EddyFitResult(
+        run_id=run_id, I_nom=I_nom, branch=branch,
+        B_inf=B_inf, A=A, tau=tau, tau_err=tau_err,
+        r2=r2, n_turns=n_total, n_outliers=n_outliers, n_trimmed=n_trimmed,
+        quality=quality, reason=reason,
+    )
 
 
 # =====================================================================

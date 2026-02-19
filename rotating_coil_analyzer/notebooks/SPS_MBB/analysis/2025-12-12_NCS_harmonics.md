@@ -28,6 +28,10 @@ Analysis of the SPS MBB dipole NCS (non-compensated side) segment from session `
 | Failed files | 0 |
 | ok_main pass rate | 100% (3,502/3,502) |
 
+## Outlier Rejection
+
+MAD-based sigma clipping (`mad_sigma_clip()`) on `B1_T` is applied per operating point (`I_nom_A`) with a 5-sigma threshold for consistency with the CS segment. The NCS segment is expected to have few or no removals as its data is clean.
+
 ## Results
 
 ### Main Field (B1)
@@ -62,6 +66,13 @@ Analysis of the SPS MBB dipole NCS (non-compensated side) segment from session `
 2. **Excellent drift parity**: Legacy and weighted drift modes agree to < 0.002 units for b3, confirming both algorithms are equivalent for this dataset.
 3. **Current-dependent b3**: The b3 varies from -2.1 units at 50 A to +0.18 units at ~1650 A, showing clear saturation-driven nonlinearity.
 4. **Small hysteresis**: b3 hysteresis width is < 0.3 units, primarily visible at low currents.
+
+### Inductance Analysis (Section 8b)
+Compares apparent and differential inductance from the ramp B-H curve:
+- **L_app = B1/I** (Transfer Function, proportional to apparent inductance = secant of B-H)
+- **L_diff = dB1/dI** (proportional to differential inductance = local slope of B-H)
+
+Per-run B1 averages are split into ascending/descending branches at the peak current. The ascending branch corresponds to the initial ramp-up (virgin curve), the descending branch to the ramp-down. L_diff is computed via `np.gradient(B1, I)` per branch. Saturation is visible as L_diff dropping below L_app at high current, and the ratio L_diff/L_app quantifies the saturation level.
 
 ### cel/fed Safety Diagnostic
 This notebook includes a `diagnose_cel_fed()` check that verifies the centre-location and feeddown corrections (cel/fed) are reliable. The diagnostic compares pipeline results with and without cel/fed, flags turns with |zR| > 1% of R_ref, and provides a SAFE/MIXED/UNSAFE recommendation. See `correction_options_reference.md` for background.
