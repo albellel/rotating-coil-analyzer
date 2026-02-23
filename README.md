@@ -114,25 +114,27 @@ Example and analysis notebooks are in `rotating_coil_analyzer/notebooks/`:
 - `tools/kn_from_mh_csv.ipynb` -- Compute kn calibration coefficients from measurement-head CSV
 
 ### SPS MBB dipole
-- `SPS_MBB/analysis/2025-12-12_CS_harmonics.ipynb` -- CS segment harmonic analysis (Dec 2025 session)
-- `SPS_MBB/analysis/2025-12-12_NCS_harmonics.ipynb` -- NCS segment harmonic analysis (Dec 2025 session)
-- `SPS_MBB/analysis/2026-02-06_NCS_harmonics.ipynb` -- NCS segment full analysis (Feb 2026 session)
-- `SPS_MBB/analysis/2026-02-06_NCS_supercycle.ipynb` -- Streaming supercycle analysis (Feb 2026)
-- `SPS_MBB/comparison/2026-02-06_200GeV_vs_26GeV.ipynb` -- Cross-session comparison (Dec 2025 vs Feb 2026)
-- `SPS_MBB/eddy_current/2026-02-06_b3_settling_200GeV.ipynb` -- Eddy-current b3 settling at MD1 plateau
+- `SPS_MBB/2025-12-12_MBA/CS_harmonics.ipynb` -- CS segment harmonic analysis (Dec 2025 session)
+- `SPS_MBB/2025-12-12_MBA/NCS_harmonics.ipynb` -- NCS segment harmonic analysis (Dec 2025 session)
+- `SPS_MBB/2026-02-06_NCS_supercycle/NCS_harmonics.ipynb` -- NCS segment full analysis (Feb 2026 session)
+- `SPS_MBB/2026-02-06_NCS_supercycle/NCS_supercycle.ipynb` -- Streaming supercycle analysis (Feb 2026)
+- `SPS_MBB/2026-02-06_NCS_supercycle/b3_settling_200GeV.ipynb` -- Eddy-current b3 settling at MD1 plateau
+- `SPS_MBB/comparisons/200GeV_vs_26GeV/comparison.ipynb` -- Cross-session comparison (200 GeV vs 26 GeV cycles)
 
-### LEAR MC62 quadrupole
-- `LEAR_MC62/analysis/` -- Staircase analysis notebooks (tests 00--04)
-- `LEAR_MC62/comparison/` -- Shims effect and reproducibility comparisons
-- `LEAR_MC62/eddy_current/` -- Eddy-current settling analysis
-- `LEAR_MC62/validation/` -- FFMM parity validation
+### LEAR MC62 dipole
+- `LEAR_MC62/00_system_check/` -- System check (10 turns)
+- `LEAR_MC62/01_with_shims/` -- Staircase analysis + eddy-current settling (with shims, 1 Hz)
+- `LEAR_MC62/02_without_shims/` -- Staircase analysis + eddy-current settling + FFMM parity (without shims, 1 Hz)
+- `LEAR_MC62/03_2Hz_afternoon/` -- Streaming staircase analysis + eddy-current (2 Hz)
+- `LEAR_MC62/04_2Hz_morning/` -- Reproducibility repeat (2 Hz, morning)
+- `LEAR_MC62/comparisons/` -- Shims effect (01 vs 02) and reproducibility (03 vs 04)
 
 ### LIU BTP8 quadrupole
-- `LIU_BTP8/analysis/2019-07-17_b3_sextupole.ipynb` -- b3 sextupole analysis
-- `LIU_BTP8/analysis/2019-07-17_parity_validation.ipynb` -- Validation against legacy C++ results
+- `LIU_BTP8/2019-07-17/b3_sextupole.ipynb` -- b3 sextupole analysis
+- `LIU_BTP8/2019-07-17/parity_validation.ipynb` -- Validation against legacy C++ results
 
 ### SM18 test bench
-- `SM18/validation/2024-12-04_parity_validation.ipynb` -- Validation against legacy results
+- `SM18/2024-12-04_parity/parity_validation.ipynb` -- Validation against legacy results
 
 All notebooks use `%matplotlib widget` for interactive zoomable plots.
 
@@ -281,10 +283,9 @@ rotating_coil_analyzer/
 
 ## Documentation
 
-Detailed documentation is in the `docs/` folder:
-
-- **[Analysis Pipeline Reference](docs/analysis_pipeline.md)** -- Step-by-step pipeline documentation with formulas, code references, and cross-implementation comparison.
-- **[Golden Standard Parity Report](docs/golden_standard_parity_report.md)** -- Methodology and results of validating against the legacy C++ analyzer.
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** -- Comprehensive reference: architecture, pipeline steps, models, GUI, function reference, cross-implementation comparison (Bottura, FFMM C++, Pentella).
+- **[PARITY_REPORT.md](PARITY_REPORT.md)** -- Machine-precision parity validation against the legacy C++ analyzer (SM18, BTP8, MC62).
+- **[Correction Options Reference](rotating_coil_analyzer/notebooks/correction_options_reference.md)** -- Option-by-option guide with cel/fed failure modes and benchmark comparison across all four implementations.
 
 ---
 
@@ -300,4 +301,4 @@ Key formulas implemented:
 - Phase rotation: `C_rotated = C * exp(-i * phi * k)` for all harmonics k=1..H (Bottura Eq. AIV.6)
 - Center location (CEL) and feeddown corrections
 
-The implementation has been validated step-by-step against all five reference implementations: the legacy C++ analyzer (ffmm/MatlabAnalyzerRotCoil.cpp), the MATLAB Coder path (RotatingCoilAnalysisTurn.m), the Pentella analyzer (rotcoil_lib.py), and Bottura's theory. All five are mathematically identical for every pipeline step (see `docs/analysis_pipeline.md` for the full cross-implementation comparison table).
+The implementation achieves **machine-precision parity** (float64 rounding floor) with the legacy C++ analyzer on SM18 streaming (285,095 turns, B1 diff = 1.82e-12 T) and LIU BTP8 plateau (222 turns, B1/A1 at ~1e-18 T). See [PARITY_REPORT.md](PARITY_REPORT.md) for full details.

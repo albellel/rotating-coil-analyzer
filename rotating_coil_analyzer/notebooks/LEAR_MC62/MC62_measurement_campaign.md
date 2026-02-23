@@ -597,16 +597,17 @@ Parity uses `dit` (di/dt correction) with `signed=True` to match FFMM C++ thresh
 
 # Notebooks Index
 
-| Subfolder | Notebook | Description |
+| Folder | Notebook | Description |
 |---|---|---|
-| analysis/ | 00_test | System check (10 turns) |
-| analysis/ | 01_staircase_with_shims | Test 01 full analysis |
-| analysis/ | 02_staircase_without_shims | Test 02 full analysis |
-| analysis/ | 03_staircase_2Hz | Test 03 full analysis + FFMM parity |
-| analysis/ | 04_staircase_2Hz_morning | Test 04 full analysis + FFMM parity |
-| eddy_current/ | 01_staircase_with_shims | Eddy-current settling (Test 01) |
-| eddy_current/ | 02_staircase_without_shims | Eddy-current settling (Test 02) |
-| eddy_current/ | 03_staircase_2Hz | Eddy-current settling (Test 03) |
-| validation/ | 02_vs_ffmm | Python vs FFMM C++ parity (Test 02) |
-| comparison/ | 01_vs_02_shims_effect | Shims effect comparison |
-| comparison/ | 03_vs_04_reproducibility | Day-to-day reproducibility |
+| 00_system_check/ | analysis | System check (10 turns) |
+| 01_with_shims/ | analysis | Test 01 full analysis |
+| 01_with_shims/ | eddy_current | Eddy-current settling (Test 01) |
+| 02_without_shims/ | analysis | Test 02 full analysis |
+| 02_without_shims/ | eddy_current | Eddy-current settling (Test 02) |
+| 02_without_shims/ | ffmm_validation | Python vs FFMM C++ parity (Test 02) |
+| 03_2Hz_afternoon/ | analysis | Test 03 full analysis + FFMM parity |
+| 03_2Hz_afternoon/ | eddy_current | Eddy-current settling (Test 03) |
+| 04_2Hz_morning/ | analysis | Test 04 full analysis + FFMM parity |
+| 04_2Hz_morning/ | eddy_current | Eddy-current settling (Test 04) |
+| comparisons/shims_effect_01_vs_02/ | comparison | Shims effect comparison |
+| comparisons/reproducibility_03_vs_04/ | comparison | Day-to-day reproducibility |

@@ -1061,13 +1061,41 @@ def plot_hysteresis(
             & (summ["quality"] == "good")
             & summ[ycol].notna()
         )
-        if good.any():
-            seg = summ.loc[good].sort_values(xcol)
-            kw = dict(yerr=seg[yerr_col]) if yerr_col else {}
+        if not good.any():
+            continue
+        seg = summ.loc[good].sort_values(xcol)
+        # Split into sub-segments at I=0 to avoid connecting lines
+        # across the centre where ascending/descending branches
+        # from different parts of the cycle would create spurious jumps.
+        x_vals = seg[xcol].values
+        sub_masks = []
+        if (x_vals > 0).any():
+            sub_masks.append(seg[xcol] > 0)
+        if (x_vals < 0).any():
+            sub_masks.append(seg[xcol] < 0)
+        if (x_vals == 0).any():
+            sub_masks.append(seg[xcol] == 0)
+        first = True
+        for mask in sub_masks:
+            sub = seg.loc[mask].sort_values(xcol)
+            if sub.empty:
+                continue
+            kw = dict(yerr=sub[yerr_col]) if yerr_col else {}
             ax.errorbar(
-                seg[xcol], seg[ycol],
+                sub[xcol], sub[ycol],
                 fmt="o-", color=col, ms=4, capsize=2,
-                label=br, zorder=4, **kw,
+                label=br if first else "_nolegend_",
+                zorder=4, **kw,
+            )
+            first = False
+        # Plot I=0 points as standalone markers (no connecting line)
+        zero = seg.loc[seg[xcol] == 0]
+        if not zero.empty and len(sub_masks) > 1:
+            kw = dict(yerr=zero[yerr_col]) if yerr_col else {}
+            ax.errorbar(
+                zero[xcol], zero[ycol],
+                fmt="o", color=col, ms=4, capsize=2,
+                label="_nolegend_", zorder=4, **kw,
             )
 
 
