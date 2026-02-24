@@ -1,3 +1,10 @@
+"""In-memory data frames for a single measurement segment.
+
+A :class:`SegmentFrame` holds the validated, channel-assigned arrays
+(time, flux absolute, flux compensated, current) for one PCB segment,
+ready for analysis pipeline consumption.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1270,7 +1270,8 @@ MIN_B1_T = 1e-4
 N_LAST_TURNS_INJ = 18
 N_LAST_TURNS_HIGH = None
 N_SIGMA_CLIP = 5
-FLIP_FIELD_SIGN = False
+FLIP_SIGNAL_POLARITY = False    # True = negate all harmonics (inverted coil/cable polarity)
+ENCODER_OFFSET_RAD = 0.0       # encoder angular offset in radians (e.g., np.pi for 180-deg offset)
 
 print("B1 / b2 / b3 Comparison: 200 GeV vs 26 GeV Extended")
 print("=" * 55)
@@ -1419,16 +1420,14 @@ def load_and_process(session, meas_subdir, dataset_label=""):
     result, C_merged, C_units, ok_main = process_kn_pipeline(
         flux_abs_turns=flux_abs_all[plateau_indices], flux_cmp_turns=flux_cmp_all[plateau_indices],
         t_turns=t_all[plateau_indices], I_turns=I_all[plateau_indices],
-        kn=kn, r_ref=R_REF, magnet_order=m, options=OPTIONS, min_b1_T=MIN_B1_T)
+        kn=kn, r_ref=R_REF, magnet_order=m, options=OPTIONS, min_b1_T=MIN_B1_T,
+        flip_signal_polarity=FLIP_SIGNAL_POLARITY,
+        encoder_offset_rad=ENCODER_OFFSET_RAD)
 
     extra = [{"global_turn": int(plateau_indices[t]), "label": str(turn_label[plateau_indices[t]]),
               "I_range_A": float(I_range[plateau_indices[t]])} for t in range(len(plateau_indices))]
     rows = build_harmonic_rows(result, C_merged, C_units, ok_main, m, extra)
     df = pd.DataFrame(rows)
-
-    if FLIP_FIELD_SIGN:
-        t_cols = [c for c in df.columns if c.endswith("_T")]
-        df[t_cols] *= -1
 
     # Group by supercycle
     inj_mask_global = (turn_label == "injection")

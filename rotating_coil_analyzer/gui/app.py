@@ -24,6 +24,9 @@ from rotating_coil_analyzer.gui.harmonics import build_phase2_panel
 from rotating_coil_analyzer.gui.coil_calibration import build_phase3a_coil_calibration_panel
 from rotating_coil_analyzer.gui.harmonic_merge import build_phase3b_harmonic_merge_panel
 from rotating_coil_analyzer.gui.plots import build_phase4_plots_panel
+from rotating_coil_analyzer.gui.plateau_detection import build_plateau_detection_panel
+from rotating_coil_analyzer.gui.physics_plots import build_physics_plots_panel
+from rotating_coil_analyzer.gui.comparison import build_comparison_panel
 from rotating_coil_analyzer.analysis.kn_bundle import KnBundle, MergeResult
 
 
@@ -491,7 +494,10 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
 
 def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     """
-    Main GUI with five tabs: Catalog, Harmonics, Coil Calibration, Harmonic Merge, Plots.
+    Main GUI with eight tabs:
+
+    0: Catalog, 1: Plateau Detection, 2: Harmonics, 3: Coil Calibration,
+    4: Harmonic Merge, 5: Raw Signal Plots, 6: Physics Plots, 7: Comparison.
 
     VS Code notebook rule:
       If you re-run the launch cell without clearing the cell output, you may end up with
@@ -526,6 +532,8 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
         "segment_path": None,
         "kn_bundle": None,
         "merge_result": None,
+        "plateau_info": None,
+        "n_last_turns_recommended": None,
     }
 
     def set_kn_bundle(bundle: Optional[KnBundle]) -> None:
@@ -534,35 +542,84 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     def set_merge_result(result: Optional[MergeResult]) -> None:
         shared["merge_result"] = result
 
+    def set_plateau_info(info) -> None:
+        shared["plateau_info"] = info
+
+    def set_n_last_recommended(n: int) -> None:
+        shared["n_last_turns_recommended"] = n
+
+    # Tab 0: Catalog
     phase1 = _build_phase1_panel(shared)
+
+    # Tab 1: Plateau Detection (NEW)
+    plateau_tab = build_plateau_detection_panel(
+        lambda: shared.get("segment_frame"),
+        lambda: shared.get("segment_path"),
+        set_plateau_info,
+    )
+
+    # Tab 2: Harmonics
     phase2 = build_phase2_panel(lambda: shared.get("segment_frame"))
 
-    # New split tabs: Coil Calibration (3A) and Harmonic Merge (3B)
+    # Tab 3: Coil Calibration
     phase3a = build_phase3a_coil_calibration_panel(
         lambda: shared.get("segment_frame"),
         lambda: shared.get("segment_path"),
         set_kn_bundle,
     )
+
+    # Tab 4: Harmonic Merge (expanded)
     phase3b = build_phase3b_harmonic_merge_panel(
         lambda: shared.get("segment_frame"),
         lambda: shared.get("segment_path"),
         lambda: shared.get("kn_bundle"),
         set_merge_result,
+        get_n_last_recommended=lambda: shared.get("n_last_turns_recommended"),
     )
 
-    phase4 = build_phase4_plots_panel(lambda: shared.get("segment_frame"), lambda: shared.get("segment_path"))
+    # Tab 5: Raw Signal Plots (renamed from "Plots")
+    phase4 = build_phase4_plots_panel(
+        lambda: shared.get("segment_frame"),
+        lambda: shared.get("segment_path"),
+    )
 
-    tabs = w.Tab(children=[phase1, phase2, phase3a, phase3b, phase4])
+    # Tab 6: Physics Plots (NEW)
+    physics_tab = build_physics_plots_panel(
+        lambda: shared.get("merge_result"),
+        lambda: shared.get("plateau_info"),
+        lambda: shared.get("segment_frame"),
+        set_n_last_recommended,
+    )
+
+    # Tab 7: Comparison (NEW)
+    comparison_tab = build_comparison_panel()
+
+    tabs = w.Tab(children=[
+        phase1, plateau_tab, phase2, phase3a, phase3b,
+        phase4, physics_tab, comparison_tab,
+    ])
     tabs.set_title(0, "Catalog")
-    tabs.set_title(1, "Harmonics")
-    tabs.set_title(2, "Coil Calibration")
-    tabs.set_title(3, "Harmonic Merge")
-    tabs.set_title(4, "Plots")
+    tabs.set_title(1, "Plateau Detection")
+    tabs.set_title(2, "Harmonics")
+    tabs.set_title(3, "Coil Calibration")
+    tabs.set_title(4, "Harmonic Merge")
+    tabs.set_title(5, "Raw Signal Plots")
+    tabs.set_title(6, "Physics Plots")
+    tabs.set_title(7, "Comparison")
+
+    # Tab indices for auto-refresh on switch
+    _HARMONIC_MERGE_TAB_IDX = 4
+    _RAW_PLOTS_TAB_IDX = 5
 
     def _on_tab_change(change):
         try:
-            if change.get("name") == "selected_index" and change.get("new") == 4:
+            idx = change.get("new") if change.get("name") == "selected_index" else None
+            if idx == _RAW_PLOTS_TAB_IDX:
                 refresh = getattr(phase4, "_phase4_refresh_columns", None)
+                if callable(refresh):
+                    refresh()
+            elif idx == _HARMONIC_MERGE_TAB_IDX:
+                refresh = getattr(phase3b, "_harmonic_merge_refresh_context", None)
                 if callable(refresh):
                     refresh()
         except Exception:
@@ -570,10 +627,15 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
 
     tabs.observe(_on_tab_change, names="selected_index")
 
-    # If the GUI opens already on Plots tab, refresh once
+    # If the GUI opens already on a tab that needs refresh, do it once
     try:
-        if getattr(tabs, "selected_index", 0) == 4:
+        idx0 = getattr(tabs, "selected_index", 0)
+        if idx0 == _RAW_PLOTS_TAB_IDX:
             refresh = getattr(phase4, "_phase4_refresh_columns", None)
+            if callable(refresh):
+                refresh()
+        elif idx0 == _HARMONIC_MERGE_TAB_IDX:
+            refresh = getattr(phase3b, "_harmonic_merge_refresh_context", None)
             if callable(refresh):
                 refresh()
     except Exception:

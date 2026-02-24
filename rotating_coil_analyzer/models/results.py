@@ -1,3 +1,9 @@
+"""Result containers for analysis pipeline outputs.
+
+Immutable dataclasses that wrap pipeline results with provenance metadata,
+ensuring traceability from raw data through to final harmonic coefficients.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

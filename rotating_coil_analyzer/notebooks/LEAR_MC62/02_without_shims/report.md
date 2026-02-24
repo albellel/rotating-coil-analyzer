@@ -67,7 +67,8 @@ Runs 11, 12, 31, 32 -- reversal points near +/-200 A.
 
 Both pipelines process the same raw run-based data (41 plateaus x 350 turns).
 
-- FLIP_FIELD_SIGN = False (raw sign for comparison)
+- FLIP_SIGNAL_POLARITY = False (raw sign for comparison)
+- ENCODER_OFFSET_RAD = pi (180-deg encoder offset, MC62 2024 vs 2022)
 - FFMM options: `dri rot nor cel fed dit`
 - Our OPTIONS: `dri rot cel fed` (`dit` N/A on plateaus)
 

@@ -29,6 +29,204 @@ Temperature (warm vs cold) affects the Kn calibration file, not the options.
 
 ---
 
+## Sign-Convention Parameters
+
+Two parameters control the sign convention of the output harmonics.
+They address **different physical causes** and are **not interchangeable**.
+
+### `flip_signal_polarity` -- Global Signal Negation
+
+**What it does:** Negates all calibrated harmonics (C_abs, C_cmp) after Kn
+application but before the DB snapshot, rotation, cel, fed, and normalization.
+
+```python
+result = process_kn_pipeline(
+    ...,
+    flip_signal_polarity=True,   # negate all harmonics
+)
+```
+
+**Effect on Tesla values (C_merged):** B1 changes sign (negative -> positive
+or vice versa).
+
+**Effect on units (C_units / b_n / a_n):** **None.** Normalised units are
+ratios b_n = Re(C_n) / Re(C_1) * 10^4.  When all harmonics are negated, the
+global sign cancels in the ratio: (-C_n) / (-C_1) = C_n / C_1.
+
+**When to use:** Genuine cable polarity swap where the physical flux signal is
+globally inverted (both absolute and compensated channels).  This is rare --
+most "B1 is negative at positive current" cases are actually a 180-degree
+encoder offset (see below).
+
+**When NOT to use:** To fix b_n signs.  `flip_signal_polarity` **cannot**
+change normalised units because it is a global scaling by -1.
+
+### `encoder_offset_rad` -- Encoder Angular Pre-Rotation
+
+**What it does:** Pre-rotates all harmonics by `exp(-i * k * offset)` before
+the rotation step.  Each harmonic order k gets a different phase shift.
+
+```python
+result = process_kn_pipeline(
+    ...,
+    encoder_offset_rad=np.pi,    # 180-degree encoder offset
+)
+```
+
+**Effect at `offset = pi`:** Applies `C_k -> C_k * (-1)^k`:
+- Odd harmonics (k=1,3,5,...) are negated -> B1 flips sign.
+- Even harmonics (k=2,4,6,...) are unchanged.
+
+After normalisation by the now-positive C_1, even-order b_n change sign
+relative to the default (negative-C_1) case.
+
+**When to use:** When the coil is mounted with a 180-degree angular offset
+relative to a reference measurement.  The encoder zero position differs by pi
+from the expected position.
+
+### Diagnosing 180-degree Offset vs Cable Polarity Swap
+
+When B1 is negative at positive current, the cause could be either:
+- **(A) Cable polarity swap:** all C_n negated globally.
+- **(B) 180-degree encoder offset:** C_k -> C_k * (-1)^k.
+
+Both produce negative B1 (because C_1 is negated in both cases), but they
+have **different signatures on the normalised harmonics b_n**.
+
+#### The even/odd sign test
+
+Compare your b_n signs against a reference measurement (e.g., EDMS report):
+
+| Cause | Even b_n (n=2,4,6,8) | Odd b_n (n=3,5,7,9) |
+|-------|---------------------|---------------------|
+| **(A) Cable polarity** | Same signs as reference | Same signs as reference |
+| **(B) 180-deg offset** | **Opposite** signs | Same signs |
+
+**Why:**
+- (A) Polarity swap: C_n / C_1 = (-C_n) / (-C_1) = C_n / C_1.  Ratio
+  unchanged for all n. b_n signs are identical to the reference.
+- (B) 180-deg offset: C_k -> C_k * (-1)^k.  For the ratio:
+  `b_n = C_n * (-1)^n / (C_1 * (-1)^1) = b_n_ref * (-1)^(n-1)`.
+  Even n -> (-1)^(n-1) = -1 -> sign flips.  Odd n -> (-1)^(n-1) = +1 -> no change.
+
+**Procedure:**
+1. Run the pipeline with default settings (no flip, no encoder offset).
+2. Compare b2, b3, b4, b5 signs against the reference report.
+3. If even-order b_n flip and odd-order don't: **encoder offset = pi**.
+4. If no b_n signs change: **cable polarity swap** (or no issue at all).
+
+#### Correct fix by cause
+
+| Cause | Fix | B1 | b_n |
+|-------|-----|----|-----|
+| Cable polarity | `flip_signal_polarity=True` | Fixed | **Still wrong** (no effect on units) |
+| 180-deg encoder | `encoder_offset_rad=np.pi` | Fixed | **Fixed** |
+| Both | `encoder_offset_rad=np.pi` + `flip_signal_polarity=True` | Need both | Fixed |
+
+#### MC62 2024 example
+
+The MC62 2024 campaign shows B1 negative at positive current.  Comparison
+with the 2022 EDMS report (Pentella / Di Capua) shows the clear even/odd
+pattern:
+
+```
+n=2 (even): 2022 = +132, ours = -134  -> OPPOSITE
+n=3 (odd):  2022 = -3.4, ours = -2.4  -> SAME
+n=4 (even): 2022 = -0.39, ours = +0.37 -> OPPOSITE
+n=5 (odd):  2022 = +0.29, ours = +0.29 -> SAME
+```
+
+Diagnosis: **180-degree encoder offset**.  Fix: `encoder_offset_rad = np.pi`.
+After correction, b2 = +133.9 vs +132.0 (1.4% agreement).
+
+### Harmonic Leakage from Residual Angular Offset (b_n / a_n Mixing)
+
+Even after correcting the encoder offset, a residual angular misalignment
+between the coil and the reference frame mixes normal (b_n) and skew (a_n)
+components.
+
+For a harmonic of order n with true normal component B and true skew component
+A, a residual angular offset delta produces:
+
+```
+b_n_measured = B * cos(n * delta) + A * sin(n * delta)
+a_n_measured = -B * sin(n * delta) + A * cos(n * delta)
+```
+
+The leakage is proportional to `sin(n * delta)`.  For the dominant harmonic
+(typically n=2 for a dipole), even a small delta produces significant a_n:
+
+| delta (deg) | n=2 leakage | a2 for B=132 units |
+|-------------|-------------|-------------------|
+| 1 | sin(2) = 0.035 | 4.6 |
+| 3 | sin(6) = 0.105 | 13.8 |
+| 5 | sin(10) = 0.174 | 22.9 |
+| 7 | sin(14) = 0.242 | 31.9 |
+| 10 | sin(20) = 0.342 | 45.2 |
+
+#### MC62 example
+
+The MC62 2024 data (with `encoder_offset_rad = pi`) shows a2 = +34.3 units
+compared to the 2022 EDMS value of a2 = +1.4 units.  The n=2 harmonic vector
+has a 14-degree phase offset, corresponding to a ~7-degree residual angular
+misalignment (since phase scales as n * delta for order n):
+
+```
+2022 EDMS:  |C2/C1| = 132 units,  phase =  0.6 deg
+Ours:       |C2/C1| = 138 units,  phase = 14.4 deg
+Phase delta = 13.8 deg  ->  delta = 13.8 / 2 = 6.9 deg
+Expected a2 leakage: 132 * sin(13.8 deg) = 31.5 units  (~matches observed 34)
+```
+
+The rotation correction (`rot`) aligns the main harmonic (n=1) to real,
+but the physical coil orientation relative to the magnet differs by ~7 degrees
+between the 2022 and 2024 setups.  This residual offset leaks b2 into a2
+for n=2, and the effect grows as n * delta for higher orders.
+
+#### Full skew (a_n) analysis -- MC62 2022 vs 2024
+
+The encoder offset fixes the **signs** of even-order a_n (same mechanism as
+b_n) but does **not** fix the magnitude discrepancy.  The a_n discrepancy is
+dominated by the ~7-degree angular misalignment, which can be modelled as
+a complex rotation:
+
+```
+C_n(ours) = C_n(2022) * exp(i * n * delta_theta)
+```
+
+Applying this rotation model (delta_theta = 6.89 deg from the n=2 phase offset)
+to all EDMS harmonics and comparing with our measurements:
+
+| Harmonic | RMS residual (direct) | RMS residual (after rotation model) |
+|----------|----------------------|-------------------------------------|
+| b_n (n=3..15) | 0.29 units | 0.13 units |
+| a_n (n=3..15) | 0.37 units | 0.09 units |
+| |C_n| (n=3..15) | 0.09 units | -- (rotation-invariant) |
+
+The rotation model reduces the RMS residual by ~55% for b_n and ~75% for a_n,
+confirming that the a_n discrepancy is predominantly angular misalignment.
+
+**Key result:** once the rotation is accounted for, the residual RMS for both
+normal and skew harmonics drops to ~0.1 units, which is at the measurement
+noise floor for these sub-unit harmonics.
+
+**Note on higher-order phases:** the predicted phase shift n * delta_theta
+matches well for the dominant harmonics (n=2,3) but deviates at higher orders
+where the harmonics are sub-0.1 units and the phase becomes noise-dominated.
+The harmonic magnitude |C_n| (rotation-invariant) is the more reliable
+comparison metric for small harmonics.
+
+**Mitigation:**
+- Before measurement, align the MRU so that phi_out is small (see
+  "Best Practice: Encoder Alignment" above).
+- For post-hoc comparison across campaigns with different coil orientations,
+  compare magnitudes `|C_n/C_1|` rather than individual b_n and a_n --
+  the magnitude is rotation-invariant.
+- If b_n/a_n comparison is required, fit delta_theta from the dominant
+  harmonic (n=2 for dipole) and apply the inverse rotation analytically.
+
+---
+
 ## Option-by-Option Guide
 
 ### `dri` -- Drift Correction + Integration
@@ -63,6 +261,95 @@ of the true normal and skew components.
 wrapped to `[-pi/2, +pi/2]` before dividing by m.
 
 **Safe to enable always?** Yes.
+
+#### Encoder Offset and phi_out
+
+The rotation angle `phi_out = angle(C_m) / m` includes two contributions:
+1. **Magnet orientation** relative to some external reference (typically small)
+2. **Encoder trigger offset** -- the angular position of the encoder zero pulse
+   relative to the coil/magnet nominal alignment
+
+The rotation correction removes **both** automatically: after rotation, C_m is
+real and positive regardless of the encoder position.  This means the final
+harmonics are mathematically identical for any encoder offset -- the rotation
+compensates exactly.
+
+**However**, a large encoder offset (phi_out >> 0) has practical consequences:
+
+1. **Higher-harmonic sign sensitivity:** For harmonic k, the rotation multiplies
+   by `exp(-i*k*phi_out)`.  The real-part factor is `cos(k*phi_out)`.  When
+   `|k*phi_out| > pi/2`, this factor becomes negative, effectively flipping the
+   sign of the normal component b_k relative to its unrotated value.  For
+   example, with phi_out = 1.21 rad (~70 deg) and k=2: cos(2*1.21) = cos(2.42)
+   ~ -0.74.  The b2 component changes sign compared to a measurement where
+   phi_out ~ 0.
+
+2. **b/a mixing:** The rotation mixes normal (b) and skew (a) components via
+   `Re(C'_k) = Re(C_k)*cos(k*phi) + Im(C_k)*sin(k*phi)`.  With large phi,
+   the skew component contributes significantly to the reported normal component
+   and vice versa.  This is physically correct (it IS the value in the magnet
+   frame), but makes comparison with past measurements harder.
+
+3. **Wrapping edge cases:** The angle wrapping to [-pi/2, +pi/2] can introduce
+   a pi ambiguity at the boundary, potentially flipping B_main sign.
+
+**Important:** The sign of b2 (or any b_k) after rotation IS the correct
+physical value in the magnet reference frame, even if it differs from
+past measurements.  If past measurements gave b2 > 0 with phi_out ~ 0,
+and your measurement gives b2 < 0 with phi_out ~ 70 deg, **both are correct**
+in their respective reference frames.  The difference arises because the
+"magnet reference frame" is defined by the main harmonic, and the main harmonic
+angle includes the encoder offset.
+
+#### Encoder Offset Pre-Rotation Parameter
+
+The pipeline supports an `encoder_offset_rad` parameter that pre-rotates all
+harmonics by `exp(-i*k*offset)` before the rotation step.  This removes the
+encoder contribution from `phi_out`, making it reflect only the magnet
+orientation.
+
+```python
+# phi_out WITHOUT encoder offset: ~1.21 rad (encoder + magnet angle)
+# phi_out WITH encoder offset = 1.21: ~0.01 rad (magnet angle only)
+result = compute_legacy_kn_per_turn(
+    ...,
+    encoder_offset_rad=1.21,  # known encoder trigger offset in radians
+)
+```
+
+**The final harmonics are mathematically identical** with or without the
+encoder offset parameter.  The pre-rotation is useful for:
+- **Diagnostics:** phi_out after pre-rotation shows only the magnet orientation
+- **Comparison:** measurements with different encoder positions give the same
+  phi_out if the same encoder offset is applied
+- **Edge cases:** avoids angle-wrapping issues with very large phi_out
+
+**Default:** `encoder_offset_rad=0.0` (no pre-rotation, backward compatible).
+
+#### Best Practice: Encoder Alignment Before Measurements
+
+To minimize phi_out and avoid sign-mixing issues:
+
+1. **Before installing the coil**, verify the encoder zero pulse position
+   by slowly rotating the motor shaft and reading the encoder angle.
+
+2. **After inserting the coil into the magnet**, power the magnet to a
+   moderate current (e.g., 50% of nominal) and take a quick measurement.
+
+3. **Check phi_out** from the measurement.  If |phi_out| > ~10 deg (0.17 rad),
+   physically rotate the MRU (motor unit containing the encoder) to reduce it:
+   - Loosen the MRU mounting screws
+   - Rotate the MRU body (not the shaft) by approximately -phi_out
+   - Re-tighten and re-measure
+   - Repeat until |phi_out| < ~5 deg (0.09 rad)
+
+4. **Record the final phi_out** in the measurement logbook for provenance.
+
+5. **If the MRU cannot be rotated** (fixed installation), measure phi_out
+   once and use `encoder_offset_rad` in all subsequent analyses.
+
+**Goal:** |phi_out| < 10 deg ensures cos(k*phi_out) > 0 for all harmonics
+up to k=9 (i.e., no sign flips for any practical harmonic order).
 
 ---
 
@@ -164,8 +451,17 @@ current during rotation: `w_k = I_mean / I_k`.
 - Per-turn analysis including ramps: **recommended**.
 - FFMM parity: match whatever FFMM used, with `dit_signed=True` for C++ native.
 
-**Safe to enable always?** Yes -- on plateau turns it's a no-op. Including it
-when not needed has no cost and no risk.
+**Safe to enable always?** Yes -- on plateau turns the thresholds prevent it
+from firing, so it's a no-op.
+
+**Why NOT to force dit on plateaus (bypassing thresholds):** Even if current
+noise on a plateau reads ±1 A (DCCT + ADC noise), the magnet does not respond
+to it.  Bulk iron magnets have large inductance; current ripple above ~1 Hz is
+heavily filtered by the L/R time constant.  If dit divided flux by
+I(θ)/I_mean, it would imprint uncorrelated current readout noise onto a clean
+flux signal, *degrading* the harmonics rather than improving them.  The dit
+correction is designed for slow monotonic ramps where the field genuinely
+tracks the current change within one rotation period.
 
 ---
 

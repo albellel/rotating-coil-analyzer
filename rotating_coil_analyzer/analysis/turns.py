@@ -1,3 +1,9 @@
+"""Turn-level reshaping of raw measurement data.
+
+Splits a 1-D sample stream into a 2-D (n_turns, samples_per_turn) array
+and wraps the result in a lightweight :class:`TurnBlock` container.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

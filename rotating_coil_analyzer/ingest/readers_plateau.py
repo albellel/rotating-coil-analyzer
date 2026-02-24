@@ -1,3 +1,10 @@
+"""Readers for DC-plateau (staircase) rotating-coil measurement files.
+
+Each plateau run is a separate text file with per-turn rows.  This module
+loads individual runs and concatenates them into a single turn array with
+run metadata (run ID, nominal current, branch).
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

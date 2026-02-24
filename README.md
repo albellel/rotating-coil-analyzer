@@ -37,13 +37,19 @@ Downsampling (when used for plotting) is **decimation only** (keep every Kth sam
 
 ## GUI overview
 
-The GUI has five tabs:
+The GUI has eight tabs:
 
-### 1. Catalog
+### 0. Catalog
 - Select a measurement folder
 - Discover runs/segments via `Parameters.txt` and FDIs table mapping
 - Load a selected segment and inspect diagnostics
 - Preview waveforms
+
+### 1. Plateau Detection
+- Detect current plateaus in streaming supercycle data
+- Block-averaged range computation (filters ADC noise)
+- Three-rule detection: flat current, starts on plateau, ends on plateau
+- Visual overlay of detected plateaus on the current waveform
 
 ### 2. Harmonics
 - Preview data-quality cuts (what will be trimmed/dropped)
@@ -66,11 +72,22 @@ The GUI has five tabs:
 - Record compensation scheme metadata
 - Export with full traceability (kn provenance, per-n source map)
 
-### 5. Plots
-- Read-only exploration plots
+### 5. Raw Signal Plots
+- Read-only time-series exploration
 - Plot any column vs. time
 - Decimation-only downsampling
 - Interactive zoom/pan via `%matplotlib widget` (ipympl backend)
+
+### 6. Physics Plots
+- Hysteresis loops (B vs. I)
+- Transfer function B1/I and differential inductance dB1/dI
+- Eddy-current settling curves with exponential fit
+- Per-run and per-plateau visualisations
+
+### 7. Comparison
+- Cross-measurement CSV comparison
+- Load multiple exported CSV files and overlay harmonics
+- Side-by-side normal/skew component plots
 
 ---
 
@@ -150,10 +167,14 @@ For **streaming (continuous) acquisition** measurements where the magnet current
 | `detect_plateau_turns` | Three-rule plateau detection: (a) flat current, (b) starts on plateau, (c) ends on plateau |
 | `classify_current` | Classify current value into a cycle-type label (injection, flat-top, ramp, ...). Default thresholds for SPS; fully customisable for other machines |
 | `find_contiguous_groups` | Find contiguous runs of True in a boolean mask (e.g. injection plateau groups) |
-| `process_kn_pipeline` | Full Kn pipeline in one call: dit -> drift -> FFT -> kn -> merge -> normalise |
+| `process_kn_pipeline` | Full Kn pipeline in one call: dit -> drift -> FFT -> kn -> merge -> normalise. Accepts `encoder_offset_rad` (constant angular offset applied before FFT) and `flip_signal_polarity` (negate flux before processing, replaces the old `FLIP_FIELD_SIGN` flag) |
 | `build_harmonic_rows` | Convert pipeline results into a list of dicts, ready for `pd.DataFrame()` |
 | `build_run_averages` | Per-run mean b3 with run ordering (for hysteresis / ramp analysis) |
 | `diagnose_cel_fed` | Run pipeline with/without cel+fed, return diagnostic with SAFE/UNSAFE/MIXED recommendation |
+| `diagnose_fdi_transitions` | Detect FDI stuck-channel issues at plateau boundaries |
+| `fit_eddy_per_run` | Fit exponential eddy-current settling model per run |
+| `eddy_model` | Exponential model `B(t) = B_inf + A*exp(-t/tau)` for `curve_fit` |
+| `EddyFitResult` | Dataclass result container for eddy fits (B_inf, A, tau, pcov) |
 | `ba_table_from_C` | Convert complex coefficients to legacy B/A DataFrame (all Tesla) |
 | `mixed_format_table` | Bottura Section 3.7 mixed-format DataFrame (Tesla for n <= m, units for n > m) |
 
@@ -210,7 +231,7 @@ label = classify_current(I_value, thresholds=psb_thresholds)
 ## Running Tests
 
 ```bash
-# Run all tests (121 tests)
+# Run all tests (126 tests)
 python -m pytest rotating_coil_analyzer/tests/ -v
 
 # Run specific test file
@@ -267,7 +288,15 @@ rotating_coil_analyzer/
 │   ├── merge.py             #   Abs/Cmp channel merge recommendations
 │   ├── kn_head.py           #   Kn computation from measurement-head CSV
 │   └── kn_bundle.py         #   Provenance-rich kn container
-├── gui/                    # ipywidgets GUI tabs
+├── gui/                    # ipywidgets GUI tabs (8 tabs)
+│   ├── app.py               #   Tab assembly and build_gui() entry point
+│   ├── harmonics.py         #   Tab 2: Turn QC, FFT, amplitude plots
+│   ├── coil_calibration.py  #   Tab 3: Load / compute Kn
+│   ├── harmonic_merge.py    #   Tab 4: Kn application, merge, CSV export
+│   ├── plots.py             #   Tab 5: Raw signal time-series
+│   ├── plateau_detection.py #   Tab 1: Streaming plateau detection
+│   ├── physics_plots.py     #   Tab 6: Hysteresis, transfer fn, Ld, eddy settling
+│   └── comparison.py        #   Tab 7: Cross-measurement CSV comparison
 ├── ingest/                 # File readers and measurement discovery
 │   ├── readers_streaming.py #   Streaming binary reader
 │   ├── readers_plateau.py   #   Plateau text reader
@@ -275,8 +304,11 @@ rotating_coil_analyzer/
 │   └── discovery.py         #   Measurement folder discovery
 ├── models/                 # Data models (SegmentFrame, MeasurementCatalog, AnalysisProfile)
 ├── notebooks/              # Jupyter analysis & example notebooks
-├── tests/                  # Unit tests (121 tests)
+├── tests/                  # Unit tests (126 tests)
 └── validation/             # Golden reference validation (C++ parity)
+scripts/
+├── generate_mbb_notebooks.py  # Generate SPS MBB analysis notebooks from template
+└── btp8_bruteforce_turns.py   # Brute-force turns-per-revolution search for BTP8
 ```
 
 ---

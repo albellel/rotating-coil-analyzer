@@ -100,6 +100,7 @@ class LegacyKnPerTurn:
     duration_s: np.ndarray  # (n_turns,)
     time_median_s: np.ndarray  # (n_turns,)
 
+    encoder_offset_rad: float = 0.0  # known encoder offset subtracted before rotation
 
     @property
     def H(self) -> int:
@@ -187,6 +188,8 @@ def compute_legacy_kn_per_turn(
     legacy_rotate_excludes_last: bool = False,
     dit_signed: bool = False,
     max_zR: float | None = None,
+    encoder_offset_rad: float = 0.0,
+    flip_signal_polarity: bool = False,
 ) -> LegacyKnPerTurn:
     """Compute legacy per-turn harmonics with $k_n$ application.
 
@@ -223,6 +226,21 @@ def compute_legacy_kn_per_turn(
         Turns where |zR| exceeds the threshold are flagged in
         ``zR_clamped`` and their zR is set to 0.  Default None means no
         clamping (backward compatible).
+    encoder_offset_rad:
+        Known angular offset of the encoder trigger from the nominal zero
+        position, in radians.  When non-zero, all harmonics are pre-rotated
+        by ``exp(-i*k*offset)`` before the rotation step.  This removes the
+        encoder contribution from ``phi_out_rad``, making it reflect only the
+        magnet orientation.  Default 0.0 (no pre-rotation).  The final
+        harmonics are mathematically identical with or without this offset
+        (the rotation step compensates), but pre-rotation yields smaller
+        ``phi_out`` values and avoids angle-wrapping edge cases.
+    flip_signal_polarity:
+        If True, negate all calibrated harmonics (C_abs, C_cmp) after kn
+        application but before the DB snapshot and all downstream steps
+        (rotation, cel, fed, normalization).  Use when the measurement
+        shows B1 negative at positive current due to inverted coil/cable
+        polarity compared to the expected convention.  Default False.
 
     Returns
     -------
@@ -291,9 +309,23 @@ def compute_legacy_kn_per_turn(
     C_abs = f_abs * sens_abs[None, :]
     C_cmp = f_cmp * sens_cmp[None, :]
 
+    # --- signal polarity flip (optional) ---
+    if flip_signal_polarity:
+        C_abs *= -1
+        C_cmp *= -1
+
     # DB snapshot right after kn (legacy)
     C_abs_db = np.array(C_abs, copy=True)
     C_cmp_db = np.array(C_cmp, copy=True)
+
+    # --- encoder offset pre-rotation (optional) ---
+    _enc_offset = float(encoder_offset_rad)
+    if _enc_offset != 0.0:
+        for k in range(1, H + 1):
+            col = k - 1
+            pre_rot = np.exp(-1j * _enc_offset * float(k))
+            C_abs[:, col] = pre_rot * C_abs[:, col]
+            C_cmp[:, col] = pre_rot * C_cmp[:, col]
 
     # --- rotation reference computed post-kn, pre-rotation (legacy) ---
     c_m = C_abs[:, m - 1]
@@ -403,6 +435,7 @@ def compute_legacy_kn_per_turn(
         y_m=y,
         main_field=main_field,
         main_field_db=main_field_db,
+        encoder_offset_rad=_enc_offset,
         I_mean_A=I_mean,
         dI_dt_A_per_s=dI_dt,
         duration_s=duration,

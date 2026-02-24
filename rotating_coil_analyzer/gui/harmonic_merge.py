@@ -39,6 +39,10 @@ from rotating_coil_analyzer.analysis.merge import recommend_merge_choice, MergeD
 from rotating_coil_analyzer.analysis.utility_functions import (
     ba_table_from_C,
     mixed_format_table,
+    diagnose_cel_fed,
+    CelFedDiagnostic,
+    mad_sigma_clip,
+    plateau_summary,
 )
 from rotating_coil_analyzer.analysis.kn_bundle import (
     KnBundle,
@@ -79,6 +83,9 @@ class HarmonicMergeState:
 
     # Options used in last compute (to detect whether 'nor' was checked)
     opts: Optional[Tuple[str, ...]] = None
+
+    # Outlier removal mask (True = keep)
+    outlier_keep_mask: Optional[np.ndarray] = None
 
     # Plot state
     fig: Optional[Any] = None
@@ -163,6 +170,7 @@ def build_phase3b_harmonic_merge_panel(
     get_kn_bundle_callable: Callable[[], Optional[KnBundle]] | None = None,
     set_merge_result_callable: Callable[[Optional[MergeResult]], None] | None = None,
     get_profile_callable: Callable | None = None,
+    get_n_last_recommended: Callable[[], Optional[int]] | None = None,
 ) -> w.Widget:
     """Build the Harmonic Merge panel.
 
@@ -228,7 +236,61 @@ def build_phase3b_harmonic_merge_panel(
     opt_rot = w.Checkbox(value=True, description="rotation (post-Kn)")
     opt_cel = w.Checkbox(value=False, description="CEL")
     opt_fed = w.Checkbox(value=False, description="feeddown")
-    opt_nor = w.Checkbox(value=False, description="normalization")
+    opt_nor = w.Checkbox(value=False, description="normalization (auto, do not check)",
+                         disabled=True)
+
+    opt_dit_signed = w.Checkbox(value=False, description="dit signed (FFMM parity)")
+    opt_dit_signed.disabled = True  # only enabled when dit is checked
+
+    max_zR_input = w.FloatText(
+        value=0.0,
+        description="max |zR|:",
+        style={"description_width": "80px"},
+        layout=w.Layout(width="180px"),
+    )
+    max_zR_help = w.HTML(
+        "<i style='color:#666; font-size:11px;'>"
+        "0 = no clamp. Auto-set to 0.01 when feeddown checked."
+        "</i>"
+    )
+
+    opt_legacy_rotate = w.Checkbox(
+        value=False,
+        description="Legacy rotate excludes last (SM18)",
+    )
+
+    encoder_offset = w.FloatText(
+        value=0.0,
+        description="Encoder offset [rad]:",
+        style={"description_width": "140px"},
+        layout=w.Layout(width="240px"),
+    )
+    encoder_offset_help = w.HTML(
+        "<i style='color:#666; font-size:11px;'>"
+        "Known encoder trigger offset from nominal zero (radians). "
+        "Pre-rotates data before rotation step. 0 = no pre-rotation."
+        "</i>"
+    )
+
+    flip_polarity = w.Checkbox(value=False, description="Flip signal polarity")
+    flip_polarity_help = w.HTML(
+        "<i style='color:#666; font-size:11px;'>"
+        "Negate all harmonics before rotation/normalization. "
+        "Use when B1 is negative at positive current (inverted coil/cable polarity)."
+        "</i>"
+    )
+
+    def _on_dit_change(change):
+        opt_dit_signed.disabled = not opt_dit.value
+
+    def _on_fed_change_zr(change):
+        if opt_fed.value and max_zR_input.value == 0.0:
+            max_zR_input.value = 0.01
+        elif not opt_fed.value:
+            max_zR_input.value = 0.0
+
+    opt_dit.observe(_on_dit_change, names="value")
+    opt_fed.observe(_on_fed_change_zr, names="value")
 
     drift_mode = w.Dropdown(
         options=[("legacy", "legacy"), ("weighted", "weighted")],
@@ -287,6 +349,49 @@ def build_phase3b_harmonic_merge_panel(
 
     btn_export = w.Button(description="Export CSV (all tables)", button_style="success")
     btn_export.disabled = True
+
+    # ---- CEL/FED safety diagnostic ----
+    btn_diagnose_cel = w.Button(
+        description="Diagnose CEL/FED",
+        button_style="warning",
+        layout=w.Layout(width="160px"),
+    )
+    cel_diag_html = w.HTML("<i style='color:#666;'>Click to diagnose cel/fed safety.</i>")
+
+    # ---- MAD outlier removal ----
+    mad_n_sigma = w.FloatText(
+        value=5.0,
+        description="MAD n_sigma:",
+        style={"description_width": "90px"},
+        layout=w.Layout(width="180px"),
+    )
+    mad_clip_col = w.Dropdown(
+        options=[("B1_T", "B1_T"), ("b3_units", "b3_units")],
+        value="B1_T",
+        description="Clip col:",
+        style={"description_width": "70px"},
+        layout=w.Layout(width="200px"),
+    )
+    btn_mad_clip = w.Button(
+        description="Remove outliers",
+        button_style="",
+        layout=w.Layout(width="140px"),
+    )
+    mad_result_html = w.HTML("")
+
+    # ---- N_LAST_TURNS selection ----
+    n_last_turns = w.IntText(
+        value=0,
+        description="N last turns:",
+        style={"description_width": "100px"},
+        layout=w.Layout(width="200px"),
+    )
+    n_last_help = w.HTML(
+        "<i style='color:#666; font-size:11px;'>"
+        "0 = all turns. Used in plateau_summary export. "
+        "Recommended value set by eddy analysis (Physics tab)."
+        "</i>"
+    )
 
     # ---- Diagnostics display ----
     diag_table_html = w.HTML("<i>Diagnostics will appear here after recommendation.</i>")
@@ -372,6 +477,16 @@ def build_phase3b_harmonic_merge_panel(
 
         if rem > 0:
             log.write(f"Trimmed {rem} samples from tail to ensure full turns.")
+
+        # Auto-fill n_last from eddy analysis recommendation
+        if get_n_last_recommended is not None and n_last_turns.value == 0:
+            try:
+                rec = get_n_last_recommended()
+                if rec is not None and rec > 0:
+                    n_last_turns.value = int(rec)
+                    log.write(f"N_LAST auto-set to {rec} from eddy analysis recommendation.")
+            except Exception:
+                pass
 
         return True
 
@@ -529,6 +644,54 @@ def build_phase3b_harmonic_merge_panel(
                 opts.append("nor")
 
             Rref_m = float(rref_mm.value) * 1e-3
+            zR_val = float(max_zR_input.value)
+            max_zR_param = zR_val if zR_val > 0 else None
+
+            # Auto-run CEL/FED safety diagnostic when cel or fed is checked
+            if "cel" in opts or "fed" in opts:
+                try:
+                    _set_status("checking cel/fed safety...")
+                    max_zR_diag = zR_val if zR_val > 0 else 0.01
+                    diag_result = diagnose_cel_fed(
+                        flux_abs_turns=tb.df_abs,
+                        flux_cmp_turns=tb.df_cmp,
+                        t_turns=tb.t,
+                        I_turns=tb.I,
+                        kn=kn,
+                        r_ref=Rref_m,
+                        magnet_order=int(magnet_order.value),
+                        max_zR=max_zR_diag,
+                        dit_signed=bool(opt_dit_signed.value),
+                        drift_mode=str(drift_mode.value),
+                    )
+                    rec = diag_result.recommendation
+                    # Update diagnostic display
+                    if rec == "SAFE":
+                        color, bg = "#080", "#e8f4e8"
+                    elif rec == "UNSAFE":
+                        color, bg = "#b00", "#fee"
+                    else:
+                        color, bg = "#960", "#ffc"
+                    cel_diag_html.value = (
+                        f"<div style='padding:6px; background:{bg}; border:1px solid {color}; "
+                        f"border-radius:4px; margin:4px 0;'>"
+                        f"<b style='color:{color};'>{rec}</b>: {diag_result.reason}"
+                        f"</div>"
+                    )
+                    if rec == "UNSAFE":
+                        opt_cel.value = False
+                        opt_fed.value = False
+                        opts = [o for o in opts if o not in ("cel", "fed")]
+                        log.write(
+                            f"WARNING: cel/fed UNSAFE — auto-disabled. "
+                            f"{diag_result.n_suspect}/{diag_result.n_total} suspect turns. "
+                            f"Computing without cel/fed."
+                        )
+                    else:
+                        log.write(f"cel/fed diagnostic: {rec} — {diag_result.reason}")
+                    _set_status("computing harmonics...")
+                except Exception as diag_err:
+                    log.write(f"cel/fed diagnostic skipped: {diag_err}")
 
             res = compute_legacy_kn_per_turn(
                 df_abs_turns=tb.df_abs,
@@ -542,6 +705,11 @@ def build_phase3b_harmonic_merge_panel(
                 options=tuple(opts),
                 drift_mode=str(drift_mode.value),
                 skew_main=bool(skew_main.value),
+                dit_signed=bool(opt_dit_signed.value),
+                legacy_rotate_excludes_last=bool(opt_legacy_rotate.value),
+                max_zR=max_zR_param,
+                encoder_offset_rad=float(encoder_offset.value),
+                flip_signal_polarity=bool(flip_polarity.value),
             )
             st.result = res
             st.opts = tuple(opts)
@@ -563,15 +731,161 @@ def build_phase3b_harmonic_merge_panel(
             btn_apply_merge.disabled = False
             btn_export.disabled = True
 
+            # Log zR clamping info
+            if max_zR_param is not None and hasattr(res, 'zR_clamped'):
+                n_clamped = int(np.sum(res.zR_clamped))
+                if n_clamped > 0:
+                    log.write(
+                        f"WARNING: {n_clamped}/{res.C_abs.shape[0]} turns had |zR| clamped "
+                        f"(max_zR={max_zR_param:.4f})"
+                    )
+
+            # Diagnostic summary for b2 sign investigation
+            phi_med = float(np.median(res.phi_out_rad))
+            phi_std = float(np.std(res.phi_out_rad))
+            m = int(magnet_order.value)
+            B1_med = float(np.median(np.real(res.C_abs[:, m - 1]))) if m >= 1 else 0.0
+            b2_abs_med = float(np.median(np.real(res.C_abs[:, 1]))) if res.H >= 2 else 0.0
+            b2_cmp_med = float(np.median(np.real(res.C_cmp[:, 1]))) if res.H >= 2 else 0.0
             log.write(
                 f"Computed harmonics: n_turns={res.C_abs.shape[0]}, H={res.H}. "
                 "Now select merge options and apply."
+            )
+            log.write(
+                f"Diagnostics: phi_out median={phi_med:.4f} rad (std={phi_std:.4f}), "
+                f"B_main median={B1_med:.6e} T, "
+                f"b2_abs median={b2_abs_med:.6e}, b2_cmp median={b2_cmp_med:.6e}"
             )
             _plot_main_field(res)
 
         except Exception as e:
             log.write(f"<b style='color:#b00'>Compute failed:</b> {e}")
             raise
+        finally:
+            _set_status("idle")
+            st.busy = False
+
+    def _on_diagnose_cel(_btn) -> None:
+        if st.busy:
+            return
+        st.busy = True
+        try:
+            _set_status("diagnosing cel/fed...")
+
+            if not _refresh_context():
+                return
+
+            segf = st.segf
+            kn = st.kn_bundle.kn
+
+            tb = split_into_turns(segf)
+            Rref_m = float(rref_mm.value) * 1e-3
+            zR_val = float(max_zR_input.value)
+            max_zR_diag = zR_val if zR_val > 0 else 0.01
+
+            diag_result = diagnose_cel_fed(
+                flux_abs_turns=tb.df_abs,
+                flux_cmp_turns=tb.df_cmp,
+                t_turns=tb.t,
+                I_turns=tb.I,
+                kn=kn,
+                r_ref=Rref_m,
+                magnet_order=int(magnet_order.value),
+                max_zR=max_zR_diag,
+                dit_signed=bool(opt_dit_signed.value),
+                drift_mode=str(drift_mode.value),
+            )
+
+            rec = diag_result.recommendation
+            if rec == "SAFE":
+                color = "#080"
+                bg = "#e8f4e8"
+            elif rec == "UNSAFE":
+                color = "#b00"
+                bg = "#fee"
+            else:
+                color = "#960"
+                bg = "#ffc"
+
+            cel_diag_html.value = (
+                f"<div style='padding:6px; background:{bg}; border:1px solid {color}; "
+                f"border-radius:4px; margin:4px 0;'>"
+                f"<b style='color:{color};'>{rec}</b>: {diag_result.reason}"
+                f"</div>"
+            )
+
+            if rec == "UNSAFE":
+                opt_cel.value = False
+                opt_fed.value = False
+                log.write(f"WARNING: cel/fed UNSAFE — auto-unchecked cel and fed. "
+                          f"{diag_result.n_suspect}/{diag_result.n_total} suspect turns.")
+            else:
+                log.write(f"cel/fed diagnostic: {rec} — {diag_result.reason}")
+
+        except Exception as e:
+            log.write(f"<b style='color:#b00'>Diagnose cel/fed failed:</b> {e}")
+        finally:
+            _set_status("idle")
+            st.busy = False
+
+    def _on_mad_clip(_btn) -> None:
+        if st.busy:
+            return
+        st.busy = True
+        try:
+            _set_status("removing outliers...")
+
+            if st.result is None or st.merge_result is None:
+                log.write("<b style='color:#b00'>Apply merge first before removing outliers.</b>")
+                return
+
+            res = st.result
+            mr = st.merge_result
+            m = int(magnet_order.value)
+            clip_col = str(mad_clip_col.value)
+
+            # Build a temporary DataFrame with the clip column
+            n_turns = mr.C_merged.shape[0]
+            if clip_col == "B1_T":
+                values = np.real(mr.C_merged[:, m - 1]) if m >= 1 else np.real(mr.C_merged[:, 0])
+            elif clip_col == "b3_units" and st.C_units is not None:
+                idx_3 = 2 if mr.C_merged.shape[1] > 2 else 0
+                values = np.real(st.C_units[:, idx_3])
+            else:
+                values = np.real(mr.C_merged[:, 0])
+
+            # Use a simple label (all same group if no plateau info)
+            labels = np.full(n_turns, "all", dtype=object)
+            tmp_df = pd.DataFrame({clip_col: values, "label": labels})
+
+            df_clean, removed = mad_sigma_clip(
+                tmp_df,
+                col=clip_col,
+                n_sigma=float(mad_n_sigma.value),
+                label_col="label",
+            )
+
+            keep_mask = np.ones(n_turns, dtype=bool)
+            removed_indices = tmp_df.index.difference(df_clean.index)
+            keep_mask[removed_indices] = False
+            st.outlier_keep_mask = keep_mask
+
+            total_removed = sum(removed.values())
+            if total_removed > 0:
+                mad_result_html.value = (
+                    f"<span style='color:#b00;'>Removed {total_removed} outlier(s) "
+                    f"from {clip_col} (n_sigma={float(mad_n_sigma.value):.1f}). "
+                    f"Will be filtered on export.</span>"
+                )
+                log.write(f"MAD clip: removed {total_removed} turns on {clip_col}.")
+            else:
+                mad_result_html.value = (
+                    "<span style='color:#080;'>No outliers found.</span>"
+                )
+                log.write("MAD clip: no outliers found.")
+
+        except Exception as e:
+            log.write(f"<b style='color:#b00'>MAD clip failed:</b> {e}")
         finally:
             _set_status("idle")
             st.busy = False
@@ -796,6 +1110,16 @@ def build_phase3b_harmonic_merge_panel(
                     nor_was_checked=nor_was_checked,
                 ),
             ], axis=1)
+            # Apply outlier mask if present
+            if st.outlier_keep_mask is not None:
+                mask = st.outlier_keep_mask
+                n_removed = int(np.sum(~mask))
+                df_abs = df_abs.loc[mask].reset_index(drop=True)
+                df_cmp = df_cmp.loc[mask].reset_index(drop=True)
+                df_m = df_m.loc[mask].reset_index(drop=True)
+                if n_removed > 0:
+                    log.write(f"Applied outlier mask: {n_removed} rows removed from exports.")
+
             mrg_path = f"{root}_MERGED.csv"
             df_m.to_csv(mrg_path, index=False)
             log.write(f"Saved: {mrg_path}")
@@ -850,6 +1174,12 @@ def build_phase3b_harmonic_merge_panel(
     _clear_button_handlers(btn_export)
     btn_export.on_click(_on_export)
 
+    _clear_button_handlers(btn_diagnose_cel)
+    btn_diagnose_cel.on_click(_on_diagnose_cel)
+
+    _clear_button_handlers(btn_mad_clip)
+    btn_mad_clip.on_click(_on_mad_clip)
+
     # Initial context refresh
     _refresh_context()
 
@@ -870,13 +1200,32 @@ def build_phase3b_harmonic_merge_panel(
 
     opts_box = w.VBox([
         w.HTML("<b>Processing options (legacy ordering)</b>"),
-        w.HBox([opt_dit, opt_dri, opt_rot, opt_cel, opt_fed, opt_nor, drift_mode]),
+        w.HBox([opt_dit, opt_dit_signed, opt_dri, opt_rot, opt_cel, opt_fed, opt_nor, drift_mode]),
+        w.HBox([max_zR_input, max_zR_help, opt_legacy_rotate]),
+        w.HBox([encoder_offset, encoder_offset_help]),
+        w.HBox([flip_polarity, flip_polarity_help]),
     ])
 
     comp_box = w.VBox([
         w.HTML("<b>Compensation scheme (metadata)</b>"),
         w.HBox([comp_scheme]),
         comp_scheme_help,
+    ])
+
+    cel_diag_box = w.VBox([
+        w.HTML("<b>CEL/FED safety diagnostic</b>"),
+        w.HBox([btn_diagnose_cel, cel_diag_html]),
+    ])
+
+    mad_box = w.VBox([
+        w.HTML("<b>Outlier removal (MAD sigma clip)</b>"),
+        w.HBox([mad_n_sigma, mad_clip_col, btn_mad_clip]),
+        mad_result_html,
+    ])
+
+    n_last_box = w.VBox([
+        w.HTML("<b>N last turns (for summary export)</b>"),
+        w.HBox([n_last_turns, n_last_help]),
     ])
 
     merge_box = w.VBox([
@@ -893,11 +1242,15 @@ def build_phase3b_harmonic_merge_panel(
             w.HTML("<hr>"),
             params_box,
             opts_box,
+            cel_diag_box,
             w.HBox([btn_compute, btn_recommend]),
             w.HTML("<hr>"),
             comp_box,
             w.HTML("<hr>"),
             merge_box,
+            w.HTML("<hr>"),
+            mad_box,
+            n_last_box,
             w.HTML("<hr>"),
             diag_table_html,
             out_plot,
@@ -914,6 +1267,9 @@ def build_phase3b_harmonic_merge_panel(
     )
 
     panel = w.VBox([header, w.HBox([main_panel, diag_panel])])
+
+    # Expose refresh hook so app.py can auto-refresh context on tab switch
+    setattr(panel, "_harmonic_merge_refresh_context", _refresh_context)
 
     _ACTIVE_PHASE3B_PANEL = panel
     return panel

@@ -60,18 +60,22 @@ rotating_coil_analyzer/
   │   ├── channel_detect.py  Heuristic channel identification
   │   ├── readers_streaming.py  Streaming (binary/text) reader
   │   └── readers_plateau.py    Plateau (DC) reader
-  ├── gui/                5-panel Jupyter notebook GUI
+  ├── gui/                8-panel Jupyter notebook GUI
   │   ├── app.py             Main application entry point
   │   ├── harmonics.py       FFT & preprocessing panel
   │   ├── coil_calibration.py  Kn loading/computation panel
   │   ├── harmonic_merge.py    Channel merge & export panel
   │   ├── plots.py           Time-series exploration panel
+  │   ├── plateau_detection.py Plateau detection panel (streaming supercycle)
+  │   ├── physics_plots.py   Physics analysis panel (hysteresis, TF, Ld, eddy)
+  │   ├── comparison.py      Measurement comparison panel
   │   └── log_view.py        HTML-based logging widget
   ├── validation/         Golden-standard validation tools
   │   ├── golden_runner.py     Dataset scanning API
   │   └── golden_streaming.py  Streaming validation workflow
-  ├── tests/              121 tests, all passing
-  └── notebooks/          26 analysis notebooks (4 magnets, 6 campaigns)
+  ├── tests/              126 tests, all passing
+  ├── notebooks/          26 analysis notebooks (4 magnets, 6 campaigns)
+  └── scripts/            Standalone utility scripts (generate_mbb_notebooks.py, etc.)
 ```
 
 ---
@@ -423,7 +427,7 @@ Full provenance containers:
 
 ## 7. GUI Module
 
-5-panel Jupyter notebook GUI with ipywidgets:
+8-panel Jupyter notebook GUI with ipywidgets:
 
 | Tab | Panel | Purpose |
 |-----|-------|---------|
@@ -432,6 +436,15 @@ Full provenance containers:
 | 2 | Coil Cal | Load/compute Kn from segment TXT or head CSV |
 | 3 | Merge | Apply Kn, select Abs/Cmp per order, normalize, export CSV |
 | 4 | Plots | Interactive time-series exploration (no synthetic resampling) |
+| 5 | Plateau Detection | Detect current plateaus in streaming supercycle data using block-averaged current range with 3-rule detection |
+| 6 | Physics Plots | Hysteresis loops, transfer function (B/I), differential inductance (Ld = dB1/dI), eddy-current settling analysis |
+| 7 | Comparison | Compare two exported CSV measurements side-by-side with statistical analysis |
+
+**Plateau Detection** (`gui/plateau_detection.py`): Uses `compute_block_averaged_range`, `detect_plateau_turns`, `classify_current`, and `find_contiguous_groups` from `utility_functions.py`. Block-averaged range (10 blocks of ~100 samples) filters ADC noise. Three detection rules: (a) I_range < threshold, (b) start on plateau, (c) end on plateau.
+
+**Physics Plots** (`gui/physics_plots.py`): Uses `plateau_summary`, `plot_hysteresis`, `build_run_averages`, and `fit_eddy_per_run` from `utility_functions.py`. Provides hysteresis loop visualization (B vs I with up/down ramp separation), transfer function (B/I), differential inductance (Ld = dB1/dI from staircase plateau data), and eddy-current settling analysis with exponential fits.
+
+**Comparison** (`gui/comparison.py`): Uses `compute_level_stats` and `diff_sigma` from `utility_functions.py`. Loads two exported CSV files and computes per-operating-point differences with propagated uncertainties and sigma significance.
 
 **Architecture**: Shared state dict passed via closures; callable getters for lazy evaluation. Debouncing (250ms) for VS Code stability. HTML-based logging (no ipywidgets.Output stacking).
 
@@ -441,7 +454,7 @@ Full provenance containers:
 
 ### 8.1 Test Suite
 
-- **121 tests**, all passing
+- **126 tests**, all passing
 - Run with: `python -m pytest rotating_coil_analyzer/tests/ -x -q`
 
 | Category | Tests | Coverage |
@@ -701,7 +714,7 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 
 #### I. Notebook Consistency
 - Some comparison notebooks (LEAR_MC62) use `OPTIONS=("dri", "rot", "cel", "fed")` despite main analysis using only `("dri", "rot")` — verify this is intentional.
-- Consider standardizing `FLIP_FIELD_SIGN=False` as a default in AnalysisProfile rather than repeating in each notebook.
+- Consider standardizing `FLIP_SIGNAL_POLARITY=False` as a default in AnalysisProfile rather than repeating in each notebook.
 
 #### J. Test Coverage Gaps
 - No test for weighted drift mode end-to-end (only unit test for formula)
@@ -749,14 +762,18 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 | `compute_block_averaged_range(I, Ns)` | Block-averaged current range |
 | `classify_current(I, thresholds)` | Label current by cycle stage |
 | `diagnose_cel_fed(...)` | CEL/FED safety diagnostic |
-| `diagnose_fdi_transitions(...)` | FDI stuck-channel diagnostic |
-| `fit_eddy_per_run(...)` | Single-exponential eddy fit |
+| `FdiTransitionCheck` | Diagnostic result dataclass for FDI stuck-channel detection |
+| `diagnose_fdi_transitions(...)` | Detect FDI stuck-channel issues at plateau transitions |
+| `eddy_model(t, B_inf, A, tau)` | B(t) = B_inf + A*exp(-t/tau) for curve_fit |
+| `EddyFitResult` | Result dataclass (tau, A, B_inf, R2, quality) |
+| `fit_eddy_per_run(...)` | Fit single-exponential eddy model with 2-pass MAD clipping |
+| `find_contiguous_groups(mask)` | Find contiguous True-groups in boolean mask |
 | `ba_table_from_C(C, orders)` | Complex → B/A DataFrame |
 | `mixed_format_table(C_merged, C_units, ...)` | Bottura 3.7 mixed format |
 | `mad_sigma_clip(df, col, n_sigma)` | MAD-based outlier removal |
 | `plot_hysteresis(ax, summ, ...)` | Hysteresis loop plot |
-| `compute_level_stats(df, label)` | Per-level mean/std statistics |
-| `diff_sigma(stats1, stats2, key)` | Statistical comparison |
+| `compute_level_stats(df, label)` | Mean/std of I, B1, b2, b3, TF per operating point |
+| `diff_sigma(stats1, stats2, key)` | Difference with propagated error and sigma significance |
 
 ### 14.4 Ingest (`ingest/`)
 

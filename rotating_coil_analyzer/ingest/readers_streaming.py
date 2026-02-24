@@ -1,3 +1,10 @@
+"""Readers for streaming (continuous-acquisition) rotating-coil data.
+
+Supports both binary (``*.bin``) and text (``*.txt``) formats produced by
+the CERN FDI acquisition system.  Column layout is auto-detected from
+``Parameters.txt`` or inferred from header lines.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

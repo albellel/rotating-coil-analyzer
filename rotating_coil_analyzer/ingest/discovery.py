@@ -1,3 +1,10 @@
+"""Measurement catalogue discovery from Parameters.txt and filesystem layout.
+
+Parses CERN rotating-coil measurement folders: reads ``Parameters.txt`` for
+FDI-to-segment mapping, discovers streaming binary/text files and plateau
+run files, and assembles a :class:`MeasurementCatalog`.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

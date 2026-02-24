@@ -436,6 +436,8 @@ def process_kn_pipeline(
     merge_mode: str = "abs_upto_m_cmp_above",
     dit_signed: bool = False,
     max_zR: float | None = None,
+    encoder_offset_rad: float = 0.0,
+    flip_signal_polarity: bool = False,
 ):
     """Run the full Kn pipeline on selected turns.
 
@@ -470,6 +472,13 @@ def process_kn_pipeline(
         If not None, clamp |zR| after cel and before fed.  Turns with
         |zR| > max_zR have zR set to 0 and are flagged in
         ``result.zR_clamped``.
+    encoder_offset_rad : float
+        Known encoder trigger offset in radians.  Pre-rotates harmonics
+        before the rotation step.  Default 0.0 (no pre-rotation).
+    flip_signal_polarity : bool
+        If True, negate all harmonics after kn application (before
+        rotation/cel/fed/normalization).  Use when B1 is negative at
+        positive current due to inverted coil/cable polarity.
 
     Returns
     -------
@@ -495,6 +504,8 @@ def process_kn_pipeline(
         legacy_rotate_excludes_last=False,
         dit_signed=dit_signed,
         max_zR=max_zR,
+        encoder_offset_rad=encoder_offset_rad,
+        flip_signal_polarity=flip_signal_polarity,
     )
 
     C_merged, _ = merge_coefficients(
@@ -1111,17 +1122,6 @@ def eddy_model(t, B_inf, A, tau):
     Intended for use with :func:`scipy.optimize.curve_fit`.
     """
     return B_inf + A * np.exp(-t / tau)
-
-
-def double_eddy_model(t, B_inf, A1, tau1, A2, tau2):
-    r"""Double-exponential eddy-current settling model.
-
-    .. math:: B(t) = B_\infty + A_1 e^{-t/\tau_1} + A_2 e^{-t/\tau_2}
-
-    Two time constants capture fast (iron) and slow (beam-screen / yoke)
-    eddy currents.  Intended for use with :func:`scipy.optimize.curve_fit`.
-    """
-    return B_inf + A1 * np.exp(-t / tau1) + A2 * np.exp(-t / tau2)
 
 
 # =====================================================================

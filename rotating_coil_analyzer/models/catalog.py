@@ -1,3 +1,10 @@
+"""Data model for a discovered measurement catalogue.
+
+A :class:`MeasurementCatalog` represents one measurement folder with its
+``Parameters.txt`` metadata, segment specifications (FDI mapping), and
+discovered data files (streaming and plateau).
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
