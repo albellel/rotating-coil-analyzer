@@ -74,8 +74,8 @@ rotating_coil_analyzer/
   │   ├── golden_runner.py     Dataset scanning API
   │   └── golden_streaming.py  Streaming validation workflow
   ├── tests/              126 tests, all passing
-  ├── notebooks/          26 analysis notebooks (4 magnets, 6 campaigns)
-  └── scripts/            Standalone utility scripts (generate_mbb_notebooks.py, etc.)
+  ├── notebooks/          24 analysis notebooks (4 magnets, 6 campaigns)
+  └── scripts/            Standalone utility scripts (generate_notebooks.py, etc.)
 ```
 
 ---
@@ -483,15 +483,21 @@ Full provenance containers:
 
 ## 9. Notebooks & Campaigns
 
-### 9.1 Inventory (26 notebooks)
+### 9.1 Inventory (24 active notebooks)
 
 | Magnet | Campaign | Notebooks | Type |
 |--------|----------|-----------|------|
-| LEAR MC62 | 2026-02-11 to 17 | 12 | Dipole (m=1), C-shaped, warm |
+| LEAR MC62 | 2026-02-11 to 17 | 9 | Dipole (m=1), C-shaped, warm |
 | LIU BTP8 | 2019-07-17 | 2 | Quadrupole (m=2), golden standard |
 | SM18 | 2024-12-04 | 1 | Dipole (m=1), superconducting |
-| SPS MBB | 2025-12-12 to 2026-02-06 | 10 | Dipole (m=1), superconducting |
+| SPS MBB | 2025-12-12 to 2026-02-25 | 11 | Dipole (m=1), superconducting |
 | Tools | N/A | 2 | GUI docs, Kn utility |
+
+Superseded notebooks are archived in `_archive/` subdirectories (gitignored).
+
+Generated notebooks (SPS MBB analysis/comparison, LEAR MC62 analysis/comparison) are
+produced by `scripts/generate_notebooks.py`. Run `python scripts/generate_notebooks.py --all`
+to regenerate all of them.
 
 ### 9.2 Magnet Parameters
 

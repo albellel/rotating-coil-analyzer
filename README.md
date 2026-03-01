@@ -131,20 +131,17 @@ Example and analysis notebooks are in `rotating_coil_analyzer/notebooks/`:
 - `tools/kn_from_mh_csv.ipynb` -- Compute kn calibration coefficients from measurement-head CSV
 
 ### SPS MBB dipole
-- `SPS_MBB/2025-12-12_MBA/CS_harmonics.ipynb` -- CS segment harmonic analysis (Dec 2025 session)
-- `SPS_MBB/2025-12-12_MBA/NCS_harmonics.ipynb` -- NCS segment harmonic analysis (Dec 2025 session)
-- `SPS_MBB/2026-02-06_NCS_supercycle/NCS_harmonics.ipynb` -- NCS segment full analysis (Feb 2026 session)
-- `SPS_MBB/2026-02-06_NCS_supercycle/NCS_supercycle.ipynb` -- Streaming supercycle analysis (Feb 2026)
-- `SPS_MBB/2026-02-06_NCS_supercycle/b3_settling_200GeV.ipynb` -- Eddy-current b3 settling at MD1 plateau
-- `SPS_MBB/comparisons/200GeV_vs_26GeV/comparison.ipynb` -- Cross-session comparison (200 GeV vs 26 GeV cycles)
+- `SPS_MBB/2025-12-12_MBB/` -- CS and NCS harmonic analysis (Dec 2025 campaign)
+- `SPS_MBB/2026-02-06_NCS_supercycle/` -- NCS harmonics, 200 GeV & 26 GeV analysis, comparison (Feb 2026 campaign)
+- `SPS_MBB/2026-02-25_2Hz/` -- 200 GeV & 26 GeV analysis, comparison (Feb 2026, 2 Hz rotation)
 
 ### LEAR MC62 dipole
 - `LEAR_MC62/00_system_check/` -- System check (10 turns)
 - `LEAR_MC62/01_with_shims/` -- Staircase analysis + eddy-current settling (with shims, 1 Hz)
-- `LEAR_MC62/02_without_shims/` -- Staircase analysis + eddy-current settling + FFMM parity (without shims, 1 Hz)
+- `LEAR_MC62/02_without_shims/` -- Staircase analysis + FFMM parity (without shims, 1 Hz)
 - `LEAR_MC62/03_2Hz_afternoon/` -- Streaming staircase analysis + eddy-current (2 Hz)
 - `LEAR_MC62/04_2Hz_morning/` -- Reproducibility repeat (2 Hz, morning)
-- `LEAR_MC62/comparisons/` -- Shims effect (01 vs 02) and reproducibility (03 vs 04)
+- `LEAR_MC62/comparisons/` -- Shims effect (01 vs 02), reproducibility (03 vs 04), 2022 vs 2024
 
 ### LIU BTP8 quadrupole
 - `LIU_BTP8/2019-07-17/b3_sextupole.ipynb` -- b3 sextupole analysis
@@ -307,7 +304,7 @@ rotating_coil_analyzer/
 ├── tests/                  # Unit tests (126 tests)
 └── validation/             # Golden reference validation (C++ parity)
 scripts/
-├── generate_mbb_notebooks.py  # Generate SPS MBB analysis notebooks from template
+├── generate_notebooks.py      # Unified notebook generator (SPS MBB + LEAR MC62)
 └── btp8_bruteforce_turns.py   # Brute-force turns-per-revolution search for BTP8
 ```
 

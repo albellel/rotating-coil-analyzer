@@ -32,7 +32,7 @@ from build_presentation import (
 )
 
 # -- slide_table from the shared pptx_helpers module -----------------------
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "presentation"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "presentation"))
 from pptx_helpers import slide_table, slide_bullets
 
 from pptx import Presentation
@@ -41,18 +41,20 @@ from lxml import etree
 # -- Paths -----------------------------------------------------------------
 REPO = Path(r"C:\Users\albellel\python-projects\rotating-coil-analyzer")
 NB_DIR = REPO / "rotating_coil_analyzer" / "notebooks" / "LEAR_MC62"
-TEMPLATE_PPTX = NB_DIR / "MC62_2Hz_staircase_presentation.pptx"
-OUTPUT_PPTX = NB_DIR / "MC62_test03_presentation.pptx"
+PRES_DIR = NB_DIR / "presentations"
+TEMPLATE_PPTX = PRES_DIR / "MC62_2Hz_staircase_presentation.pptx"
+OUTPUT_PPTX = PRES_DIR / "MC62_test03_presentation.pptx"
 
-ANALYSIS_NB = NB_DIR / "analysis" / "2026-02-16_03_staircase_2Hz.ipynb"
-EDDY_NB = NB_DIR / "eddy_current" / "2026-02-16_03_staircase_2Hz.ipynb"
+ANALYSIS_NB = NB_DIR / "03_2Hz_afternoon" / "analysis.ipynb"
+# Eddy-current content is now integrated into analysis.ipynb (no separate notebook)
+EDDY_NB = None
 
 
 # -- Count mode ------------------------------------------------------------
 
 def count_images():
-    """Print image counts for both Test 03 notebooks."""
-    for label, path in [("analysis_03", ANALYSIS_NB), ("eddy_03", EDDY_NB)]:
+    """Print image counts for Test 03 notebook."""
+    for label, path in [("analysis_03", ANALYSIS_NB)]:
         if path.exists():
             imgs = extract_images(path)
             print(f"  {label}: {len(imgs)} images")
@@ -78,9 +80,8 @@ def build():
     # Extract images
     print("Extracting images from executed notebooks...")
     a03 = extract_images(ANALYSIS_NB) if ANALYSIS_NB.exists() else []
-    e03 = extract_images(EDDY_NB) if EDDY_NB.exists() else []
+    e03 = []  # eddy content now integrated into analysis.ipynb
     print(f"  analysis_03: {len(a03)} images")
-    print(f"  eddy_03:     {len(e03)} images")
 
     # ==================================================================
     # Slide 1: Title

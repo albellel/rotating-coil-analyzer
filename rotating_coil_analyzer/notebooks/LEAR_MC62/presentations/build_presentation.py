@@ -30,22 +30,20 @@ from pptx.enum.text import PP_ALIGN
 # -- Paths -----------------------------------------------------------------
 REPO = Path(r"C:\Users\albellel\python-projects\rotating-coil-analyzer")
 NB_DIR = REPO / "rotating_coil_analyzer" / "notebooks" / "LEAR_MC62"
-TEMPLATE_PPTX = NB_DIR / "MC62_2Hz_staircase_presentation.pptx"
-OUTPUT_PPTX = NB_DIR / "MC62_measurement_campaign.pptx"
+PRES_DIR = NB_DIR / "presentations"
+TEMPLATE_PPTX = PRES_DIR / "MC62_2Hz_staircase_presentation.pptx"
+OUTPUT_PPTX = PRES_DIR / "MC62_measurement_campaign.pptx"
 
 # Executed notebooks -- in-place in the repository
 EXEC_NBS = {
-    "analysis_00": NB_DIR / "analysis" / "2026-02-11_00_test.ipynb",
-    "analysis_01": NB_DIR / "analysis" / "2026-02-11_01_staircase_with_shims.ipynb",
-    "analysis_02": NB_DIR / "analysis" / "2026-02-12_02_staircase_without_shims.ipynb",
-    "analysis_03": NB_DIR / "analysis" / "2026-02-16_03_staircase_2Hz.ipynb",
-    "analysis_04": NB_DIR / "analysis" / "2026-02-17_04_staircase_2Hz_morning.ipynb",
-    "eddy_01": NB_DIR / "eddy_current" / "2026-02-11_01_staircase_with_shims.ipynb",
-    "eddy_02": NB_DIR / "eddy_current" / "2026-02-12_02_staircase_without_shims.ipynb",
-    "eddy_03": NB_DIR / "eddy_current" / "2026-02-16_03_staircase_2Hz.ipynb",
-    "validation_02": NB_DIR / "validation" / "2026-02-12_02_vs_ffmm.ipynb",
-    "compare_01v02": NB_DIR / "comparison" / "2026-02-12_01_vs_02_shims_effect.ipynb",
-    "compare_03v04": NB_DIR / "comparison" / "2026-02-17_03_vs_04_reproducibility.ipynb",
+    "analysis_00": NB_DIR / "00_system_check" / "analysis.ipynb",
+    "analysis_01": NB_DIR / "01_with_shims" / "analysis.ipynb",
+    "analysis_02": NB_DIR / "02_without_shims" / "analysis.ipynb",
+    "analysis_03": NB_DIR / "03_2Hz_afternoon" / "analysis.ipynb",
+    "analysis_04": NB_DIR / "04_2Hz_morning" / "analysis.ipynb",
+    "validation_02": NB_DIR / "02_without_shims" / "ffmm_validation.ipynb",
+    "compare_01v02": NB_DIR / "comparisons" / "shims_effect_01_vs_02" / "comparison.ipynb",
+    "compare_03v04": NB_DIR / "comparisons" / "reproducibility_03_vs_04" / "comparison.ipynb",
 }
 
 

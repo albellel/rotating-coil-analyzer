@@ -438,6 +438,7 @@ def process_kn_pipeline(
     max_zR: float | None = None,
     encoder_offset_rad: float = 0.0,
     flip_signal_polarity: bool = False,
+    legacy_rotate_excludes_last: bool = False,
 ):
     """Run the full Kn pipeline on selected turns.
 
@@ -479,6 +480,10 @@ def process_kn_pipeline(
         If True, negate all harmonics after kn application (before
         rotation/cel/fed/normalization).  Use when B1 is negative at
         positive current due to inverted coil/cable polarity.
+    legacy_rotate_excludes_last : bool
+        If True, exclude the last harmonic (k=H) from rotation.
+        Matches the SM18 C++ off-by-one behaviour.  Default False
+        rotates all harmonics k=1..H (Bottura AIV.6, standard FFMM).
 
     Returns
     -------
@@ -501,7 +506,7 @@ def process_kn_pipeline(
         magnet_order=magnet_order,
         options=options,
         drift_mode=drift_mode,
-        legacy_rotate_excludes_last=False,
+        legacy_rotate_excludes_last=legacy_rotate_excludes_last,
         dit_signed=dit_signed,
         max_zR=max_zR,
         encoder_offset_rad=encoder_offset_rad,

@@ -430,7 +430,7 @@ from high harmonics into all lower harmonics.
 
 ## File Locations
 
-    measurements/2026_02_11_MC62/
+    measurements/MC62/2026-02-11/
       00_test/                          <- this test
         20260211_104646_test_REDMAGNET/
           20260211_105610_REDMAGNET/    <- 9 run files per PCB
@@ -439,11 +439,9 @@ from high harmonics into all lower harmonics.
         Kn_R45_PCB_N1_0001_A_AC.txt    <- integral PCB calibration
         Kn_DQ_5_18_7_250_47x50_0001_A_AC.txt  <- central PCB calibration
 
-    rotating_coil_analyzer/notebooks/
-      analysis_20260211_104646_LEAR_MC62_00_test.ipynb  <- analysis notebook
-
-    output/
-      MC62_00_test_analysis_notes.md                   <- this file
+    rotating_coil_analyzer/notebooks/LEAR_MC62/
+      00_system_check/analysis.ipynb    <- analysis notebook
+      MC62_analysis_notes.md            <- this file
 
 ---
 
