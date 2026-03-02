@@ -1129,6 +1129,92 @@ def eddy_model(t, B_inf, A, tau):
     return B_inf + A * np.exp(-t / tau)
 
 
+def double_eddy_model(t, B_inf, A1, tau1, A2, tau2):
+    r"""Two-exponential eddy-current settling model.
+
+    .. math:: B(t) = B_\infty + A_1 \, e^{-t/\tau_1} + A_2 \, e^{-t/\tau_2}
+
+    Parameters are ordered so that ``tau1 < tau2`` (fast + slow component).
+    Intended for use with :func:`scipy.optimize.curve_fit`.
+    """
+    return B_inf + A1 * np.exp(-t / tau1) + A2 * np.exp(-t / tau2)
+
+
+def triple_eddy_model(t, B_inf, A1, tau1, A2, tau2, A3, tau3):
+    r"""Three-exponential eddy-current settling model.
+
+    .. math:: B(t) = B_\infty + A_1 \, e^{-t/\tau_1} + A_2 \, e^{-t/\tau_2}
+              + A_3 \, e^{-t/\tau_3}
+
+    Parameters are ordered so that ``tau1 < tau2 < tau3``.
+    Intended for use with :func:`scipy.optimize.curve_fit`.
+    """
+    return (B_inf + A1 * np.exp(-t / tau1) + A2 * np.exp(-t / tau2)
+            + A3 * np.exp(-t / tau3))
+
+
+def validate_eddy_model_selection(fit_results, *, max_tau=50.0, min_tau_ratio=1.5):
+    """Choose the best eddy-current model while guarding against overfitting.
+
+    Takes a dict ``{1: {...}, 2: {...}, 3: {...}}`` where each value has
+    keys ``"popt"`` (parameter array or None), ``"r2"``, ``"aic"``.
+
+    Overfitting indicators (any triggers a downgrade to simpler model):
+
+    * **Unphysical tau**: any tau > *max_tau* (default 50 s for laminated
+      iron — eddy time constants above this are not physical for typical
+      accelerator-magnet yoke laminations).
+    * **Redundant taus**: ratio tau_{i+1}/tau_i < *min_tau_ratio* (default
+      1.5) — the extra exponential is just duplicating the other.
+
+    Model complexity is otherwise governed by AICc (which already penalises
+    extra parameters).  No additional R² threshold is applied because AICc
+    is a more principled criterion that accounts for sample size.
+
+    Returns ``(best_n_tau, reason)`` where *reason* is ``"OK"`` or a short
+    explanation of the downgrade.
+    """
+    # Gather valid fits (converged, positive R²)
+    valid = {k: v for k, v in fit_results.items()
+             if isinstance(k, int) and v.get("popt") is not None and v.get("r2", 0) > 0}
+    if not valid:
+        return (1, "NO_FIT")
+
+    def _extract_taus(popt, n_tau):
+        if n_tau == 1:
+            return [popt[2]]
+        elif n_tau == 2:
+            return sorted([popt[2], popt[4]])
+        else:  # 3
+            return sorted([popt[2], popt[4], popt[6]])
+
+    def _is_physical(n_tau, v):
+        taus = _extract_taus(v["popt"], n_tau)
+        # Check max tau
+        if any(t > max_tau for t in taus):
+            return False, f"tau={max(taus):.1f}s>{max_tau}s"
+        # Check tau separation (only for multi-tau)
+        if len(taus) >= 2:
+            for i in range(len(taus) - 1):
+                if taus[i] > 0 and taus[i + 1] / taus[i] < min_tau_ratio:
+                    return False, f"taus too close ({taus[i]:.2f}/{taus[i+1]:.2f})"
+        return True, "OK"
+
+    # Pick AICc-best among all valid, then validate downward
+    aic_best = min(valid, key=lambda k: valid[k].get("aic", float("inf")))
+
+    for n_tau in range(aic_best, 0, -1):
+        if n_tau not in valid:
+            continue
+        ok, msg = _is_physical(n_tau, valid[n_tau])
+        if ok:
+            return (n_tau, "OK")
+
+    # All models failed physical validation — use simplest available
+    simplest = min(valid)
+    return (simplest, "all higher models unphysical")
+
+
 # =====================================================================
 #  Eddy-current per-run fit helper
 # =====================================================================

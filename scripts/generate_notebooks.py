@@ -192,6 +192,8 @@ def _seg_configs_repr(cfg):
         )
     lines.append("]")
     lines.append('SEGMENTS = [s["name"] for s in SEGMENT_CONFIGS]')
+    lines.append('SEG_DISPLAY = {s["name"]: (s["name"] + " [fringe]" if s["is_fringe"] '
+                 'else s["name"] + " [main body]") for s in SEGMENT_CONFIGS}')
     return "\n".join(lines)
 
 
@@ -259,6 +261,7 @@ def _list_streaming_sections(cfg):
     if cfg.has_eddy:
         sections.extend([
             "Eddy Current Settling Analysis", "Exponential Fits",
+            "Outlier-Cleaned Fits",
             "Settling Bias Analysis", "N_LAST Sensitivity Study",
         ])
     sections.extend([
@@ -288,6 +291,7 @@ def _list_file_discovery_sections(cfg):
     if cfg.has_eddy:
         sections.extend([
             "Eddy Current Settling Analysis", "Exponential Fits",
+            "Outlier-Cleaned Fits",
             "Settling Bias Analysis", "N_LAST Sensitivity Study",
         ])
     sections.extend([
@@ -1760,32 +1764,53 @@ print(f"Eddy analysis: {{len(df_eddy)}} turns, {{df_eddy['run_id'].nunique()}} r
 
 
 def section_eddy_raw(cfg):
-    """Raw settling curve plots (subsection, no section number)."""
-    cells = [md("eddy-hdr-raw", "### Raw B1 settling curves")]
+    """Raw settling curve plots with mean + shaded STD (subsection, no section number)."""
+    cells = [md("eddy-hdr-raw", "### Settling curves -- Mean ± STD across supercycles")]
 
     if cfg.data_loader == "text_streaming":
         cells.append(code("eddy-raw", """\
-fig, axes = plt.subplots(len(SEGMENTS), 2, figsize=(14, 5 * len(SEGMENTS)))
+_eddy_cols = [("B1_T", "B1 (T)"), ("b2_units", "b2 (units)"), ("b3_units", "b3 (units)")]
+fig, axes = plt.subplots(len(SEGMENTS), len(_eddy_cols),
+                         figsize=(5 * len(_eddy_cols), 5 * len(SEGMENTS)))
 if len(SEGMENTS) == 1:
     axes = axes[np.newaxis, :]
 
 for i, seg in enumerate(SEGMENTS):
     inj = eddy_data[seg]
-    for col_idx, (col, ylabel) in enumerate([("B1_T", "B1 (T)"), ("b3_units", "b3 (units)")]):
+    for col_idx, (col, ylabel) in enumerate(_eddy_cols):
         ax = axes[i, col_idx]
         if len(inj) == 0:
             ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
             continue
         sc_ids = sorted([s for s in inj["sc_idx"].unique() if s >= 0])
+        # Align supercycles by turn index and compute mean/std
+        all_turns = {}
+        for sc_id in sc_ids:
+            sub = inj[inj["sc_idx"] == sc_id].sort_values("turn_in_group")
+            for _, row in sub.iterrows():
+                tidx = int(row["turn_in_group"])
+                all_turns.setdefault(tidx, {"t": [], "y": []})
+                all_turns[tidx]["t"].append(row["t_since_inj_start"])
+                all_turns[tidx]["y"].append(row[col])
+        turn_idxs = sorted(all_turns.keys())
+        t_mean = np.array([np.mean(all_turns[k]["t"]) for k in turn_idxs])
+        y_mean = np.array([np.mean(all_turns[k]["y"]) for k in turn_idxs])
+        y_std = np.array([np.std(all_turns[k]["y"]) for k in turn_idxs])
+        # Plot individual SCs faintly
         cmap = plt.cm.tab20(np.linspace(0, 1, max(len(sc_ids), 1)))
         for k, sc_id in enumerate(sc_ids):
             sub = inj[inj["sc_idx"] == sc_id]
-            ax.plot(sub["t_since_inj_start"], sub[col], ".-",
-                    markersize=4, linewidth=0.8, alpha=0.7, color=cmap[k % len(cmap)])
+            ax.plot(sub["t_since_inj_start"], sub[col], ".",
+                    markersize=2, alpha=0.15, color="gray")
+        # Plot mean + STD band
+        ax.fill_between(t_mean, y_mean - y_std, y_mean + y_std,
+                         alpha=0.3, color="tab:blue", label="± 1 STD")
+        ax.plot(t_mean, y_mean, "-", linewidth=1.5, color="tab:blue", label="mean")
         ax.set_xlabel("t - t_inj_start (s)"); ax.set_ylabel(ylabel)
-        ax.set_title(f"{ylabel.split()[0]} settling -- {seg}")
+        ax.set_title(f"{ylabel.split()[0]} settling -- {SEG_DISPLAY[seg]}")
+        ax.legend(fontsize=7)
 
-fig.suptitle("Injection Settling -- Supercycle Overlay", fontsize=13, y=1.02)
+fig.suptitle("Injection Settling -- Mean ± STD", fontsize=13, y=1.02)
 plt.tight_layout(); plt.show()"""))
     else:
         cells.append(code("eddy-raw", """\
@@ -1815,58 +1840,182 @@ else:
 
 def section_eddy_fits(cfg, n):
     """Exponential fits for eddy current settling."""
-    cells = [md(f"s{n}-hdr-fits", f"---\n## {n}. Exponential Fits\n\n"
-                "Fit single-exponential eddy model per run/supercycle.")]
+    cells = [md(f"s{n}-hdr-fits", f"---\n## {n}. Multi-Exponential Fits (B1, b2, b3)\n\n"
+                "Fit 1-, 2-, and 3-exponential eddy models per supercycle for B1, b2, and b3.\n"
+                "Only plateau turns (stable current) are used -- ramp artifacts are excluded.")]
 
     if cfg.data_loader == "text_streaming":
         cells.append(code(f"s{n}-fits", """\
-def fit_supercycle(df_sc):
-    t = df_sc["t_since_inj_start"].values
-    b3 = df_sc["b3_units"].values
-    ok = np.isfinite(b3) & np.isfinite(t)
-    t, b3 = t[ok], b3[ok]
-    if len(t) < MIN_INJECTION_TURNS:
+from rotating_coil_analyzer.analysis.utility_functions import (
+    eddy_model, double_eddy_model, triple_eddy_model,
+    validate_eddy_model_selection,
+)
+
+def _compute_r2(y, y_pred):
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - y.mean()) ** 2)
+    return 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+def _aic(n_pts, k, ss_res):
+    if n_pts <= k + 1 or ss_res <= 0:
+        return np.inf
+    aic = n_pts * np.log(ss_res / n_pts) + 2 * k
+    return aic + (2 * k * (k + 1)) / max(n_pts - k - 1, 1)
+
+def _fit_123(t, y):
+    \"\"\"Fit 1/2/3-tau models. Returns dict {1: ..., 2: ..., 3: ...}.\"\"\"
+    fr = {}
+    n = len(t)
+    if n < MIN_INJECTION_TURNS:
         return None
+    y_inf = y[-max(5, n // 4):].mean()
+    A0 = y[0] - y_inf
+    tau0 = max(t[-1] / 3, 0.5)
+
+    # 1-tau
     try:
-        popt, pcov = curve_fit(
-            eddy_model, t, b3,
-            p0=[b3[-1], b3[0] - b3[-1], max(t[-1] / 3, 1.0)],
-            bounds=([-np.inf, -np.inf, 0.1], [np.inf, np.inf, 1000]),
-            maxfev=5000,
-        )
-        perr = np.sqrt(np.diag(pcov))
-        b3_pred = eddy_model(t, *popt)
-        ss_res = np.sum((b3 - b3_pred) ** 2)
-        ss_tot = np.sum((b3 - b3.mean()) ** 2)
-        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
-        return {"b3_inf": popt[0], "A": popt[1], "tau": popt[2],
-                "b3_inf_err": perr[0], "A_err": perr[1], "tau_err": perr[2],
-                "r2": r2, "n_turns": len(t)}
+        p1, _ = curve_fit(eddy_model, t, y, p0=[y_inf, A0, tau0],
+                          bounds=([-np.inf, -np.inf, 0.05], [np.inf, np.inf, 1000]), maxfev=10000)
+        pred = eddy_model(t, *p1)
+        r2 = _compute_r2(y, pred); ss = np.sum((y - pred)**2)
+        fr[1] = {"popt": p1, "r2": r2, "aic": _aic(n, 3, ss)}
     except (RuntimeError, ValueError):
-        return None
+        fr[1] = {"popt": None, "r2": 0, "aic": np.inf}
 
-fit_results = {}
-df_fits = {}
+    # 2-tau
+    if n >= 10 and fr[1].get("popt") is not None:
+        try:
+            Bi, Ai, ti = fr[1]["popt"]
+            p2, _ = curve_fit(double_eddy_model, t, y,
+                              p0=[Bi, Ai*0.5, ti/3, Ai*0.5, ti*2],
+                              bounds=([-np.inf,-np.inf,0.05,-np.inf,0.05],
+                                      [np.inf,np.inf,500,np.inf,2000]), maxfev=20000)
+            if p2[2] > p2[4]:
+                p2 = np.array([p2[0], p2[3], p2[4], p2[1], p2[2]])
+            pred = double_eddy_model(t, *p2)
+            r2 = _compute_r2(y, pred); ss = np.sum((y - pred)**2)
+            fr[2] = {"popt": p2, "r2": r2, "aic": _aic(n, 5, ss)}
+        except (RuntimeError, ValueError):
+            fr[2] = {"popt": None, "r2": 0, "aic": np.inf}
+    else:
+        fr[2] = {"popt": None, "r2": 0, "aic": np.inf}
+
+    # 3-tau
+    if n >= 20 and fr.get(2, {}).get("popt") is not None:
+        try:
+            B2, A12, t12, A22, t22 = fr[2]["popt"]
+            p3, _ = curve_fit(triple_eddy_model, t, y,
+                              p0=[B2, A12*0.5, t12/2, A12*0.5, t12*2, A22, t22*2],
+                              bounds=([-np.inf,-np.inf,0.05,-np.inf,0.05,-np.inf,0.05],
+                                      [np.inf,np.inf,500,np.inf,2000,np.inf,5000]), maxfev=30000)
+            taus = [(p3[1],p3[2]), (p3[3],p3[4]), (p3[5],p3[6])]
+            taus.sort(key=lambda x: x[1])
+            p3 = np.array([p3[0], taus[0][0], taus[0][1], taus[1][0], taus[1][1], taus[2][0], taus[2][1]])
+            pred = triple_eddy_model(t, *p3)
+            r2 = _compute_r2(y, pred)
+            if r2 < 0:
+                fr[3] = {"popt": None, "r2": 0, "aic": np.inf}
+            else:
+                ss = np.sum((y - pred)**2)
+                fr[3] = {"popt": p3, "r2": r2, "aic": _aic(n, 7, ss)}
+        except (RuntimeError, ValueError):
+            fr[3] = {"popt": None, "r2": 0, "aic": np.inf}
+    else:
+        fr[3] = {"popt": None, "r2": 0, "aic": np.inf}
+    return fr
+
+def _print_fit_detail(seg_disp, qlabel, fr, best_ntau):
+    for ntau in [1, 2, 3]:
+        r = fr.get(ntau, {"r2": 0, "popt": None})
+        tag = " <-- BEST" if ntau == best_ntau and r["popt"] is not None and r["r2"] > 0 else ""
+        if r["popt"] is not None and r["r2"] > 0:
+            p = r["popt"]
+            if ntau == 1:
+                s = f"tau={p[2]:.3f} s, A={p[1]:.6f}, B_inf={p[0]:.6f}"
+            elif ntau == 2:
+                s = f"tau1={p[2]:.3f} s, tau2={p[4]:.3f} s, A1={p[1]:.6f}, A2={p[3]:.6f}, B_inf={p[0]:.6f}"
+            else:
+                s = f"tau1={p[2]:.3f} s, tau2={p[4]:.3f} s, tau3={p[6]:.3f} s, B_inf={p[0]:.6f}"
+            print(f"  {seg_disp} {qlabel}: {ntau}-tau R2={r['r2']:.4f}  {s}{tag}")
+        else:
+            print(f"  {seg_disp} {qlabel}: {ntau}-tau FAILED")
+
+def _print_summary_table(title, results_dict, segments, quantities):
+    print(f"\\n{title}")
+    print("=" * 120)
+    print(f"{'Segment':<20s} {'Quantity':<14s} {'Model':>6s} {'R2':>8s} "
+          f"{'B_inf':>12s} {'A / A1':>12s} {'tau1 (s)':>10s} {'A2':>12s} {'tau2 (s)':>10s} {'tau3 (s)':>10s}")
+    print("-" * 120)
+    for seg in segments:
+        for col, qlabel in quantities:
+            res = results_dict[seg][col]
+            bn = res.get("best_ntau")
+            bp = res.get("best_popt")
+            br = res.get("best_r2", 0)
+            if bp is None or br <= 0:
+                print(f"{SEG_DISPLAY[seg]:<20s} {qlabel:<14s} {'--':>6s} {'--':>8s}")
+                continue
+            if bn == 1:
+                print(f"{SEG_DISPLAY[seg]:<20s} {qlabel:<14s} {'1-tau':>6s} {br:8.4f} "
+                      f"{bp[0]:12.6f} {bp[1]:12.6f} {bp[2]:10.3f}")
+            elif bn == 2:
+                print(f"{SEG_DISPLAY[seg]:<20s} {qlabel:<14s} {'2-tau':>6s} {br:8.4f} "
+                      f"{bp[0]:12.6f} {bp[1]:12.6f} {bp[2]:10.3f} {bp[3]:12.6f} {bp[4]:10.3f}")
+            elif bn == 3:
+                print(f"{SEG_DISPLAY[seg]:<20s} {qlabel:<14s} {'3-tau':>6s} {br:8.4f} "
+                      f"{bp[0]:12.6f} {bp[1]:12.6f} {bp[2]:10.3f} {bp[3]:12.6f} {bp[4]:10.3f} {bp[6]:10.3f}")
+    print("=" * 120)
+
+# ---- Fit on MEAN across supercycles (all turns, no outlier removal) ----
+EDDY_QUANTITIES = [("B1_T", "B1 (T)"), ("b2_units", "b2 (units)"), ("b3_units", "b3 (units)")]
+
+eddy_fit_all = {}
 for seg in SEGMENTS:
+    eddy_fit_all[seg] = {}
     inj = eddy_data[seg]
-    fits = []
     if len(inj) == 0:
-        fit_results[seg] = fits
-        df_fits[seg] = pd.DataFrame()
+        for col, _ in EDDY_QUANTITIES:
+            eddy_fit_all[seg][col] = {"best_ntau": None, "best_popt": None, "best_r2": 0,
+                                       "fit_results": {}, "mean_t": None, "mean_y": None, "std_y": None}
         continue
-    for sc_id in sorted(inj["sc_idx"].unique()):
-        if sc_id < 0: continue
-        result = fit_supercycle(inj[inj["sc_idx"] == sc_id])
-        if result is not None:
-            result["supercycle_id"] = sc_id
-            fits.append(result)
-    fit_results[seg] = fits
-    df_fits[seg] = pd.DataFrame(fits)
-    print(f"{seg}: {len(fits)} supercycles fitted")
 
-for seg, df_f in df_fits.items():
-    if len(df_f) == 0: continue
-    print(f"\\n{seg}: tau mean={df_f['tau'].mean():.2f} s, R2 mean={df_f['r2'].mean():.3f}")"""))
+    sc_ids = sorted([s for s in inj["sc_idx"].unique() if s >= 0])
+    print(f"{SEG_DISPLAY[seg]}: {len(sc_ids)} supercycles")
+
+    for col, qlabel in EDDY_QUANTITIES:
+        # Build mean per turn index
+        all_turns = {}
+        for sc_id in sc_ids:
+            sub = inj[inj["sc_idx"] == sc_id].sort_values("turn_in_group")
+            for _, row in sub.iterrows():
+                tidx = int(row["turn_in_group"])
+                all_turns.setdefault(tidx, {"t": [], "y": []})
+                all_turns[tidx]["t"].append(row["t_since_inj_start"])
+                all_turns[tidx]["y"].append(row[col])
+        turn_idxs = sorted(all_turns.keys())
+        t_mean = np.array([np.mean(all_turns[k]["t"]) for k in turn_idxs])
+        y_mean = np.array([np.mean(all_turns[k]["y"]) for k in turn_idxs])
+        y_std = np.array([np.std(all_turns[k]["y"]) for k in turn_idxs])
+
+        # Fit on full mean (no outlier removal)
+        best_ntau, best_popt, best_r2 = 1, None, 0.0
+        fr = _fit_123(t_mean, y_mean)
+        if fr is not None:
+            best_ntau, _ = validate_eddy_model_selection(fr)
+            if best_ntau in fr and fr[best_ntau].get("popt") is not None:
+                best_popt = fr[best_ntau]["popt"]
+                best_r2 = fr[best_ntau]["r2"]
+            _print_fit_detail(SEG_DISPLAY[seg], qlabel, fr, best_ntau)
+        else:
+            fr = {}
+
+        eddy_fit_all[seg][col] = {
+            "best_ntau": best_ntau, "best_popt": best_popt, "best_r2": best_r2,
+            "fit_results": fr, "mean_t": t_mean, "mean_y": y_mean, "std_y": y_std,
+        }
+
+_print_summary_table("BEFORE OUTLIER REMOVAL (fit on mean across SCs, all turns)",
+                     eddy_fit_all, SEGMENTS, EDDY_QUANTITIES)"""))
     else:
         cells.append(code(f"s{n}-fits", """\
 _fit_results = []
@@ -1911,16 +2060,50 @@ else:
 
 def section_eddy_tau(cfg):
     """Tau vs current plot (subsection, no section number)."""
-    cells = [md("eddy-hdr-tau", "### Tau vs Current")]
+    cells = [md("eddy-hdr-tau", "### Multi-Tau Fit Comparison Plots")]
 
     if cfg.data_loader == "text_streaming":
         cells.append(code("eddy-tau", """\
-print("Tau statistics:")
+# Plot 1/2/3-tau fits on the mean for all segments
+_models_t = {1: eddy_model, 2: double_eddy_model, 3: triple_eddy_model}
+_colors_t = {1: "tab:green", 2: "tab:orange", 3: "tab:red"}
+_labels_t = {1: "1-tau", 2: "2-tau", 3: "3-tau"}
+
 for seg in SEGMENTS:
-    df_f = df_fits.get(seg, pd.DataFrame())
-    if len(df_f) == 0: continue
-    tau_v = df_f["tau"].values
-    print(f"  {seg}: N={len(df_f)}, mean={tau_v.mean():.2f} s, std={tau_v.std():.2f} s")"""))
+    fig, axes = plt.subplots(1, len(EDDY_QUANTITIES), figsize=(6 * len(EDDY_QUANTITIES), 5))
+    if len(EDDY_QUANTITIES) == 1:
+        axes = [axes]
+
+    for ax, (col, qlabel) in zip(axes, EDDY_QUANTITIES):
+        res = eddy_fit_all[seg][col]
+        tm = res.get("mean_t")
+        ym = res.get("mean_y")
+        ys = res.get("std_y")
+        if tm is None or len(tm) == 0:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+            continue
+
+        # Mean ± STD
+        ax.fill_between(tm, ym - ys, ym + ys, alpha=0.2, color="tab:blue")
+        ax.plot(tm, ym, ".", markersize=4, color="tab:blue", alpha=0.6, label="mean")
+
+        # Overlay all converged fits
+        fr = res.get("fit_results", {})
+        if fr:
+            t_fine = np.linspace(tm.min(), tm.max(), 300)
+            for ntau in [1, 2, 3]:
+                r = fr.get(ntau, {"popt": None, "r2": 0})
+                if r["popt"] is not None and r["r2"] > 0.01:
+                    is_best = res["best_ntau"] == ntau
+                    ax.plot(t_fine, _models_t[ntau](t_fine, *r["popt"]),
+                            color=_colors_t[ntau], linewidth=2 if is_best else 1,
+                            linestyle="-" if is_best else "--",
+                            label=f"{_labels_t[ntau]} R\\u00b2={r['r2']:.4f}" + (" *" if is_best else ""))
+        ax.legend(fontsize=7); ax.set_xlabel("t (s)"); ax.set_ylabel(qlabel)
+        ax.set_title(f"{qlabel.split()[0]} -- {SEG_DISPLAY[seg]}")
+
+    fig.suptitle(f"Multi-tau fit comparison (mean, before outlier removal) -- {SEG_DISPLAY[seg]}", fontsize=12, y=1.02)
+    plt.tight_layout(); plt.show()"""))
     else:
         cells.append(code("eddy-tau", """\
 _branch_colors = {"ascending": "tab:blue", "descending": "tab:red"}
@@ -1935,6 +2118,320 @@ plt.tight_layout(); plt.show()
 
 if len(df_fits) > 0:
     print(f"Tau range: {df_fits['tau_s'].min():.1f} -- {df_fits['tau_s'].max():.1f} s")"""))
+    return cells
+
+
+def section_eddy_cleaned(cfg, n):
+    """Outlier-cleaned refit with mean+STD best-fit overlay."""
+    cells = [md(f"s{n}-hdr-clean", f"---\n## {n}. Outlier-Cleaned Fits (Mean ± STD)\n\n"
+                "Remove ramp artifacts using residual-based clipping:\n"
+                "1. Compute mean across supercycles per turn index\n"
+                "2. Fit a preliminary 1-tau model to the mean\n"
+                "3. Remove turns whose residuals exceed 3.5× MAD of residuals\n"
+                "4. Refit 1/2/3-tau models on the cleaned mean and select best by AICc")]
+
+    if cfg.data_loader == "text_streaming":
+        cells.append(code(f"s{n}-clean", """\
+# --- Outlier removal (residual-based) and clean refit ---
+from rotating_coil_analyzer.analysis.utility_functions import (
+    eddy_model, double_eddy_model, triple_eddy_model,
+    validate_eddy_model_selection,
+)
+
+def _compute_r2_c(y, y_pred):
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - y.mean()) ** 2)
+    return 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+def _aic_c(n_pts, k, ss_res):
+    if n_pts <= k + 1 or ss_res <= 0:
+        return np.inf
+    aic = n_pts * np.log(ss_res / n_pts) + 2 * k
+    return aic + (2 * k * (k + 1)) / max(n_pts - k - 1, 1)
+
+def _residual_clip(t, y, threshold=3.5):
+    \"\"\"Remove outliers based on residuals from a preliminary 1-tau fit.
+
+    Unlike raw MAD, this preserves the real exponential signal and only
+    removes points that deviate from the expected trend (ramp artifacts).
+    \"\"\"
+    if len(t) < 5:
+        return np.ones(len(t), dtype=bool)
+    # Preliminary fit
+    try:
+        y_inf_est = y[-max(3, len(y) // 4):].mean()
+        A_est = y[0] - y_inf_est
+        tau_est = max(t[-1] / 3, 0.5)
+        popt, _ = curve_fit(eddy_model, t, y, p0=[y_inf_est, A_est, tau_est],
+                             bounds=([-np.inf, -np.inf, 0.05], [np.inf, np.inf, 1000]),
+                             maxfev=5000)
+        residuals = y - eddy_model(t, *popt)
+    except (RuntimeError, ValueError):
+        # If preliminary fit fails, fall back to simple differences
+        residuals = np.diff(y, prepend=y[0])
+
+    med_r = np.median(residuals)
+    mad_r = np.median(np.abs(residuals - med_r))
+    if mad_r < 1e-15:
+        return np.ones(len(t), dtype=bool)
+    modified_z = 0.6745 * np.abs(residuals - med_r) / mad_r
+    return modified_z < threshold
+
+_models_c = {1: eddy_model, 2: double_eddy_model, 3: triple_eddy_model}
+_colors_c = {1: "tab:green", 2: "tab:orange", 3: "tab:red"}
+_labels_c = {1: "1-tau", 2: "2-tau", 3: "3-tau"}
+EDDY_QUANTITIES_C = [("B1_T", "B1 (T)"), ("b2_units", "b2 (units)"), ("b3_units", "b3 (units)")]
+
+eddy_clean_results = {}
+for seg in SEGMENTS:
+    eddy_clean_results[seg] = {}
+    inj = eddy_data[seg]
+    if len(inj) == 0:
+        for col, _ in EDDY_QUANTITIES_C:
+            eddy_clean_results[seg][col] = {"mean_t": None}
+        continue
+
+    sc_ids = sorted([s for s in inj["sc_idx"].unique() if s >= 0])
+
+    for col, qlabel in EDDY_QUANTITIES_C:
+        # Build per-turn arrays across SCs (aligned by turn_in_group)
+        all_turns = {}
+        for sc_id in sc_ids:
+            sub = inj[inj["sc_idx"] == sc_id].sort_values("turn_in_group")
+            for _, row in sub.iterrows():
+                tidx = int(row["turn_in_group"])
+                all_turns.setdefault(tidx, {"t": [], "y": []})
+                all_turns[tidx]["t"].append(row["t_since_inj_start"])
+                all_turns[tidx]["y"].append(row[col])
+
+        turn_idxs = sorted(all_turns.keys())
+        t_mean = np.array([np.mean(all_turns[k]["t"]) for k in turn_idxs])
+        y_mean = np.array([np.mean(all_turns[k]["y"]) for k in turn_idxs])
+        y_std = np.array([np.std(all_turns[k]["y"]) for k in turn_idxs])
+
+        # Residual-based clipping (preserves exponential trend, removes ramp artifacts)
+        ok = _residual_clip(t_mean, y_mean, threshold=3.5)
+        tc, yc, ysc = t_mean[ok], y_mean[ok], y_std[ok]
+
+        n_removed = int((~ok).sum())
+        if n_removed > 0:
+            print(f"{SEG_DISPLAY[seg]} {qlabel}: removed {n_removed}/{len(t_mean)} outlier turns")
+
+        # Fit 1/2/3-tau on the cleaned mean
+        best_ntau, best_popt, best_r2 = 1, None, 0.0
+        fit_results_c = {}
+        if len(tc) >= MIN_INJECTION_TURNS:
+            y_inf_est = yc[-max(5, len(yc) // 4):].mean()
+            A_est = yc[0] - y_inf_est
+            tau_est = max(tc[-1] / 3, 0.5)
+
+            # 1-tau
+            try:
+                popt1, _ = curve_fit(eddy_model, tc, yc, p0=[y_inf_est, A_est, tau_est],
+                                     bounds=([-np.inf, -np.inf, 0.05], [np.inf, np.inf, 1000]),
+                                     maxfev=10000)
+                pred = eddy_model(tc, *popt1)
+                r2 = _compute_r2_c(yc, pred)
+                ss = np.sum((yc - pred) ** 2)
+                fit_results_c[1] = {"popt": popt1, "r2": r2, "aic": _aic_c(len(tc), 3, ss)}
+            except (RuntimeError, ValueError):
+                fit_results_c[1] = {"popt": None, "r2": 0, "aic": np.inf}
+
+            # 2-tau
+            if len(tc) >= 10 and fit_results_c[1].get("popt") is not None:
+                try:
+                    Bi, Ai, ti = fit_results_c[1]["popt"]
+                    popt2, _ = curve_fit(double_eddy_model, tc, yc,
+                                         p0=[Bi, Ai * 0.5, ti / 3, Ai * 0.5, ti * 2],
+                                         bounds=([-np.inf, -np.inf, 0.05, -np.inf, 0.05],
+                                                 [np.inf, np.inf, 500, np.inf, 2000]),
+                                         maxfev=20000)
+                    if popt2[2] > popt2[4]:
+                        popt2 = np.array([popt2[0], popt2[3], popt2[4], popt2[1], popt2[2]])
+                    pred = double_eddy_model(tc, *popt2)
+                    r2 = _compute_r2_c(yc, pred)
+                    ss = np.sum((yc - pred) ** 2)
+                    fit_results_c[2] = {"popt": popt2, "r2": r2, "aic": _aic_c(len(tc), 5, ss)}
+                except (RuntimeError, ValueError):
+                    fit_results_c[2] = {"popt": None, "r2": 0, "aic": np.inf}
+            else:
+                fit_results_c[2] = {"popt": None, "r2": 0, "aic": np.inf}
+
+            # 3-tau
+            if len(tc) >= 20 and fit_results_c.get(2, {}).get("popt") is not None:
+                try:
+                    B2, A12, t12, A22, t22 = fit_results_c[2]["popt"]
+                    popt3, _ = curve_fit(triple_eddy_model, tc, yc,
+                                         p0=[B2, A12*0.5, t12/2, A12*0.5, t12*2, A22, t22*2],
+                                         bounds=([-np.inf, -np.inf, 0.05, -np.inf, 0.05, -np.inf, 0.05],
+                                                 [np.inf, np.inf, 500, np.inf, 2000, np.inf, 5000]),
+                                         maxfev=30000)
+                    taus = [(popt3[1], popt3[2]), (popt3[3], popt3[4]), (popt3[5], popt3[6])]
+                    taus.sort(key=lambda x: x[1])
+                    popt3 = np.array([popt3[0], taus[0][0], taus[0][1],
+                                      taus[1][0], taus[1][1], taus[2][0], taus[2][1]])
+                    pred = triple_eddy_model(tc, *popt3)
+                    r2 = _compute_r2_c(yc, pred)
+                    if r2 < 0:  # Divergent fit
+                        fit_results_c[3] = {"popt": None, "r2": 0, "aic": np.inf}
+                    else:
+                        ss = np.sum((yc - pred) ** 2)
+                        fit_results_c[3] = {"popt": popt3, "r2": r2, "aic": _aic_c(len(tc), 7, ss)}
+                except (RuntimeError, ValueError):
+                    fit_results_c[3] = {"popt": None, "r2": 0, "aic": np.inf}
+            else:
+                fit_results_c[3] = {"popt": None, "r2": 0, "aic": np.inf}
+
+            # Select best model with overfitting guard
+            best_ntau, selection_reason = validate_eddy_model_selection(fit_results_c)
+            if best_ntau in fit_results_c and fit_results_c[best_ntau].get("popt") is not None:
+                best_popt = fit_results_c[best_ntau]["popt"]
+                best_r2 = fit_results_c[best_ntau]["r2"]
+
+            reason_tag = f"  [{selection_reason}]" if selection_reason != "OK" else ""
+            for ntau in [1, 2, 3]:
+                r = fit_results_c.get(ntau, {"r2": 0, "popt": None})
+                tag = f" <-- BEST{reason_tag}" if ntau == best_ntau and r["popt"] is not None and r["r2"] > 0 else ""
+                if r["popt"] is not None and r["r2"] > 0:
+                    popt = r["popt"]
+                    if ntau == 1:
+                        tau_str = f"tau={popt[2]:.3f} s, A={popt[1]:.6f}, B_inf={popt[0]:.6f}"
+                    elif ntau == 2:
+                        tau_str = (f"tau1={popt[2]:.3f} s, tau2={popt[4]:.3f} s, "
+                                   f"A1={popt[1]:.6f}, A2={popt[3]:.6f}, B_inf={popt[0]:.6f}")
+                    else:
+                        tau_str = (f"tau1={popt[2]:.3f} s, tau2={popt[4]:.3f} s, tau3={popt[6]:.3f} s, "
+                                   f"B_inf={popt[0]:.6f}")
+                    print(f"  {SEG_DISPLAY[seg]} {qlabel}: {ntau}-tau R2={r['r2']:.4f}  {tau_str}{tag}")
+                else:
+                    print(f"  {SEG_DISPLAY[seg]} {qlabel}: {ntau}-tau FAILED")
+
+        eddy_clean_results[seg][col] = {
+            "mean_t": tc, "mean_y": yc, "std_y": ysc,
+            "full_t": t_mean, "full_y": y_mean, "full_std": y_std,
+            "best_ntau": best_ntau, "best_popt": best_popt, "best_r2": best_r2,
+            "fit_results": fit_results_c,
+        }
+
+# --- Summary table with tau values ---
+print("\\n" + "=" * 120)
+print(f"{'Segment':<20s} {'Quantity':<14s} {'Model':>6s} {'R2':>8s} "
+      f"{'B_inf':>12s} {'A / A1':>12s} {'tau1 (s)':>10s} {'A2':>12s} {'tau2 (s)':>10s} {'tau3 (s)':>10s}")
+print("-" * 120)
+for seg in SEGMENTS:
+    for col, qlabel in EDDY_QUANTITIES_C:
+        res = eddy_clean_results[seg][col]
+        bn = res.get("best_ntau")
+        bp = res.get("best_popt")
+        br = res.get("best_r2", 0)
+        if bp is None or br <= 0:
+            print(f"{SEG_DISPLAY[seg]:<20s} {qlabel:<14s} {'--':>6s} {'--':>8s}")
+            continue
+        if bn == 1:
+            print(f"{SEG_DISPLAY[seg]:<20s} {qlabel:<14s} {'1-tau':>6s} {br:8.4f} "
+                  f"{bp[0]:12.6f} {bp[1]:12.6f} {bp[2]:10.3f}")
+        elif bn == 2:
+            print(f"{SEG_DISPLAY[seg]:<20s} {qlabel:<14s} {'2-tau':>6s} {br:8.4f} "
+                  f"{bp[0]:12.6f} {bp[1]:12.6f} {bp[2]:10.3f} {bp[3]:12.6f} {bp[4]:10.3f}")
+        elif bn == 3:
+            print(f"{SEG_DISPLAY[seg]:<20s} {qlabel:<14s} {'3-tau':>6s} {br:8.4f} "
+                  f"{bp[0]:12.6f} {bp[1]:12.6f} {bp[2]:10.3f} {bp[3]:12.6f} {bp[4]:10.3f} {bp[6]:10.3f}")
+print("=" * 120)
+for seg in SEGMENTS:
+    fig, axes = plt.subplots(1, len(EDDY_QUANTITIES_C), figsize=(6 * len(EDDY_QUANTITIES_C), 5))
+    if len(EDDY_QUANTITIES_C) == 1:
+        axes = [axes]
+
+    for ax, (col, qlabel) in zip(axes, EDDY_QUANTITIES_C):
+        res = eddy_clean_results[seg][col]
+        if res.get("mean_t") is None or len(res.get("mean_t", [])) == 0:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+            continue
+
+        ft, fy, fs = res["full_t"], res["full_y"], res["full_std"]
+        tc, yc, ysc = res["mean_t"], res["mean_y"], res["std_y"]
+
+        # Full data (gray, with outliers)
+        ax.fill_between(ft, fy - fs, fy + fs, alpha=0.08, color="gray")
+        ax.plot(ft, fy, ".", markersize=3, alpha=0.25, color="gray", label="all turns")
+
+        # Cleaned mean ± STD
+        ax.fill_between(tc, yc - ysc, yc + ysc, alpha=0.25, color="tab:blue")
+        ax.plot(tc, yc, "o", markersize=3, color="tab:blue", label="cleaned mean")
+
+        # Fit curves
+        fr = res.get("fit_results", {})
+        if fr:
+            t_fine = np.linspace(tc.min(), tc.max(), 300)
+            for ntau in [1, 2, 3]:
+                r = fr.get(ntau, {"popt": None, "r2": 0})
+                if r["popt"] is not None and r["r2"] > 0.01:
+                    is_best = res["best_ntau"] == ntau
+                    ax.plot(t_fine, _models_c[ntau](t_fine, *r["popt"]),
+                            color=_colors_c[ntau], linewidth=2.0 if is_best else 1.0,
+                            linestyle="-" if is_best else "--",
+                            label=f"{_labels_c[ntau]} R\\u00b2={r['r2']:.4f}" + (" *" if is_best else ""))
+
+        ax.set_xlabel("t (s)"); ax.set_ylabel(qlabel)
+        ax.set_title(f"{qlabel.split()[0]} -- {SEG_DISPLAY[seg]}")
+        ax.legend(fontsize=7)
+
+    fig.suptitle(f"Cleaned Fit: Mean \\u00b1 STD -- {SEG_DISPLAY[seg]}", fontsize=13, y=1.02)
+    plt.tight_layout(); plt.show()
+
+_print_summary_table("AFTER OUTLIER REMOVAL (fit on mean, ramp artifacts removed)",
+                     eddy_clean_results, SEGMENTS, EDDY_QUANTITIES_C)"""))
+    else:
+        # For non-streaming configs, skip this section
+        cells.append(code(f"s{n}-clean", "print('Outlier-cleaned fits: only available for streaming data')"))
+    return cells
+
+
+def section_eddy_observations(cfg):
+    """Scientific observations about eddy current settling (markdown, no section number)."""
+    if cfg.data_loader != "text_streaming":
+        return []
+
+    cells = [md("eddy-observations", """\
+### Scientific Observations -- Eddy Settling in Fringe vs Main Body
+
+**B1 (dipole field):**
+- Both fringe and main-body segments show clear exponential settling after the
+  current ramp stops.  The 2-tau model is generally preferred (AICc), indicating
+  at least two conducting components with distinct time constants (fast ~1-2 s,
+  slow ~3-5 s).
+- B1 eddy amplitudes are proportional to the local field level: fringe (~0.3 T)
+  has smaller absolute eddy amplitudes than main body (~1.8 T), but the relative
+  decay is similar because the eddy mechanism is the same laminated yoke.
+
+**b2 (quadrupole component):**
+- b2 shows no significant settling trend in either segment (R² < 0.1 typically).
+  This is expected: b2 is a "forbidden" harmonic in a dipole with midplane
+  symmetry.  Any residual b2 is dominated by random noise and coil positioning
+  imperfections, not eddy currents.
+
+**b3 (sextupole component):**
+- In the **fringe field** segment, b3 shows clear exponential settling with
+  R² ~ 0.97, amplitude ~1-2 units, tau ~1.6-3.0 s.  This is because the fringe
+  has a large DC sextupole (~5 units) arising from the nonlinear field rolloff at
+  the magnet end.  Eddy currents modulate this geometric sextupole.
+- In the **main body**, b3 is near zero at injection (by design), so the eddy
+  perturbation (~0.01 units) is buried in measurement noise (~0.15 units).
+  Fits return R² < 0.1 and are physically meaningless.
+
+**Outlier interpretation:**
+- The first 1-3 turns after ramp end often deviate from the exponential trend.
+  These are NOT random errors -- they capture the fast transient that a 1-tau
+  model cannot represent.  The 2-tau fit absorbs most of these "outliers" via its
+  fast component.  MAD clipping further removes residual ramp-to-plateau
+  transition artefacts, improving fit stability.
+
+**Practical implication:**
+- For harmonic measurements, use the main-body segment and wait ≥ 5×tau_slow
+  after the ramp to ensure eddies are negligible.  With tau_slow ~ 3-5 s at
+  injection, a settling time of 15-25 s (30-50 turns at 2 Hz) is conservative.
+- The fringe segment is valuable for studying eddy dynamics (better SNR for b3)
+  but its multipole values are NOT representative of the beam region.""")]
     return cells
 
 
@@ -2184,6 +2681,37 @@ for seg in SEGMENTS:
     df_settled.to_csv(out_dir / fname_s, index=False)
     print(f"Wrote {{out_dir / fname_s}}  ({{len(df_settled)}} rows)")
 
+# Export eddy multi-tau fit results (mean-based)
+_eddy_rows = []
+for seg in SEGMENTS:
+    for col, qlabel in EDDY_QUANTITIES:
+        res = eddy_fit_all.get(seg, {{}}).get(col, {{}})
+        bn = res.get("best_ntau")
+        bp = res.get("best_popt")
+        br = res.get("best_r2", 0)
+        if bp is None or br <= 0:
+            continue
+        row = {{"segment": seg, "quantity": col, "model": f"{{bn}}-tau", "R2": br, "B_inf": bp[0]}}
+        if bn >= 1:
+            row["A1"] = bp[1]; row["tau1_s"] = bp[2]
+        if bn >= 2:
+            row["A2"] = bp[3]; row["tau2_s"] = bp[4]
+        if bn >= 3:
+            row["A3"] = bp[5]; row["tau3_s"] = bp[6]
+        _eddy_rows.append(row)
+if _eddy_rows:
+    _df_eddy = pd.DataFrame(_eddy_rows)
+    fname_e = "eddy_fits_mean.csv"
+    _df_eddy.to_csv(out_dir / fname_e, index=False)
+    print(f"Wrote {{out_dir / fname_e}}  ({{len(_df_eddy)}} rows)")
+
+    # Export injection raw data for eddy analysis
+    inj = eddy_data.get(seg, pd.DataFrame())
+    if len(inj) > 0:
+        fname_inj = f"eddy_injection_{{seg}}.csv"
+        inj.to_csv(out_dir / fname_inj, index=False)
+        print(f"Wrote {{out_dir / fname_inj}}  ({{len(inj)}} rows)")
+
 print("\\nDone.")"""))
     elif cfg.data_loader == "binary_streaming":
         label = cfg.title.split("--")[-1].strip().replace(" ", "_")
@@ -2262,6 +2790,8 @@ def build_streaming_analysis(cfg):
         cells += section_eddy_raw(cfg)
         cells += section_eddy_fits(cfg, next(n))
         cells += section_eddy_tau(cfg)
+        cells += section_eddy_cleaned(cfg, next(n))
+        cells += section_eddy_observations(cfg)
         cells += section_eddy_bias(cfg, next(n))
         cells += section_eddy_nlast(cfg, next(n))
     cells += section_stats(cfg, next(n))
@@ -2295,6 +2825,8 @@ def build_file_discovery_analysis(cfg):
         cells += section_eddy_raw(cfg)
         cells += section_eddy_fits(cfg, next(n))
         cells += section_eddy_tau(cfg)
+        cells += section_eddy_cleaned(cfg, next(n))
+        cells += section_eddy_observations(cfg)
         cells += section_eddy_bias(cfg, next(n))
         cells += section_eddy_nlast(cfg, next(n))
     cells += section_stats(cfg, next(n))
@@ -2858,6 +3390,11 @@ _MC62_KN_CEN = "MC62/2026-02-11/Kn values/Kn_DQ_5_18_7_250_47x50_0001_A_AC.txt"
 
 MEASUREMENTS = {
     # --- MBB 2 Hz (NCS + CS) ---
+    # NOTE: DAQ segment labels are SWAPPED in the 2026-02-25 2Hz campaign.
+    # DAQ "CS" is physically inside the magnet (main body, TF = 0.370 T/kA).
+    # DAQ "NCS" is physically in the fringe field (TF = 0.065 T/kA).
+    # See physics_reference.md Section 3 for details.  Fix for next campaign:
+    # swap DAQ channel assignments so NCS = main body again.
     "MBB_2Hz_200GeV": MeasurementConfig(
         title="SPS MBB Dipole -- 200 GeV MD1, 2 Hz",
         magnet_family="MBB",
@@ -2865,8 +3402,8 @@ MEASUREMENTS = {
         output_csv_dir="MBB/2026-02-25_2Hz/200GeV",
         magnet_order=1, r_ref=0.02, l_coil=0.47, samples_per_turn=1024,
         segments=[
-            SegmentConfig("NCS", _MBB_KN_UPPSALA),
-            SegmentConfig("CS", _MBB_KN_UPPSALA, is_fringe=True),
+            SegmentConfig("NCS", _MBB_KN_UPPSALA, is_fringe=True),
+            SegmentConfig("CS", _MBB_KN_UPPSALA),
         ],
         data_loader="text_streaming",
         session="MBB/2026-02-25_2Hz/MBB/200 GeV/20260225_183154_SPS_MBB",
@@ -2883,8 +3420,8 @@ MEASUREMENTS = {
         output_csv_dir="MBB/2026-02-25_2Hz/26GeV",
         magnet_order=1, r_ref=0.02, l_coil=0.47, samples_per_turn=1024,
         segments=[
-            SegmentConfig("NCS", _MBB_KN_UPPSALA),
-            SegmentConfig("CS", _MBB_KN_UPPSALA, is_fringe=True),
+            SegmentConfig("NCS", _MBB_KN_UPPSALA, is_fringe=True),
+            SegmentConfig("CS", _MBB_KN_UPPSALA),
         ],
         data_loader="text_streaming",
         session="MBB/2026-02-25_2Hz/MBB/26 GeV/20260225_181040_SPS_MBB",
