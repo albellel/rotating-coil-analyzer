@@ -77,10 +77,12 @@ class MeasurementCatalog:
         return int(aperture_id)
 
     def segments_for_aperture(self, aperture_id: Optional[int]) -> List[SegmentSpec]:
+        """Return all SegmentSpec entries for the given aperture."""
         ap = self.resolve_aperture(aperture_id)
         return [s for s in self.segments if s.aperture_id == ap]
 
     def get_segment_file(self, run_id: str, aperture_id: Optional[int], segment_id: str) -> Path:
+        """Return the file path for a specific (run, aperture, segment) combination."""
         ap = self.resolve_aperture(aperture_id)
         key = (run_id, ap, segment_id)
         if key not in self.segment_files:

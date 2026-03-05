@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""HTML-based log widget for Jupyter/VS Code notebooks.
+
+Provides :class:`HtmlLog`, a notebook-stable alternative to ``ipywidgets.Output``
+that avoids the duplicate-rendering problem in VS Code.  Supports severity
+colouring (info/warning/error), message coalescing, and an Output-like capture proxy.
+"""
+
 import html
 import io
 from dataclasses import dataclass

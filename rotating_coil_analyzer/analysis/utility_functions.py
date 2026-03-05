@@ -38,12 +38,30 @@ plot_hysteresis
     Hysteresis loop with run-order gradient coloring.
 eddy_model
     Exponential eddy-current settling model for curve_fit.
+double_eddy_model
+    Two-exponential eddy-current model (2 time constants).
+triple_eddy_model
+    Three-exponential eddy-current model (3 time constants).
+validate_eddy_model_selection
+    AICc-based model selection across 1/2/3-tau fits.
+EddyFitResult
+    Dataclass result container for eddy fits (B_inf, A, tau, R2, quality).
+fit_eddy_per_run
+    Fit single-exponential eddy model with 2-pass MAD clipping.
+CelFedDiagnostic
+    Dataclass result container for cel/fed safety diagnostic.
+diagnose_cel_fed
+    Run pipeline with/without cel+fed, return SAFE/UNSAFE/MIXED recommendation.
+FdiTransitionCheck
+    Dataclass result container for FDI stuck-channel detection.
 diagnose_fdi_transitions
     Detect FDI stuck-channel issues between consecutive plateau runs.
 compute_level_stats
     Mean/std of I, B1, b2, b3, TF for a given operating point.
 diff_sigma
     Difference, propagated error, and sigma significance.
+SPS_CURRENT_THRESHOLDS
+    Default current thresholds dict for SPS cycle classification.
 """
 
 from __future__ import annotations

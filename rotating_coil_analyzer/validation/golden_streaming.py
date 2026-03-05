@@ -380,6 +380,8 @@ def _infer_bn_an_columns(df: pd.DataFrame) -> Tuple[Dict[int, str], Dict[int, st
 
 @dataclass(frozen=True)
 class ComparisonSummary:
+    """Per-column comparison statistics between analyzer and reference results."""
+
     n_turns_analyzer: int
     n_turns_reference: int
     n_matched: int

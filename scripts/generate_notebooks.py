@@ -3389,12 +3389,14 @@ _MC62_KN_INT = "MC62/2026-02-11/Kn values/Kn_R45_PCB_N1_0001_A_AC.txt"
 _MC62_KN_CEN = "MC62/2026-02-11/Kn values/Kn_DQ_5_18_7_250_47x50_0001_A_AC.txt"
 
 MEASUREMENTS = {
-    # --- MBB 2 Hz (NCS + CS) ---
-    # NOTE: DAQ segment labels are SWAPPED in the 2026-02-25 2Hz campaign.
-    # DAQ "CS" is physically inside the magnet (main body, TF = 0.370 T/kA).
-    # DAQ "NCS" is physically in the fringe field (TF = 0.065 T/kA).
-    # See physics_reference.md Section 3 for details.  Fix for next campaign:
-    # swap DAQ channel assignments so NCS = main body again.
+    # --- MBB 2 Hz (CS + NCS) ---
+    # NOTE: DAQ segment labels were SWAPPED in ALL campaigns up to 2026-02-25.
+    # DAQ "CS" was physically the NCS side, DAQ "NCS" was physically the CS side.
+    # Segment names here are DAQ file labels (match raw filenames).
+    # DAQ labels were SWAPPED in this campaign:
+    #   DAQ "CS"  file → physical NCS → BODY   (TF ≈ 0.386 T/kA)
+    #   DAQ "NCS" file → physical CS  → FRINGE (TF ≈ 0.065 T/kA)
+    # Fixed from the 4 Hz campaign onwards (2026-03-05).
     "MBB_2Hz_200GeV": MeasurementConfig(
         title="SPS MBB Dipole -- 200 GeV MD1, 2 Hz",
         magnet_family="MBB",
@@ -3402,8 +3404,8 @@ MEASUREMENTS = {
         output_csv_dir="MBB/2026-02-25_2Hz/200GeV",
         magnet_order=1, r_ref=0.02, l_coil=0.47, samples_per_turn=1024,
         segments=[
-            SegmentConfig("NCS", _MBB_KN_UPPSALA, is_fringe=True),
-            SegmentConfig("CS", _MBB_KN_UPPSALA),
+            SegmentConfig("CS", _MBB_KN_UPPSALA),              # body (high TF)
+            SegmentConfig("NCS", _MBB_KN_UPPSALA, is_fringe=True),  # fringe (low TF)
         ],
         data_loader="text_streaming",
         session="MBB/2026-02-25_2Hz/MBB/200 GeV/20260225_183154_SPS_MBB",
@@ -3420,8 +3422,8 @@ MEASUREMENTS = {
         output_csv_dir="MBB/2026-02-25_2Hz/26GeV",
         magnet_order=1, r_ref=0.02, l_coil=0.47, samples_per_turn=1024,
         segments=[
-            SegmentConfig("NCS", _MBB_KN_UPPSALA, is_fringe=True),
-            SegmentConfig("CS", _MBB_KN_UPPSALA),
+            SegmentConfig("CS", _MBB_KN_UPPSALA),              # body (high TF)
+            SegmentConfig("NCS", _MBB_KN_UPPSALA, is_fringe=True),  # fringe (low TF)
         ],
         data_loader="text_streaming",
         session="MBB/2026-02-25_2Hz/MBB/26 GeV/20260225_181040_SPS_MBB",
@@ -3431,14 +3433,14 @@ MEASUREMENTS = {
         energy_label="26 GeV",
         has_ffmm=True, ffmm_rotate_excludes_last=True,
     ),
-    # --- MBB Standard (NCS only) ---
+    # --- MBB Standard (CS only) ---
     "MBB_std_200GeV": MeasurementConfig(
-        title="SPS MBB Dipole -- 200 GeV MD1 Extended NCS",
+        title="SPS MBB Dipole -- 200 GeV MD1 Extended CS",
         magnet_family="MBB",
-        notebook_path="rotating_coil_analyzer/notebooks/SPS_MBB/2026-02-06_NCS_supercycle/200GeV_analysis.ipynb",
+        notebook_path="rotating_coil_analyzer/notebooks/SPS_MBB/2026-02-06_CS_supercycle/200GeV_analysis.ipynb",
         output_csv_dir="MBB/2026-02-06_supercycle/01_200_extended",
         magnet_order=1, r_ref=0.02, l_coil=0.47, samples_per_turn=1024,
-        segments=[SegmentConfig("NCS", _MBB_KN_CROSS)],
+        segments=[SegmentConfig("CS", _MBB_KN_CROSS)],
         data_loader="text_streaming",
         session="MBB/2026-02-06_supercycle/01_200_extended/20260206_144537_SPS_MBB",
         meas_subdir="20260206_144559_MBB",
@@ -3448,12 +3450,12 @@ MEASUREMENTS = {
         has_ffmm=True, ffmm_rotate_excludes_last=True,
     ),
     "MBB_std_26GeV": MeasurementConfig(
-        title="SPS MBB Dipole -- 26 GeV MD1 Extended NCS",
+        title="SPS MBB Dipole -- 26 GeV MD1 Extended CS",
         magnet_family="MBB",
-        notebook_path="rotating_coil_analyzer/notebooks/SPS_MBB/2026-02-06_NCS_supercycle/26GeV_analysis.ipynb",
+        notebook_path="rotating_coil_analyzer/notebooks/SPS_MBB/2026-02-06_CS_supercycle/26GeV_analysis.ipynb",
         output_csv_dir="MBB/2026-02-06_supercycle/03_26_extended",
         magnet_order=1, r_ref=0.02, l_coil=0.47, samples_per_turn=1024,
-        segments=[SegmentConfig("NCS", _MBB_KN_CROSS)],
+        segments=[SegmentConfig("CS", _MBB_KN_CROSS)],
         data_loader="text_streaming",
         session="MBB/2026-02-06_supercycle/03_26_extended/20260206_151808_SPS_MBB",
         meas_subdir="20260206_151827_MBB",
@@ -3560,7 +3562,7 @@ COMPARISONS = {
         title="B1, b2, b3 Comparison: 200 GeV vs 26 GeV (2 Hz)",
         notebook_path="rotating_coil_analyzer/notebooks/SPS_MBB/2026-02-25_2Hz/comparison.ipynb",
         magnet_family="MBB",
-        segments=["NCS", "CS"],
+        segments=["CS", "NCS"],
         datasets=[
             {"name": "200 GeV", "csv_dir": "MBB/2026-02-25_2Hz/200GeV"},
             {"name": "26 GeV", "csv_dir": "MBB/2026-02-25_2Hz/26GeV"},
@@ -3569,10 +3571,10 @@ COMPARISONS = {
         n_last_turns=18,
     ),
     "MBB_std_compare": ComparisonConfig(
-        title="B1, b2, b3 Comparison: 200 GeV vs 26 GeV (NCS Extended)",
-        notebook_path="rotating_coil_analyzer/notebooks/SPS_MBB/2026-02-06_NCS_supercycle/comparison.ipynb",
+        title="B1, b2, b3 Comparison: 200 GeV vs 26 GeV (CS Extended)",
+        notebook_path="rotating_coil_analyzer/notebooks/SPS_MBB/2026-02-06_CS_supercycle/comparison.ipynb",
         magnet_family="MBB",
-        segments=["NCS"],
+        segments=["CS"],
         datasets=[
             {"name": "200 GeV", "csv_dir": "MBB/2026-02-06_supercycle/01_200_extended"},
             {"name": "26 GeV", "csv_dir": "MBB/2026-02-06_supercycle/03_26_extended"},

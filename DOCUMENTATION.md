@@ -1,6 +1,6 @@
 # Rotating Coil Analyzer - Comprehensive Documentation
 
-**Date**: 2026-02-23
+**Date**: 2026-03-05
 **Version**: Current master branch
 **Author**: Auto-generated from full repository analysis
 
@@ -70,11 +70,13 @@ rotating_coil_analyzer/
   │   ├── physics_plots.py   Physics analysis panel (hysteresis, TF, Ld, eddy)
   │   ├── comparison.py      Measurement comparison panel
   │   └── log_view.py        HTML-based logging widget
+  ├── presentation/      PowerPoint report generation helpers
+  │   └── pptx_helpers.py     Slide layout and chart utilities
   ├── validation/         Golden-standard validation tools
   │   ├── golden_runner.py     Dataset scanning API
   │   └── golden_streaming.py  Streaming validation workflow
   ├── tests/              126 tests, all passing
-  ├── notebooks/          24 analysis notebooks (4 magnets, 6 campaigns)
+  ├── notebooks/          26 analysis notebooks (4 magnets, 6 campaigns)
   └── scripts/            Standalone utility scripts (generate_notebooks.py, etc.)
 ```
 
@@ -338,7 +340,9 @@ compute_legacy_kn_per_turn(
 
 **Eddy-Current Fitting**:
 - `eddy_model()`: B(t) = B∞ + A*exp(-t/τ)
-- `double_eddy_model()`: Two-exponential variant
+- `double_eddy_model()`: Two-exponential variant (2 time constants)
+- `triple_eddy_model()`: Three-exponential variant (3 time constants)
+- `validate_eddy_model_selection()`: AICc-based model selection across 1/2/3-tau fits
 - `fit_eddy_per_run()`: Two-pass MAD-clipped fitting with quality classification
 
 **Diagnostics**:
@@ -432,11 +436,11 @@ Full provenance containers:
 | Tab | Panel | Purpose |
 |-----|-------|---------|
 | 0 | Catalog | Load measurement folder, browse runs/segments |
-| 1 | Harmonics | FFT computation, preprocessing options, amplitude/phase plots |
-| 2 | Coil Cal | Load/compute Kn from segment TXT or head CSV |
-| 3 | Merge | Apply Kn, select Abs/Cmp per order, normalize, export CSV |
-| 4 | Plots | Interactive time-series exploration (no synthetic resampling) |
-| 5 | Plateau Detection | Detect current plateaus in streaming supercycle data using block-averaged current range with 3-rule detection |
+| 1 | Plateau Detection | Detect current plateaus in streaming supercycle data using block-averaged current range with 3-rule detection |
+| 2 | Harmonics | FFT computation, preprocessing options, amplitude/phase plots |
+| 3 | Coil Calibration | Load/compute Kn from segment TXT or head CSV |
+| 4 | Harmonic Merge | Apply Kn, select Abs/Cmp per order, normalize, export CSV |
+| 5 | Raw Signal Plots | Interactive time-series exploration (no synthetic resampling) |
 | 6 | Physics Plots | Hysteresis loops, transfer function (B/I), differential inductance (Ld = dB1/dI), eddy-current settling analysis |
 | 7 | Comparison | Compare two exported CSV measurements side-by-side with statistical analysis |
 
@@ -483,14 +487,14 @@ Full provenance containers:
 
 ## 9. Notebooks & Campaigns
 
-### 9.1 Inventory (24 active notebooks)
+### 9.1 Inventory (26 active notebooks)
 
 | Magnet | Campaign | Notebooks | Type |
 |--------|----------|-----------|------|
 | LEAR MC62 | 2026-02-11 to 17 | 9 | Dipole (m=1), C-shaped, warm |
 | LIU BTP8 | 2019-07-17 | 2 | Quadrupole (m=2), golden standard |
 | SM18 | 2024-12-04 | 1 | Dipole (m=1), superconducting |
-| SPS MBB | 2025-12-12 to 2026-02-25 | 11 | Dipole (m=1), superconducting |
+| SPS MBB | 2025-12-12 to 2026-02-25 | 12 | Dipole (m=1), H-type |
 | Tools | N/A | 2 | GUI docs, Kn utility |
 
 Superseded notebooks are archived in `_archive/` subdirectories (gitignored).
@@ -498,6 +502,9 @@ Superseded notebooks are archived in `_archive/` subdirectories (gitignored).
 Generated notebooks (SPS MBB analysis/comparison, LEAR MC62 analysis/comparison) are
 produced by `scripts/generate_notebooks.py`. Run `python scripts/generate_notebooks.py --all`
 to regenerate all of them.
+
+Additional SPS MBB 2Hz notebooks (body_vs_integrated, integrated_field,
+turn_averaging_sensitivity) are hand-written and not auto-generated.
 
 ### 9.2 Magnet Parameters
 
@@ -771,6 +778,9 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 | `FdiTransitionCheck` | Diagnostic result dataclass for FDI stuck-channel detection |
 | `diagnose_fdi_transitions(...)` | Detect FDI stuck-channel issues at plateau transitions |
 | `eddy_model(t, B_inf, A, tau)` | B(t) = B_inf + A*exp(-t/tau) for curve_fit |
+| `double_eddy_model(t, B_inf, A1, tau1, A2, tau2)` | Two-exponential eddy model |
+| `triple_eddy_model(t, ...)` | Three-exponential eddy model |
+| `validate_eddy_model_selection(...)` | AICc-based model selection across 1/2/3-tau fits |
 | `EddyFitResult` | Result dataclass (tau, A, B_inf, R2, quality) |
 | `fit_eddy_per_run(...)` | Fit single-exponential eddy model with 2-pass MAD clipping |
 | `find_contiguous_groups(mask)` | Find contiguous True-groups in boolean mask |
@@ -780,6 +790,7 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 | `plot_hysteresis(ax, summ, ...)` | Hysteresis loop plot |
 | `compute_level_stats(df, label)` | Mean/std of I, B1, b2, b3, TF per operating point |
 | `diff_sigma(stats1, stats2, key)` | Difference with propagated error and sigma significance |
+| `SPS_CURRENT_THRESHOLDS` | Default current thresholds dict for SPS cycle classification |
 
 ### 14.4 Ingest (`ingest/`)
 
@@ -853,4 +864,4 @@ Measurement.AP1.FDIs = TABLE{NCS\t0\t2\t0.7\nCS\t1\t3\t0.7}
 
 ---
 
-*End of documentation. Generated 2026-02-23 from full repository analysis including comparison with FFMM C++ golden standard, Pentella analyzer, and Bottura's theoretical framework.*
+*End of documentation. Updated 2026-03-05 from full repository analysis including comparison with FFMM C++ golden standard, Pentella analyzer, and Bottura's theoretical framework.*

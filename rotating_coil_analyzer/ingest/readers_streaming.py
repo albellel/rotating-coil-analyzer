@@ -78,6 +78,35 @@ class StreamingReader:
         aperture_id: Optional[int] = None,
         magnet_order: Optional[int] = None,
     ) -> SegmentFrame:
+        """Read a streaming acquisition file and return a SegmentFrame.
+
+        Supports binary (float32/float64) and ASCII (txt/csv) formats.
+        Auto-detects column layout, flux channel assignment (abs/cmp by
+        robust amplitude), and current channel.  Time is always taken
+        from column 0 -- no synthetic time is ever generated.
+
+        Parameters
+        ----------
+        file_path : str or Path
+            Path to the acquisition file (binary or text).
+        run_id : str
+            Run identifier (propagated to SegmentFrame metadata).
+        segment : str
+            Segment identifier (e.g. "NCS", "CS", "Integral").
+        samples_per_turn : int
+            Number of samples per coil revolution.
+        shaft_speed_rpm : float
+            Nominal shaft speed in RPM (used for dt validation).
+        aperture_id : int, optional
+            Physical aperture id (default None).
+        magnet_order : int, optional
+            Main harmonic order (default None).
+
+        Returns
+        -------
+        SegmentFrame
+            Loaded segment with columns t, df_abs, df_cmp, I.
+        """
         path = Path(file_path).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(str(path))

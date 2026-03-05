@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""Harmonics GUI tab — FFT computation, data-quality cuts, and per-turn harmonic tables.
+
+Provides interactive controls for:
+- Turn-level data quality (DQ) cuts (outlier rejection, first/last turn trimming)
+- FFT computation on absolute and compensated flux channels
+- Amplitude/phase and normal/skew (b_n/a_n) result tables per turn and per plateau
+"""
+
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence, Dict
 
@@ -31,6 +39,8 @@ _ACTIVE_HARMONICS_PANEL: Optional[w.Widget] = None
 
 @dataclass
 class HarmonicsState:
+    """Mutable state for the Harmonics GUI tab."""
+
     segf: Optional[SegmentFrame] = None
     tb: Any = None
     valid_turn: Optional[np.ndarray] = None

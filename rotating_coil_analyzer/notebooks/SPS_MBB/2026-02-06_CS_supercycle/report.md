@@ -1,16 +1,19 @@
-# SPS MBB Dipole -- NCS Supercycle -- Feb 6, 2026
+# SPS MBB Dipole -- CS Supercycle -- Feb 6, 2026
 
 ## Overview
-Full streaming supercycle analysis of the SPS MBB dipole (NCS segment). The measurement captures 20 repetitions of the supercycle structure: LHC_pilot -> MD1 -> SFTPRO. Automatic plateau detection identifies flat-current turns for harmonic analysis. Extended sessions at both 200 GeV and 26 GeV beam energies.
+Full streaming supercycle analysis of the SPS MBB dipole (CS segment). The measurement captures 20 repetitions of the supercycle structure: LHC_pilot -> MD1 -> SFTPRO. Automatic plateau detection identifies flat-current turns for harmonic analysis. Extended sessions at both 200 GeV and 26 GeV beam energies.
+
+**Note:** The segment was originally labelled "NCS" in the DAQ but is physically the
+connection side (CS). Labels corrected 2026-03-05.
 
 ## Notebooks
 
 | Notebook | Description |
 |----------|-------------|
-| `NCS_harmonics.ipynb` | Single-file preview (data quality check, not for quantitative analysis) |
-| `NCS_supercycle.ipynb` | Full supercycle analysis with plateau detection |
-| `200_extended_NCS.ipynb` | Extended 200 GeV session analysis |
-| `26_extended_NCS.ipynb` | Extended 26 GeV session analysis |
+| `CS_harmonics.ipynb` | Single-file preview (data quality check, not for quantitative analysis) |
+| `NCS_supercycle.ipynb` | Full supercycle analysis with plateau detection (archived, uses old label) |
+| `200_extended_NCS.ipynb` | Extended 200 GeV session analysis (archived, uses old label) |
+| `26_extended_NCS.ipynb` | Extended 26 GeV session analysis (archived, uses old label) |
 | `b3_settling.ipynb` | Eddy-current b3 settling analysis |
 | `b3_settling_200GeV.ipynb` | Eddy-current b3 settling at 200 GeV (detailed) |
 
@@ -18,7 +21,7 @@ Full streaming supercycle analysis of the SPS MBB dipole (NCS segment). The meas
 
 | Parameter | Value |
 |-----------|-------|
-| Magnet | SPS MBB dipole (m=1), NCS segment |
+| Magnet | SPS MBB dipole (m=1), CS segment |
 | Kn calibration | `Kn_values_Seg_Main_A_AC.txt` (15 harmonics, cross-session from Dec 2025) |
 | Reference radius | 0.02 m |
 | Plateau threshold | I range < 2.5 A |

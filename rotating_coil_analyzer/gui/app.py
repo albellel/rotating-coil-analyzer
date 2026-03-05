@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+"""Main GUI entry point — eight-tab ipywidgets application for rotating-coil analysis.
+
+Tabs: Catalog, Plateau Detection, Harmonics, Coil Calibration, Harmonic Merge,
+Raw Signal Plots, Physics Plots, Comparison.
+
+Launch in a Jupyter/VS Code notebook cell::
+
+    %matplotlib widget
+    from rotating_coil_analyzer.gui.app import build_gui
+    build_gui()
+"""
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -85,6 +97,8 @@ def _browse_for_folder() -> Optional[str]:
 
 @dataclass
 class CatalogState:
+    """Mutable state for the Catalog GUI tab."""
+
     cat: Optional[MeasurementCatalog] = None
     segf: Optional[SegmentFrame] = None
     seg_path: Optional[Path] = None

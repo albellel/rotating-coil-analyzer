@@ -56,7 +56,31 @@ KnIndex = Tuple[int, int]  # (array_pos, coil_pos)
 
 @dataclass(frozen=True)
 class CoilGeom:
-    """Geometry and calibration parameters for a single coil."""
+    """Geometry and calibration parameters for a single coil.
+
+    Attributes
+    ----------
+    Nt : float
+        Number of turns in the coil winding.
+    Win : float
+        Inner width of the coil [m].
+    Lin : float
+        Inner length of the coil [m].
+    T : float
+        Winding thickness [m].
+    S : float
+        Magnetic surface area [m²].
+    ro : float
+        Calibrated (or design) coil radius [m].
+    alpha : float
+        Coil angular position [rad].
+    beta : float
+        Coil beta angle [rad] (0 if not specified).
+    fi : float
+        Coil tilt angle [rad] (0 if not specified).
+    pZ : float
+        Z position of the coil in the measurement head [m].
+    """
 
     Nt: float
     Win: float
@@ -156,8 +180,27 @@ def compute_head_kn_from_csv(
 ) -> HeadKnData:
     """Compute per-coil $k_n$ vectors from a measurement-head CSV.
 
-    Parameters mirror the legacy C++ signature:
+    Mirrors the legacy C++ signature
     ``loadHeadKn(csvPath, warm, N_multipoles, useDesignRadius, ...)``.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the measurement-head geometry CSV file.
+    warm_geometry : bool
+        If True, use warm (room-temperature) dimensions; if False, apply
+        cold (cryogenic) scaling factors to geometry.
+    n_multipoles : int
+        Number of multipole orders to compute (1..n_multipoles).
+    use_design_radius : bool
+        If True, fall back to design radius when calibrated radius is missing.
+    strict_header : bool
+        If True, require the CSV header to match the legacy column names exactly.
+
+    Returns
+    -------
+    HeadKnData
+        Per-coil kn vectors, magnetic lengths, and Z positions.
     """
 
     # Pandas with dtype=str prevents NaN -> float pitfalls for empty cells.

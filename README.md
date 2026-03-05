@@ -95,7 +95,7 @@ The GUI has eight tabs:
 
 ### Requirements
 - Python 3.10+
-- Common scientific stack: `numpy`, `pandas`, `matplotlib`, `ipywidgets`
+- Common scientific stack: `numpy`, `pandas`, `matplotlib`, `scipy`, `ipywidgets`
 - `ipympl` for interactive zoomable plots in Jupyter notebooks
 - Jupyter environment (recommended for the GUI and analysis notebooks)
 
@@ -132,16 +132,16 @@ Example and analysis notebooks are in `rotating_coil_analyzer/notebooks/`:
 
 ### SPS MBB dipole
 - `SPS_MBB/2025-12-12_MBB/` -- CS and NCS harmonic analysis (Dec 2025 campaign)
-- `SPS_MBB/2026-02-06_NCS_supercycle/` -- NCS harmonics, 200 GeV & 26 GeV analysis, comparison (Feb 2026 campaign)
-- `SPS_MBB/2026-02-25_2Hz/` -- 200 GeV & 26 GeV analysis, comparison (Feb 2026, 2 Hz rotation)
+- `SPS_MBB/2026-02-06_CS_supercycle/` -- CS harmonics, 200 GeV & 26 GeV analysis, comparison (Feb 2026 supercycle campaign)
+- `SPS_MBB/2026-02-25_2Hz/` -- 200 GeV & 26 GeV analysis, comparison, body-vs-integrated field, turn-averaging sensitivity (Feb 2026, 2 Hz rotation)
 
 ### LEAR MC62 dipole
 - `LEAR_MC62/00_system_check/` -- System check (10 turns)
 - `LEAR_MC62/01_with_shims/` -- Staircase analysis + eddy-current settling (with shims, 1 Hz)
-- `LEAR_MC62/02_without_shims/` -- Staircase analysis + FFMM parity (without shims, 1 Hz)
+- `LEAR_MC62/02_without_shims/` -- Staircase analysis + FFMM parity validation (without shims, 1 Hz)
 - `LEAR_MC62/03_2Hz_afternoon/` -- Streaming staircase analysis + eddy-current (2 Hz)
 - `LEAR_MC62/04_2Hz_morning/` -- Reproducibility repeat (2 Hz, morning)
-- `LEAR_MC62/comparisons/` -- Shims effect (01 vs 02), reproducibility (03 vs 04), 2022 vs 2024
+- `LEAR_MC62/comparisons/` -- Shims effect (01 vs 02), reproducibility (03 vs 04), 2022 vs 2024 cross-campaign
 
 ### LIU BTP8 quadrupole
 - `LIU_BTP8/2019-07-17/b3_sextupole.ipynb` -- b3 sextupole analysis
@@ -171,6 +171,9 @@ For **streaming (continuous) acquisition** measurements where the magnet current
 | `diagnose_fdi_transitions` | Detect FDI stuck-channel issues at plateau boundaries |
 | `fit_eddy_per_run` | Fit exponential eddy-current settling model per run |
 | `eddy_model` | Exponential model `B(t) = B_inf + A*exp(-t/tau)` for `curve_fit` |
+| `double_eddy_model` | Two-exponential model `B(t) = B_inf + A1*exp(-t/tau1) + A2*exp(-t/tau2)` |
+| `triple_eddy_model` | Three-exponential model (3 time constants) |
+| `validate_eddy_model_selection` | AICc-based model selection across 1/2/3-tau fits |
 | `EddyFitResult` | Dataclass result container for eddy fits (B_inf, A, tau, pcov) |
 | `ba_table_from_C` | Convert complex coefficients to legacy B/A DataFrame (all Tesla) |
 | `mixed_format_table` | Bottura Section 3.7 mixed-format DataFrame (Tesla for n <= m, units for n > m) |
@@ -300,7 +303,8 @@ rotating_coil_analyzer/
 │   ├── channel_detect.py    #   Automatic flux/current channel detection
 │   └── discovery.py         #   Measurement folder discovery
 ├── models/                 # Data models (SegmentFrame, MeasurementCatalog, AnalysisProfile)
-├── notebooks/              # Jupyter analysis & example notebooks
+├── presentation/           # PowerPoint report generation helpers
+├── notebooks/              # Jupyter analysis & example notebooks (26 active)
 ├── tests/                  # Unit tests (126 tests)
 └── validation/             # Golden reference validation (C++ parity)
 scripts/

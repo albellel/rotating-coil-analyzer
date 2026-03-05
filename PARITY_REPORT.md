@@ -1,6 +1,6 @@
 # Machine-Precision Parity Report
 
-**Date**: 2026-02-23
+**Date**: 2026-03-05
 **Scope**: All golden standard datasets in the repository
 **Requirement**: Parity at machine precision (float64 ~1e-15 relative), not at unit level (1e-4)
 

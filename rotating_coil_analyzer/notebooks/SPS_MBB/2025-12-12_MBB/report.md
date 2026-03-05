@@ -1,7 +1,9 @@
 # SPS MBB Dipole -- Dec 12, 2025
 
 ## Overview
-Analysis of the SPS MBB dipole from measurement session `20251212_171026_SPS_MBA`. Both CS (compensated side) and NCS (non-compensated side) segments are processed through the full Kn pipeline.
+Analysis of the SPS MBB dipole from measurement session `20251212_171026_SPS_MBA`. Both CS (connection side) and NCS (non-connection side) segments are processed through the full Kn pipeline.
+
+**Note:** DAQ segment labels were swapped in all campaigns up to 2026-02-25 (what the DAQ called "CS" was physically the NCS side, and vice versa). For this pre-2Hz campaign, both segments were inside the magnet body so the swap had no practical impact on results.
 
 ## Configuration
 

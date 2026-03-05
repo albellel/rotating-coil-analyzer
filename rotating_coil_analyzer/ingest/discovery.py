@@ -173,6 +173,31 @@ class MeasurementDiscovery:
     strict: bool = True
 
     def build_catalog(self, selected_dir: str | Path) -> MeasurementCatalog:
+        """Discover and build a measurement catalog from a folder.
+
+        Locates ``Parameters.txt`` (in the selected folder or up to 2 parent
+        levels), parses FDI-to-segment mappings, discovers streaming and
+        plateau data files, and assembles a :class:`MeasurementCatalog`.
+
+        Parameters
+        ----------
+        selected_dir : str or Path
+            Any folder inside the measurement tree.  ``Parameters.txt`` is
+            searched upward from this location.
+
+        Returns
+        -------
+        MeasurementCatalog
+            Fully populated catalog with segment specs, file paths, and
+            metadata from ``Parameters.txt``.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the directory does not exist or ``Parameters.txt`` is not found.
+        ValueError
+            If required FDI tables are missing or malformed (strict mode).
+        """
         selected = Path(selected_dir).expanduser().resolve()
         if not selected.exists() or not selected.is_dir():
             raise FileNotFoundError(f"Not a directory: {selected}")

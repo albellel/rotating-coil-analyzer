@@ -142,6 +142,34 @@ class PlateauReader:
         aperture_id: Optional[int] = None,
         magnet_order: Optional[int] = None,
     ) -> SegmentFrame:
+        """Read plateau (DC) measurement files and return a SegmentFrame.
+
+        Discovers all plateau files matching the representative filename
+        pattern, reads each one, trims to integer turns, and concatenates
+        them with plateau metadata (plateau_id, plateau_step, plateau_I_hint).
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to any one of the plateau raw_measurement_data files.
+            All matching files in the same directory are auto-discovered.
+        run_id : str
+            Run identifier (propagated to SegmentFrame metadata).
+        segment : str
+            Segment identifier (e.g. "Integral", "Central").
+        samples_per_turn : int
+            Number of samples per coil revolution.
+        aperture_id : int, optional
+            Physical aperture id (default None).
+        magnet_order : int, optional
+            Main harmonic order (default None).
+
+        Returns
+        -------
+        SegmentFrame
+            Concatenated segment with columns t, df_abs, df_cmp, I,
+            plateau_id, plateau_step, plateau_I_hint.
+        """
         if self.config.align_time or self.config.strict_time:
             raise ValueError(
                 "Plateau reader: align_time/strict_time are disallowed because they imply modifying or "
