@@ -142,7 +142,12 @@ Example and analysis notebooks are in `rotating_coil_analyzer/notebooks/`:
 - `LEAR_MC62/02_without_shims/` -- Staircase analysis + FFMM parity validation (without shims, 1 Hz)
 - `LEAR_MC62/03_2Hz_afternoon/` -- Streaming staircase analysis + eddy-current (2 Hz)
 - `LEAR_MC62/04_2Hz_morning/` -- Reproducibility repeat (2 Hz, morning)
-- `LEAR_MC62/comparisons/` -- Shims effect (01 vs 02), reproducibility (03 vs 04), 2022 vs 2024 cross-campaign
+- `LEAR_MC62/05_4Hz/` -- Staircase analysis at 4 Hz (~238 RPM), FFMM golden standard, eddy-current settling (Mar 2026)
+  - `analysis.ipynb` -- Full analysis: plateau detection, harmonics, FFMM parity, eddy settling, hysteresis
+  - `marusov_reconstruction.ipynb` -- R&D: Marusov (2013) 2D temporal decomposition. Identity validated at machine epsilon, temporal filtering, full-stream comparison
+  - `eddy_transfer_function.ipynb` -- R&D: Multi-tau eddy fitting (1/2/3-tau, AICc selection), eddy amplitude vs dI/dt, static magnetization, model validation
+  - `marusov_guide.md` -- Plain-language guide to Marusov's 2D Fourier decomposition (theory, formulas, implementation, practical recommendations)
+- `LEAR_MC62/comparisons/` -- Shims effect (01 vs 02), reproducibility (03 vs 04), speed effect (1 Hz vs 4 Hz), 2022 vs 2024 cross-campaign
 
 ### LIU BTP8 quadrupole
 - `LIU_BTP8/2019-07-17/b3_sextupole.ipynb` -- b3 sextupole analysis
@@ -310,6 +315,8 @@ rotating_coil_analyzer/
 └── validation/             # Golden reference validation (C++ parity)
 scripts/
 ├── generate_notebooks.py      # Unified notebook generator (SPS MBB + LEAR MC62)
+├── generate_marusov_nb.py     # Marusov 2D reconstruction R&D notebook generator (MC62 4 Hz)
+├── generate_rd_notebooks.py   # Eddy transfer function R&D notebook generator (MC62 4 Hz)
 └── btp8_bruteforce_turns.py   # Brute-force turns-per-revolution search for BTP8
 ```
 
@@ -328,11 +335,13 @@ scripts/
 The analysis algorithms follow the standard procedures described in:
 
 - **Bottura, L.** -- *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets -- Part I: Harmonics* (included in `theory/` folder)
+- **Marusov, I.** (2013) -- *Measurement of a time-periodic magnetic field using a rotating coil*, NIM-A 711, 121--123. See [marusov_guide.md](rotating_coil_analyzer/notebooks/LEAR_MC62/05_4Hz/marusov_guide.md) for a comprehensive plain-language explanation.
 
 Key formulas implemented:
 - FFT-based harmonic extraction: `f_n = 2 * FFT(flux) / N`
 - Kn application: `C_n = f_n / conj(kn) * Rref^(n-1)`
 - Phase rotation: `C_rotated = C * exp(-i * phi * k)` for all harmonics k=1..H (Bottura Eq. AIV.6)
 - Center location (CEL) and feeddown corrections
+- Marusov temporal decomposition: `σ_{n,k} = (1/M) Σ_j C_n(j) exp(-i 2π k j / M)` — separates spatial and temporal content
 
 The implementation achieves **machine-precision parity** (float64 rounding floor) with the legacy C++ analyzer on SM18 streaming (285,095 turns, B1 diff = 1.82e-12 T) and LIU BTP8 plateau (222 turns, B1/A1 at ~1e-18 T). See [PARITY_REPORT.md](PARITY_REPORT.md) for full details.

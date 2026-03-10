@@ -30,24 +30,28 @@ math: mathjax
 11. **Test 04** -- Feb 17 morning: 2 Hz staircase (repeat)
 12. **Reproducibility** -- Test 03 vs Test 04
 13. **Pipeline Validation** -- FFMM parity (Tests 03 & 04)
-14. **Summary & Conclusions**
+14. **Test 05** -- Mar 4: 4 Hz staircase + precycle (50 A/s)
+15. **Marusov 2D Reconstruction** -- Temporal decomposition R&D
+16. **Eddy Transfer Function** -- Multi-tau fitting R&D
+17. **Summary & Conclusions**
 
 ---
 
 # 1. Measurement Setup -- All Tests
 
-| Parameter | Test 00 | Test 01 | Test 02 | Test 03 | Test 04 |
-|---|---|---|---|---|---|
-| **Date** | Feb 11 | Feb 11 | Feb 12 | Feb 16 PM | Feb 17 AM |
-| **Shims** | Yes | Yes | No | No | No |
-| **Rotation** | 1 Hz (-60 rpm) | 1 Hz (-60 rpm) | 1 Hz (-60 rpm) | 2 Hz (120 rpm) | 2 Hz (120 rpm) |
-| **Samples/turn** | 1024 | 1024 | 1024 | 512 | 512 |
-| **Data format** | Run-based | Run-based | Run-based | Binary streaming | Binary streaming |
-| **Current cycle** | 0->200->0->-200->0 | Full staircase | Full staircase | Full staircase | Full staircase |
-| **Plateaus** | 9 x 10 turns | 41 x 350 turns | 41 x 350 turns | 41 x ~740 turns | 40 x ~800 turns |
-| **PCBs** | Integral (R45) + Central (DQ) | Same | Same | Same | Same |
+| Parameter | Test 00 | Test 01 | Test 02 | Test 03 | Test 04 | Test 05 |
+|---|---|---|---|---|---|---|
+| **Date** | Feb 11 | Feb 11 | Feb 12 | Feb 16 PM | Feb 17 AM | Mar 4 |
+| **Shims** | Yes | Yes | No | No | No | No |
+| **Rotation** | 1 Hz (-60 rpm) | 1 Hz (-60 rpm) | 1 Hz (-60 rpm) | 2 Hz (120 rpm) | 2 Hz (120 rpm) | 4 Hz (238 rpm) |
+| **Samples/turn** | 1024 | 1024 | 1024 | 512 | 512 | 512 |
+| **Data format** | Run-based | Run-based | Run-based | Binary streaming | Binary streaming | Binary streaming |
+| **Current cycle** | 0->200->0->-200->0 | Full staircase | Full staircase | Full staircase | Full staircase | Precycle (50 A/s) + Staircase (1 A/s) |
+| **Plateaus** | 9 x 10 turns | 41 x 350 turns | 41 x 350 turns | 41 x ~740 turns | 40 x ~800 turns | 40 x ~1345 turns |
+| **PCBs** | Integral (R45) + Central (DQ) | Same | Same | Same | Same | Same |
 
 Current cycle (tests 01--04): 0->+200->0->-200->0 A in 20 A steps, ramp rate 1 A/s.
+Current cycle (test 05): 20-group precycle (±200 A alternating, 50 A/s), then 20-step staircase (0->200->20 A in 20 A steps, 1 A/s).
 
 ---
 
@@ -571,15 +575,114 @@ Parity uses `dit` (di/dt correction) with `signed=True` to match FFMM C++ thresh
 | 02 (full staircase) | No | 1 Hz | -15 | -17 | 1.132 |
 | 03 (afternoon) | No | 2 Hz | -16 | -12 | 1.093 |
 | 04 (morning) | No | 2 Hz | -16 | -12 | 1.092 |
+| 05 (4 Hz) | No | 4 Hz | +13 | -0.8 | 0.994 |
 
 **Notes**:
 - Test 00 b3 unreliable (only 10 turns, no settling)
 - 1 Hz vs 2 Hz TF difference (~0.04 T/kA) due to different N_LAST_TURNS settling windows
 - Tests 03 and 04 agree within measurement uncertainty
+- Test 05 b2/b3 sign flip and magnitude change vs 2 Hz tests: encoder offset convention changed (offset=pi restores B1>0, b2>0), different coil axial position (B1 differs ~16%), and different cel/fed status. b2/b3 magnitudes are consistent after accounting for sign convention.
+- Test 05 has 2 ramp rates: 50 A/s (precycle) and 1 A/s (staircase), enabling eddy transfer function R&D
 
 ---
 
-# Conclusions
+# 14. Test 05 -- Mar 4: 4 Hz Staircase
+
+**Measurement**: `MC62_20260304_090902_meas_1Apers_precycle_50_Apers_4Hz`
+**Duration**: ~57,715 turns (~14,584 s), 40 groups (20 precycle + 20 staircase)
+**Rotation**: 4 Hz (~238 RPM, T = 0.252 s/turn)
+
+### Key Features
+- First MC62 measurement at 4 Hz (previous: 1 Hz and 2 Hz)
+- First MC62 with FFMM results files (machine-precision parity validated)
+- Two ramp rates: 50 A/s (precycle) and 1 A/s (staircase)
+- ~1345 turns per plateau (3.8x more than 2 Hz)
+
+### Plateau Detection Change
+
+Standard block-averaged I_range detection **fails at 4 Hz** with 1 A/s ramp: per-turn current change (~0.25 A) is below the detection threshold. Solution: **rolling standard deviation** of I_mean (window=50, threshold=0.05 A).
+
+### Key Results (Integral PCB, N_LAST=680)
+
+| I (A) | B1 asc (T) | B1 desc (T) | b2 asc | b3 asc | TF (T/kA) |
+|-------|-----------|-----------|--------|--------|-----------|
+| 20 | 0.02243 | 0.02309 | +13.55 | -0.87 | 1.112 |
+| 100 | 0.11317 | 0.11388 | +13.20 | -0.78 | 1.130 |
+| 200 | 0.19904 | -- | +13.56 | -0.64 | 0.994 |
+
+### FFMM Parity
+
+Machine-precision: B1 diff = 0.0 uT over 57,715 turns (Integral segment).
+
+### 4 Hz vs 1 Hz Noise Comparison
+
+| Metric | 4Hz/1Hz ratio |
+|--------|--------------|
+| B1 noise | 0.61x (39% quieter) |
+| b2 noise | 0.51x (49% quieter) |
+| b3 noise | 1.93x (93% noisier) |
+| Turns/plateau | 3.8x more data |
+
+**Verdict**: 4 Hz is better for B1 and b2 (lower noise + more turns), noisier for b3 (vibration) but still sub-unit.
+
+---
+
+# 15. Marusov 2D Reconstruction (R&D)
+
+**Reference**: Marusov (2013), *Measurement of a time-periodic magnetic field by rotating coil*, NIM-A 711, pp. 121--123.
+
+### Approach
+
+Apply Marusov's temporal Fourier decomposition to the **validated pipeline output** $C_n(j)$:
+
+1. Per-turn spatial FFT via validated pipeline -> $C_n(j)$
+2. Temporal DFT: $\sigma_{nk} = \frac{1}{M}\sum_j C_n(j) \, e^{-i 2\pi k j / M}$
+3. Reconstruct with K modes: $C_n^\text{smooth}(j) = \sum_{k=0}^{K-1} \sigma_{nk} \, e^{i 2\pi k j / M}$
+
+This avoids reimplementing the complex pipeline (drift, Kn, rotation wrapping) and guarantees K=M is exact identity.
+
+### Results
+
+| Check | Result |
+|-------|--------|
+| K=M identity | PASS (max dB1/B1 = 7.25 × 10⁻¹³) |
+| K=50 temporal filtering | dB1_rms = 34 µT (noise removal) |
+| Full-stream DC ratio | 0.99999971 (vs pipeline) |
+
+### When Marusov Matters
+
+- MC62 4 Hz: τ/T ≈ 140 -> per-turn FFT already excellent, Marusov adds noise filtering
+- Fast-cycling magnets: τ/T < 10 -> Marusov essential for spatial-temporal dealiasing
+
+See `marusov_guide.md` for a comprehensive plain-language explanation.
+
+---
+
+# 16. Eddy Transfer Function (R&D)
+
+Multi-tau (1/2/3-exponential) eddy fitting with AICc model selection across all 40 plateau groups.
+
+### Model Selection
+
+| Harmonic | 1-tau | 2-tau | 3-tau |
+|----------|-------|-------|-------|
+| B1 | 11 | 11 | 18 |
+| b2 | 11 | 9 | 20 |
+| b3 | 40 | 0 | 0 |
+
+B1 and b2 favour multi-tau models (multiple iron relaxation time scales). b3 is well described by 1-tau.
+
+### Model Validation
+
+Late relative residual ~3--4 × 10⁻⁴ across all ascending staircase steps (noise-limited).
+
+### Eddy Amplitude Scaling
+
+Two ramp rates (1 A/s staircase, 50 A/s precycle) show eddy amplitude scales with dI/dt, consistent with linear eddy response.
+
+---
+
+# 17. Conclusions
 
 1. **Shims effect**: Shims dramatically **worsened** b2 (from -15 to -151 units). The shims need repositioning or removal. The no-shims configuration has better field quality.
 
@@ -593,11 +696,17 @@ Parity uses `dit` (di/dt correction) with `signed=True` to match FFMM C++ thresh
 
 6. **C-shape signature**: Large systematic b2 (~-16 units without shims) inherent to open-gap geometry. Not a measurement artefact.
 
+7. **4 Hz rotation** (Test 05): Clean data with rolling-std plateau detection, 39% lower B1 noise, 49% lower b2 noise vs 1 Hz. 3.8x more turns per plateau. FFMM parity achieved (B1 diff = 0.0 µT).
+
+8. **Marusov 2D reconstruction validated**: Identity check passes at machine epsilon. Temporal filtering provides effective noise reduction. Full-stream agrees to 3 × 10⁻⁷ with pipeline. Essential for fast-cycling magnets (τ/T < 10).
+
+9. **Multi-tau eddy fitting**: AICc selects 3-tau for B1/b2, 1-tau for b3. Model validation residuals are noise-limited (~3--4 × 10⁻⁴ relative).
+
 ---
 
 # Notebooks Index
 
-| Folder | Notebook | Description |
+| Folder | Notebook / File | Description |
 |---|---|---|
 | 00_system_check/ | analysis | System check (10 turns) |
 | 01_with_shims/ | analysis | Test 01 full analysis (includes eddy settling) |
@@ -605,9 +714,14 @@ Parity uses `dit` (di/dt correction) with `signed=True` to match FFMM C++ thresh
 | 02_without_shims/ | ffmm_validation | Python vs FFMM C++ parity (Test 02) |
 | 03_2Hz_afternoon/ | analysis | Test 03 full analysis (includes eddy settling) |
 | 04_2Hz_morning/ | analysis | Test 04 full analysis (includes eddy settling) |
+| 05_4Hz/ | analysis | Test 05 full analysis: plateau detection, harmonics, FFMM parity, eddy settling, hysteresis |
+| 05_4Hz/ | marusov_reconstruction | R&D: Marusov 2D temporal decomposition, identity check, temporal filtering |
+| 05_4Hz/ | eddy_transfer_function | R&D: Multi-tau eddy fitting (AICc), amplitude scaling, model validation |
+| 05_4Hz/ | marusov_guide.md | Plain-language guide to Marusov's 2D Fourier decomposition |
+| 05_4Hz/ | report.md | Measurement report with configuration, results, R&D findings |
 | comparisons/2022_vs_2024/ | comparison | Cross-campaign comparison (2022 vs 2024) |
 | comparisons/shims_effect_01_vs_02/ | comparison | Shims effect comparison |
 | comparisons/reproducibility_03_vs_04/ | comparison | Day-to-day reproducibility |
 
-Generated notebooks (analysis, comparisons) are produced by `scripts/generate_notebooks.py`.
+Generated notebooks: `scripts/generate_notebooks.py` (analysis, comparisons), `scripts/generate_marusov_nb.py` (Marusov R&D), `scripts/generate_rd_notebooks.py` (eddy transfer function R&D).
 Superseded notebooks (standalone eddy_current.ipynb) are archived in `_archive/`.

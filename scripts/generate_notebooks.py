@@ -3550,6 +3550,31 @@ MEASUREMENTS = {
         ffmm_rotate_excludes_last=False,
         has_eddy=True, has_inductance=True,
     ),
+    # --- MC62 Binary Streaming (05, 4 Hz) ---
+    "MC62_05_4Hz": MeasurementConfig(
+        title="LEAR MC62 -- 05 Staircase 4 Hz (March 4)",
+        magnet_family="MC62",
+        notebook_path="rotating_coil_analyzer/notebooks/LEAR_MC62/05_4Hz/analysis.ipynb",
+        output_csv_dir="MC62/05_4Hz",
+        magnet_order=1, r_ref=0.033, l_coil=0.0, samples_per_turn=512,
+        segments=[
+            SegmentConfig("Integral", _MC62_KN_INT,
+                          data_path="MC62_20260304_090902_meas_1Apers_precycle_50_Apers_4Hz_corr_sigs_Ap_1_SegIntegral.bin"),
+            SegmentConfig("Central", _MC62_KN_CEN, merge_mode="abs_all",
+                          data_path="MC62_20260304_090902_meas_1Apers_precycle_50_Apers_4Hz_corr_sigs_Ap_1_SegCentral.bin"),
+        ],
+        data_loader="binary_streaming",
+        session="MC62/MC62_20260304_090902_meas_1Apers_precycle_50_Apers_4Hz/aperture1",
+        encoder_offset_rad=3.141592653589793,  # pi: raw C_1 on negative real axis; pi restores physical convention (B1>0, b2>0). FFMM cell uses offset=0 separately.
+        min_b1_T=1e-6, rpm=238.0,
+        plateau_i_range_max=0.5, plateau_min_length=50, plateau_merge_gap=100,
+        n_last_turns=680,
+        has_precycle=True, has_fdi=True, has_allturn=True,
+        has_ffmm=True, ffmm_r_ref=0.33,
+        ffmm_options=("dri", "rot", "dit"),
+        ffmm_rotate_excludes_last=False,
+        has_eddy=True, has_inductance=True,
+    ),
 }
 
 
@@ -3605,6 +3630,18 @@ COMPARISONS = {
         ],
         output_csv_dir="MC62/compare_03_vs_04",
         n_last_turns=340,
+    ),
+    "MC62_1Hz_vs_4Hz": ComparisonConfig(
+        title="MC62 Speed Effect: 1 Hz (with shims) vs 4 Hz",
+        notebook_path="rotating_coil_analyzer/notebooks/LEAR_MC62/comparisons/speed_effect_1Hz_vs_4Hz/comparison.ipynb",
+        magnet_family="MC62",
+        segments=["Integral", "Central"],
+        datasets=[
+            {"name": "Test 01 (1 Hz, with shims, Feb 11)", "csv_dir": "MC62/01_with_shims"},
+            {"name": "Test 05 (4 Hz, Mar 4)", "csv_dir": "MC62/05_4Hz"},
+        ],
+        output_csv_dir="MC62/compare_1Hz_vs_4Hz",
+        n_last_turns=170,
     ),
 }
 

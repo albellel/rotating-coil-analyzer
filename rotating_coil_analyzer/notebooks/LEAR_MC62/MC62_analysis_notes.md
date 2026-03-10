@@ -584,3 +584,27 @@ maximum gain capped at 100.  The `abs_all` merge mode is therefore
 **mandatory** for the DQ PCB and will remain so unless the FDI hardware
 is upgraded to support higher gains or an external pre-amplifier is
 added.
+
+## Test 05 — 4 Hz Rotation (March 4, 2026)
+
+First MC62 measurement at 4 Hz (~238 RPM, T = 0.252 s/turn). Key differences from previous tests:
+
+### Configuration Changes
+- **Rotation speed**: 4 Hz (vs 1 Hz and 2 Hz previously), 512 samples/turn
+- **Current cycle**: 20-group precycle (±200 A alternating at 50 A/s) + 20-step staircase (0→200→20 A at 1 A/s)
+- **Plateau detection**: Rolling std of I_mean (window=50, threshold=0.05 A) — the standard block-averaged I_range method fails at 4 Hz because per-turn current change (~0.25 A at 1 A/s) is below the detection threshold
+- **Settling**: N_LAST = 680 turns (~170 s) ≈ 4-5 tau
+
+### Noise Performance vs 1 Hz
+- B1: 39% lower per-turn scatter (cleaner integrator at higher speed)
+- b2: 49% lower per-turn scatter
+- b3: 93% higher scatter (vibration-induced, flat 0.05 units across all currents)
+- 3.8x more turns per plateau → better averaging
+
+### R&D Notebooks
+
+Two R&D notebooks explore advanced analysis techniques:
+
+**`marusov_reconstruction.ipynb`**: Implements Marusov's (2013) 2D Fourier decomposition for time-resolved multipole reconstruction. Rather than reimplementing the full spatial pipeline, we apply Marusov's temporal DFT decomposition directly to the validated pipeline output C_n(j). This guarantees K=M is the exact identity (verified: max dB1/B1 = 7.25 × 10⁻¹³). Temporal filtering (K < M) acts as a noise filter. See `marusov_guide.md` for a comprehensive plain-language explanation of the theory.
+
+**`eddy_transfer_function.ipynb`**: Multi-tau (1/2/3-exponential) eddy fitting with AICc model selection across all 40 plateau groups. Exploits two ramp rates (1 A/s staircase, 50 A/s precycle) to study eddy amplitude scaling. B1 and b2 favour 3-tau models; b3 is well described by 1-tau. Model validation residuals are noise-limited (~3-4 × 10⁻⁴ relative).
