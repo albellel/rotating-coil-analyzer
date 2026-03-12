@@ -62,6 +62,19 @@ diff_sigma
     Difference, propagated error, and sigma significance.
 SPS_CURRENT_THRESHOLDS
     Default current thresholds dict for SPS cycle classification.
+
+Continuous-time signal processing (integral coil / DCCT):
+downsample_block_avg
+    Block-average downsample a 1-D array.
+detect_plateaus_continuous
+    Plateau detection on a uniformly sampled time series (e.g. DCCT at
+    100 Hz after downsampling).
+IntegrationWindow
+    Frozen dataclass describing one integration window between settled
+    idle plateaus, including drift-baseline indices.
+find_integration_windows
+    Identify MD1 / SFTPRO / LHC integration windows from idle-plateau-
+    bounded excursions.
 """
 
 from __future__ import annotations
@@ -1539,3 +1552,287 @@ def diff_sigma(
     )
     sig = abs(d) / err if err > 0 else 0.0
     return d, err, sig
+
+
+# =====================================================================
+#  Continuous-time signal processing (integral coil / DCCT analysis)
+# =====================================================================
+
+def downsample_block_avg(arr: np.ndarray, block_size: int) -> np.ndarray:
+    """Block-average downsample a 1-D array.
+
+    Intended for **plateau detection and plotting only** — not for the
+    final signal integration, which must be done at full resolution to
+    preserve timing precision at the integration boundaries.
+
+    The last ``len(arr) % block_size`` samples are silently dropped.
+
+    Parameters
+    ----------
+    arr : ndarray
+        Input array (any dtype that supports addition).
+    block_size : int
+        Number of consecutive samples to average into one output sample.
+
+    Returns
+    -------
+    ndarray
+        Downsampled array of length ``len(arr) // block_size``.
+    """
+    n = (len(arr) // block_size) * block_size
+    return arr[:n].reshape(-1, block_size).mean(axis=1)
+
+
+def detect_plateaus_continuous(
+    t: np.ndarray,
+    signal: np.ndarray,
+    didt_thresh: float = 10.0,
+    min_dur_s: float = 0.3,
+    smooth_s: float = 0.1,
+) -> tuple[list[tuple[int, int]], np.ndarray]:
+    """Detect plateaus in a uniformly sampled time series.
+
+    Unlike :func:`detect_plateau_turns` (which works on per-turn
+    rotating-coil data), this operates on a continuous signal
+    (e.g. DCCT current downsampled to 100 Hz).
+
+    Parameters
+    ----------
+    t : ndarray
+        Time array (seconds), assumed uniformly spaced.
+    signal : ndarray
+        Signal to analyse (e.g. current in A).
+    didt_thresh : float
+        Maximum ``|d(signal)/dt|`` for a sample to be on-plateau.
+    min_dur_s : float
+        Minimum contiguous plateau duration (seconds).
+    smooth_s : float
+        Moving-average kernel width for derivative smoothing (seconds).
+
+    Returns
+    -------
+    plateaus : list of (start_idx, end_idx)
+        Half-open intervals ``[start, end)``.
+    deriv_smooth : ndarray
+        Smoothed derivative, same length as *signal*, for diagnostic
+        plotting.
+    """
+    dt = float(np.median(np.diff(t)))
+    deriv = np.gradient(signal, dt)
+    kern = max(1, int(smooth_s / dt))
+    deriv_sm = np.convolve(deriv, np.ones(kern) / kern, mode="same")
+
+    on_plat = np.abs(deriv_sm) < didt_thresh
+    diff = np.diff(on_plat.astype(np.int8))
+    starts = np.where(diff == 1)[0] + 1
+    ends = np.where(diff == -1)[0] + 1
+    if on_plat[0]:
+        starts = np.concatenate([[0], starts])
+    if on_plat[-1]:
+        ends = np.concatenate([ends, [len(on_plat)]])
+
+    min_n = int(min_dur_s / dt)
+    plateaus = [(int(s), int(e)) for s, e in zip(starts, ends)
+                if e - s >= min_n]
+    return plateaus, deriv_sm
+
+
+@dataclass(frozen=True)
+class IntegrationWindow:
+    """Integration window between settled idle plateaus.
+
+    Used by integral-coil notebooks to define where to integrate
+    induction-coil voltage for delta-flux measurements.
+
+    Attributes
+    ----------
+    id : int
+        Sequential index within the file.
+    cycle_type : str
+        ``"MD1_26GeV"``, ``"MD1_200GeV"``, ``"SFTPRO"``, or ``"LHC"``.
+    label : str
+        Human-readable label (e.g. ``"MD1 #3"``, ``"SFTPRO"``).
+    t_start, t_end : float
+        Integration boundaries (seconds, in downsampled time base).
+    idx_ds_start, idx_ds_end : int
+        Downsampled-array indices for the integration boundaries.
+    idx_full_start, idx_full_end : int
+        Full-resolution indices (``idx_ds * ds_block``).
+    I_start : float
+        Mean idle current before the ramp (A).
+    I_peak : float
+        Peak current reached during the excursion (A).
+    I_end : float
+        Current at integration end (A).
+    duration_s : float
+        ``t_end - t_start``.
+    baseline_ds_start, baseline_ds_end : int
+        Drift-baseline window (last *baseline_s* seconds of the idle
+        plateau before the ramp) in downsampled indices.
+    baseline_full_start, baseline_full_end : int
+        Same, in full-resolution indices.
+    """
+    id: int
+    cycle_type: str
+    label: str
+    t_start: float
+    t_end: float
+    idx_ds_start: int
+    idx_ds_end: int
+    idx_full_start: int
+    idx_full_end: int
+    I_start: float
+    I_peak: float
+    I_end: float
+    duration_s: float
+    baseline_ds_start: int
+    baseline_ds_end: int
+    baseline_full_start: int
+    baseline_full_end: int
+
+
+def find_integration_windows(
+    t: np.ndarray,
+    I: np.ndarray,
+    all_plateaus: list[tuple[int, int]],
+    *,
+    I_idle_lo: float = 100.0,
+    I_idle_hi: float = 250.0,
+    min_settled_s: float = 5.0,
+    settle_after_s: float = 5.0,
+    baseline_s: float = 2.0,
+    ds_block: int = 1000,
+) -> tuple[list[IntegrationWindow], list[tuple[int, int]]]:
+    """Identify integration windows from idle-plateau-bounded excursions.
+
+    The algorithm finds settled idle plateaus (current in
+    ``[I_idle_lo, I_idle_hi]``, duration >= *min_settled_s*) and
+    classifies each excursion between consecutive idles by peak current:
+
+    ====== ================ ========================================
+    Peak   Type             Integration end
+    ====== ================ ========================================
+    <500   MD1_26GeV        start of next idle + *settle_after_s*
+    <4500  MD1_200GeV       (same)
+    <5500  SFTPRO           end of highest plateau in excursion
+    >=5500 LHC              (same)
+    ====== ================ ========================================
+
+    Each window also carries a **baseline window** — the last
+    *baseline_s* seconds of the preceding idle plateau — for
+    drift-correcting the coil voltage before integration.
+
+    Parameters
+    ----------
+    t : ndarray
+        Downsampled time (seconds).
+    I : ndarray
+        Downsampled current (A).
+    all_plateaus : list of (start, end)
+        Output of :func:`detect_plateaus_continuous`.
+    I_idle_lo, I_idle_hi : float
+        Current range for idle classification (A).
+    min_settled_s : float
+        Minimum idle duration to serve as integration boundary (s).
+    settle_after_s : float
+        For MD1: integrate this far into the next idle (s).
+    baseline_s : float
+        Seconds of idle plateau before ramp for drift baseline.
+    ds_block : int
+        Down-sampling factor (for computing full-resolution indices).
+
+    Returns
+    -------
+    windows : list of IntegrationWindow
+    idle_plateaus : list of (start, end)
+        The settled idle plateaus used as boundaries.
+    """
+    dt = float(np.median(np.diff(t)))
+
+    # ── settled idle plateaus ──
+    idle_plats: list[tuple[int, int]] = []
+    for s, e in all_plateaus:
+        I_mean = float(np.mean(I[s:e]))
+        dur = (e - s) * dt
+        if I_idle_lo <= I_mean <= I_idle_hi and dur >= min_settled_s:
+            idle_plats.append((s, e))
+
+    # ── excursions between consecutive idles ──
+    windows: list[IntegrationWindow] = []
+    md1_n = 0
+
+    for j in range(len(idle_plats) - 1):
+        s1, e1 = idle_plats[j]
+        s2, e2 = idle_plats[j + 1]
+
+        if e1 >= s2:
+            continue
+
+        I_peak = float(np.max(I[e1:s2]))
+        I_idle = float(np.mean(I[s1:e1]))
+
+        if I_peak < I_idle + 50:
+            continue  # no meaningful excursion
+
+        # classify by peak current
+        if I_peak < 500:
+            ctype = "MD1_26GeV"
+        elif I_peak < 4500:
+            ctype = "MD1_200GeV"
+        elif I_peak < 5500:
+            ctype = "SFTPRO"
+        else:
+            ctype = "LHC"
+
+        # integration start: end of idle before
+        idx_start = e1
+
+        # integration end: type-dependent
+        if ctype.startswith("MD1"):
+            md1_n += 1
+            settle_n = int(settle_after_s / dt)
+            idx_end = min(s2 + settle_n, e2 - 1)
+            label = f"MD1 #{md1_n}"
+        else:
+            # find highest plateau inside the excursion
+            exc_plats = [(s, e) for s, e in all_plateaus
+                         if s >= e1 and e <= s2
+                         and np.mean(I[s:e]) > I_peak * 0.85]
+            if exc_plats:
+                exc_plats.sort(
+                    key=lambda se: np.mean(I[se[0]:se[1]]),
+                    reverse=True)
+                _, top_e = exc_plats[0]
+                idx_end = top_e - 1          # last sample of top plateau
+            else:
+                idx_end = e1 + int(np.argmax(I[e1:s2]))  # fallback
+            label = ctype
+
+        idx_end = min(idx_end, len(t) - 1)
+
+        # baseline: last baseline_s seconds of the idle plateau before
+        baseline_n = int(baseline_s / dt)
+        bl_start = max(s1, e1 - baseline_n)
+        bl_end = e1
+
+        windows.append(IntegrationWindow(
+            id=len(windows),
+            cycle_type=ctype,
+            label=label,
+            t_start=float(t[idx_start]),
+            t_end=float(t[idx_end]),
+            idx_ds_start=int(idx_start),
+            idx_ds_end=int(idx_end),
+            idx_full_start=int(idx_start) * ds_block,
+            idx_full_end=int(idx_end) * ds_block,
+            I_start=I_idle,
+            I_peak=I_peak,
+            I_end=float(I[idx_end]),
+            duration_s=float(t[idx_end] - t[idx_start]),
+            baseline_ds_start=int(bl_start),
+            baseline_ds_end=int(bl_end),
+            baseline_full_start=int(bl_start) * ds_block,
+            baseline_full_end=int(bl_end) * ds_block,
+        ))
+
+    return windows, idle_plats

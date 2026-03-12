@@ -134,7 +134,7 @@ Example and analysis notebooks are in `rotating_coil_analyzer/notebooks/`:
 - `SPS_MBB/2025-12-12_MBB/` -- CS and NCS harmonic analysis (Dec 2025 campaign)
 - `SPS_MBB/2026-02-06_CS_supercycle/` -- CS harmonics, 200 GeV & 26 GeV analysis, comparison (Feb 2026 supercycle campaign)
 - `SPS_MBB/2026-02-25_2Hz/` -- 200 GeV & 26 GeV analysis, comparison, body-vs-integrated field, turn-averaging sensitivity (Feb 2026, 2 Hz rotation)
-- `SPS_MBB/2026-03-06_max_speed_NMR/` -- 200 GeV & 26 GeV analysis at max speed (~176 RPM), FFMM golden standard, NMR/Hall probe visualization, comparison (Mar 2026, per-segment Kn)
+- `SPS_MBB/2026-03-06_max_speed_NMR/` -- 200 GeV & 26 GeV analysis at max speed (~176 RPM), NMR/Hall probe visualization, comparison, hysteresis analysis (Mar 2026, per-segment Kn)
 
 ### LEAR MC62 dipole
 - `LEAR_MC62/00_system_check/` -- System check (10 turns)
@@ -310,12 +310,14 @@ rotating_coil_analyzer/
 │   └── discovery.py         #   Measurement folder discovery
 ├── models/                 # Data models (SegmentFrame, MeasurementCatalog, AnalysisProfile)
 ├── presentation/           # PowerPoint report generation helpers
-├── notebooks/              # Jupyter analysis & example notebooks (31 active)
+├── notebooks/              # Jupyter analysis & example notebooks (37 active)
 ├── tests/                  # Unit tests (126 tests)
 └── validation/             # Golden reference validation (C++ parity)
 scripts/
 ├── generate_notebooks.py      # Unified notebook generator (SPS MBB + LEAR MC62)
+├── nb_helpers.py              # Notebook construction helpers (code(), md(), write_notebook())
 ├── generate_marusov_nb.py     # Marusov 2D reconstruction R&D notebook generator (MC62 4 Hz)
+├── generate_dynamic_eddy_nb.py # Dynamic eddy correction R&D notebook generator
 ├── generate_rd_notebooks.py   # Eddy transfer function R&D notebook generator (MC62 4 Hz)
 └── btp8_bruteforce_turns.py   # Brute-force turns-per-revolution search for BTP8
 ```

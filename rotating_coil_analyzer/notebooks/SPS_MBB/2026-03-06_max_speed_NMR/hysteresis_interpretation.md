@@ -256,3 +256,27 @@ understanding of SPS dipole magnetic memory.
 | Why is the control ~zero? | Both sessions descend from the same 5781 A (Preisach confirmed). |
 | True MD1 effect at SFTPRO? | Predicted to be **zero** (wiping-out erases MD1 memory at 4816 A > 2267 A). |
 | How to test properly? | Standardize with 10x full-field cycles before each session. |
+
+---
+
+## 5. Experimental Validation (2026-03-10)
+
+The proposed A-B-B-A experiment with standardization was performed on 2026-03-10
+(see `../2026-03-10_max_speed_idle/report.md`). Results:
+
+| Plateau | 2026-03-06 (no std) | 2026-03-10 (with std) | Preisach prediction |
+|---------|--------------------|-----------------------|---------------------|
+| SFTPRO (4816 A) | +125.5 uT | **+7.5 uT (0.0 sigma)** | 0 |
+| LHC top (5781 A) | +66.8 uT | -33.1 uT (0.3 sigma) | 0 |
+| Post-LHC idle (ctrl) | -4.3 uT | **-0.1 uT (0.0 sigma)** | 0 |
+
+**The session-ordering confound hypothesis is confirmed.** The +125.5 uT
+signal at SFTPRO collapses to zero after standardization, exactly as predicted
+by the Preisach wiping-out property. The A-B-B-A design further eliminates
+any residual ordering bias (A1 matches A2, B1 matches B2 to < 0.3 sigma).
+
+Additional findings from the 2026-03-10 campaign:
+- **b2 accommodation** at idle: +0.20 units for 200 GeV, ~0 for 26 GeV
+  (genuine Preisach minor-loop effect, erased at SFTPRO by wiping-out)
+- **No eddy settling** at the extended MD1 idle (~24 s >> tau ~ 1 s) in the body
+- **Fringe eddy** currents detectable (tau ~ 1 s) due to fringe amplification

@@ -129,3 +129,18 @@ rotating_coil_analyzer/notebooks/**/old_reports_and_documents/
 # Archived (superseded) notebooks
 # =========================
 rotating_coil_analyzer/notebooks/**/_archive/
+
+# =========================
+# Theory / reference papers (local PDFs, too large for git)
+# =========================
+theory/
+
+# =========================
+# Generated reports (PDFs regenerated from notebooks/scripts)
+# =========================
+rotating_coil_analyzer/notebooks/**/*.pdf
+
+# =========================
+# Large data files (HDF5, etc.)
+# =========================
+*.h5

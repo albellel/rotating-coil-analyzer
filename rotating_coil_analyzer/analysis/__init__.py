@@ -80,6 +80,11 @@ from .utility_functions import (
     compute_level_stats,
     diff_sigma,
     SPS_CURRENT_THRESHOLDS,
+    # continuous-time signal processing (integral coil / DCCT)
+    downsample_block_avg,
+    detect_plateaus_continuous,
+    IntegrationWindow,
+    find_integration_windows,
 )
 
 __all__ = [
@@ -150,4 +155,9 @@ __all__ = [
     "compute_level_stats",
     "diff_sigma",
     "SPS_CURRENT_THRESHOLDS",
+    # continuous-time signal processing (integral coil / DCCT)
+    "downsample_block_avg",
+    "detect_plateaus_continuous",
+    "IntegrationWindow",
+    "find_integration_windows",
 ]
