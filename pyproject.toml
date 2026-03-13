@@ -15,6 +15,7 @@ dependencies = [
   "scipy>=1.10",
   "ipywidgets>=8.0",
   "ipympl>=0.9",
+  "tools-for-data-analysis",
 ]
 
 [tool.setuptools]
