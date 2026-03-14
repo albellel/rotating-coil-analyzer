@@ -20,7 +20,7 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     plot_hysteresis,
     build_run_averages,
 )
-from tools_for_data_analysis.eddy import (
+from tools_for_data_analysis.fitting.eddy import (
     fit_eddy_per_run,
     EddyFitResult,
 )

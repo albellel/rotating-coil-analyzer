@@ -12,7 +12,7 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     plateau_summary,
     plot_hysteresis,
 )
-from tools_for_data_analysis.eddy import eddy_model
+from tools_for_data_analysis.fitting.eddy import eddy_model
 
 
 # =====================================================================
