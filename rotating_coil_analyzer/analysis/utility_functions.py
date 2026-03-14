@@ -1146,19 +1146,6 @@ def plot_hysteresis(
             )
 
 
-# =====================================================================
-#  Eddy-current model — now lives in tools_for_data_analysis.eddy
-#  Re-exported here for backward compatibility.
-# =====================================================================
-
-from tools_for_data_analysis.eddy import (  # noqa: E402
-    eddy_model,
-    double_eddy_model,
-    triple_eddy_model,
-    validate_eddy_model_selection,
-    EddyFitResult,
-    fit_eddy_per_run,
-)
 
 
 # =====================================================================
@@ -1243,14 +1230,3 @@ def diff_sigma(
     return d, err, sig
 
 
-# =====================================================================
-#  Continuous-time signal processing — now lives in tools_for_data_analysis
-#  Re-exported here for backward compatibility.
-# =====================================================================
-
-from tools_for_data_analysis.signal import downsample_block_avg  # noqa: E402
-from tools_for_data_analysis.plateau import detect_plateaus_continuous  # noqa: E402
-from tools_for_data_analysis.windows import (  # noqa: E402
-    IntegrationWindow,
-    find_integration_windows,
-)

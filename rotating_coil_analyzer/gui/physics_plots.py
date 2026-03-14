@@ -19,6 +19,8 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     plateau_summary,
     plot_hysteresis,
     build_run_averages,
+)
+from tools_for_data_analysis.eddy import (
     fit_eddy_per_run,
     EddyFitResult,
 )

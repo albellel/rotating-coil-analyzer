@@ -8,11 +8,11 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     compute_level_stats,
     diff_sigma,
     discover_runs,
-    eddy_model,
     mad_sigma_clip,
     plateau_summary,
     plot_hysteresis,
 )
+from tools_for_data_analysis.eddy import eddy_model
 
 
 # =====================================================================

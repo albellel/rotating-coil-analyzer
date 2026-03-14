@@ -67,12 +67,6 @@ from .utility_functions import (
     discover_runs,
     plateau_summary,
     plot_hysteresis,
-    eddy_model,
-    double_eddy_model,
-    triple_eddy_model,
-    validate_eddy_model_selection,
-    EddyFitResult,
-    fit_eddy_per_run,
     CelFedDiagnostic,
     diagnose_cel_fed,
     FdiTransitionCheck,
@@ -80,11 +74,6 @@ from .utility_functions import (
     compute_level_stats,
     diff_sigma,
     SPS_CURRENT_THRESHOLDS,
-    # continuous-time signal processing (integral coil / DCCT)
-    downsample_block_avg,
-    detect_plateaus_continuous,
-    IntegrationWindow,
-    find_integration_windows,
 )
 
 __all__ = [
@@ -142,12 +131,6 @@ __all__ = [
     "discover_runs",
     "plateau_summary",
     "plot_hysteresis",
-    "eddy_model",
-    "double_eddy_model",
-    "triple_eddy_model",
-    "validate_eddy_model_selection",
-    "EddyFitResult",
-    "fit_eddy_per_run",
     "CelFedDiagnostic",
     "diagnose_cel_fed",
     "FdiTransitionCheck",
@@ -155,9 +138,4 @@ __all__ = [
     "compute_level_stats",
     "diff_sigma",
     "SPS_CURRENT_THRESHOLDS",
-    # continuous-time signal processing (integral coil / DCCT)
-    "downsample_block_avg",
-    "detect_plateaus_continuous",
-    "IntegrationWindow",
-    "find_integration_windows",
 ]
