@@ -152,6 +152,18 @@ class MergeResult:
         Pre-merge compensated harmonics (for audit).
     C_ext : np.ndarray, optional
         Pre-merge external harmonics if present.
+    C_units : np.ndarray, optional
+        Normalised coefficients in "units" (1e-4 relative to the main field),
+        shape (n_turns, H). NaN where the main field was too weak to
+        normalise. Downstream consumers (e.g. the Physics Plots tab) should
+        read the ``b{n}/a{n}`` "units" columns from here, NOT from the Tesla
+        ``C_merged``.
+    ok_main : np.ndarray, optional
+        Boolean per-turn mask, shape (n_turns,). True where the main field
+        exceeded the normalisation threshold (i.e. ``C_units`` is valid).
+    I_mean_A : np.ndarray, optional
+        Per-turn mean current [A], shape (n_turns,), carried from the
+        pipeline result so downstream plots don't have to reconstruct it.
     extra : dict, optional
         Additional metadata.
     """
@@ -170,6 +182,11 @@ class MergeResult:
     C_abs: Optional[np.ndarray] = None
     C_cmp: Optional[np.ndarray] = None
     C_ext: Optional[np.ndarray] = None
+
+    # Optional derived per-turn quantities (routed to downstream plotting tabs)
+    C_units: Optional[np.ndarray] = None
+    ok_main: Optional[np.ndarray] = None
+    I_mean_A: Optional[np.ndarray] = None
 
     extra: Optional[Dict[str, Any]] = None
 

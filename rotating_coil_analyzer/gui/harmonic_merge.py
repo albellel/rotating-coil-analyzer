@@ -102,34 +102,13 @@ def _saveas_dialog(
     title: str = "Save file",
 ) -> Optional[str]:
     """Open a native Save-As dialog (best effort)."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception:
-        return None
-
-    root = None
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            root.attributes("-topmost", True)
-        except Exception:
-            pass
-
-        path = filedialog.asksaveasfilename(
-            title=title,
-            initialfile=initialfile,
-            defaultextension=defaultextension,
-            filetypes=filetypes,
-        )
-        return str(path) if path else None
-    finally:
-        try:
-            if root is not None:
-                root.destroy()
-        except Exception:
-            pass
+    from rotating_coil_analyzer.gui._dialogs import saveas_dialog
+    return saveas_dialog(
+        initialfile=initialfile,
+        defaultextension=defaultextension,
+        filetypes=filetypes,
+        title=title,
+    )
 
 
 def _clear_button_handlers(btn: w.Button) -> None:
@@ -1019,6 +998,9 @@ def build_phase3b_harmonic_merge_panel(
                 diagnostics=st.diag,
                 C_abs=res.C_abs,
                 C_cmp=res.C_cmp,
+                C_units=st.C_units,
+                ok_main=st.ok_main,
+                I_mean_A=res.I_mean_A,
             )
             st.merge_result = merge_result
 

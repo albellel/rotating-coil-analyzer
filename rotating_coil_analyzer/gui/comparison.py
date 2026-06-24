@@ -32,30 +32,11 @@ class ComparisonState:
 
 def _browse_for_file() -> Optional[str]:
     """Native file chooser (tkinter). Returns None if unavailable/cancelled."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception:
-        return None
-    root = None
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            root.attributes("-topmost", True)
-        except Exception:
-            pass
-        p = filedialog.askopenfilename(
-            title="Select CSV file",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-        )
-        return str(p) if p else None
-    finally:
-        try:
-            if root is not None:
-                root.destroy()
-        except Exception:
-            pass
+    from rotating_coil_analyzer.gui._dialogs import open_file_dialog
+    return open_file_dialog(
+        title="Select CSV file",
+        filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+    )
 
 
 def build_comparison_panel() -> w.Widget:
@@ -121,6 +102,17 @@ def build_comparison_panel() -> w.Widget:
                 return candidate
         return None
 
+    def _resolve_label_col(df: pd.DataFrame, requested: str) -> Optional[str]:
+        """Resolve the column to match on.
+
+        Honours the user's "Match by" selection when that column is present
+        in the CSV; only falls back to auto-detection when the requested
+        column is missing.
+        """
+        if requested in df.columns:
+            return requested
+        return _detect_label_col(df)
+
     def _ensure_required_cols(df: pd.DataFrame, name: str) -> bool:
         """Check that essential columns exist."""
         required = {"ok_main", "I_mean_A", "B1_T"}
@@ -151,10 +143,10 @@ def build_comparison_panel() -> w.Widget:
             log.write(f"Loaded CSV 1: {len(df1)} rows, {len(df1.columns)} cols")
             log.write(f"Loaded CSV 2: {len(df2)} rows, {len(df2.columns)} cols")
 
-            # Detect label column
+            # Resolve match column (honours the "Match by" selection)
             label_col = str(label_col_dd.value)
-            lcol1 = _detect_label_col(df1) or label_col
-            lcol2 = _detect_label_col(df2) or label_col
+            lcol1 = _resolve_label_col(df1, label_col)
+            lcol2 = _resolve_label_col(df2, label_col)
 
             if lcol1 not in df1.columns:
                 log.write(f"ERROR: Column '{lcol1}' not found in CSV 1.")
@@ -237,8 +229,8 @@ def build_comparison_panel() -> w.Widget:
             _set_status("plotting differences...")
 
             label_col = str(label_col_dd.value)
-            lcol1 = _detect_label_col(st.df1) or label_col
-            lcol2 = _detect_label_col(st.df2) or label_col
+            lcol1 = _resolve_label_col(st.df1, label_col)
+            lcol2 = _resolve_label_col(st.df2, label_col)
 
             levels1 = set(st.df1[lcol1].unique())
             levels2 = set(st.df2[lcol2].unique())

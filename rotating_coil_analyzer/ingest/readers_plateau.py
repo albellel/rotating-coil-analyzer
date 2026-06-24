@@ -24,6 +24,86 @@ from rotating_coil_analyzer.ingest.channel_detect import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Plateau filename parsing (shared by the reader and the discovery layer)
+# ---------------------------------------------------------------------------
+
+#: Standard staircase naming: ``<base>_Run_<step>_I_<current>A_<seg>_raw_measurement_data.txt``
+_PAT_PLATEAU_STD = re.compile(
+    r"^(?P<base>.+?)_Run_(?P<step>\d+)_I_(?P<i>[-\d.]+)A_(?P<seg>[^_]+)_raw_measurement_data\.txt$",
+    flags=re.IGNORECASE,
+)
+
+#: H/V steerer naming (e.g. FFMM degauss): a run number glued to ``IH`` followed
+#: by the horizontal and vertical set currents:
+#: ``<base>_Run_<step>IH_<ih>IV_<iv>_<seg>_raw_measurement_data.txt``
+_PAT_PLATEAU_HV = re.compile(
+    r"^(?P<base>.+?)_Run_(?P<step>\d+)IH_(?P<ih>[-0-9.]+)IV_(?P<iv>[-0-9.]+)_(?P<seg>[^_]+)_raw_measurement_data\.txt$",
+    flags=re.IGNORECASE,
+)
+
+
+def _safe_float(s: object) -> float:
+    try:
+        return float(s)  # type: ignore[arg-type]
+    except Exception:
+        return float("nan")
+
+
+def parse_plateau_filename(name: str, extra_pattern: Optional["re.Pattern"] = None) -> Optional[dict]:
+    """Parse a plateau ``*_raw_measurement_data.txt`` filename.
+
+    Supported layouts (tried in order):
+
+    1. ``extra_pattern`` (optional caller override) — must expose at least the
+       named groups ``base``, ``step``, ``seg`` (and optionally ``i``).
+    2. **Standard staircase**:
+       ``<base>_Run_<step>_I_<current>A_<seg>_raw_measurement_data.txt``
+    3. **H/V steerer** (e.g. FFMM degauss):
+       ``<base>_Run_<step>IH_<ih>IV_<iv>_<seg>_raw_measurement_data.txt``
+
+    Returns a dict with keys ``base``, ``step`` (int), ``seg``, and ``i`` (the
+    representative current). For the H/V form ``i`` is the **active channel**
+    current (signed ``ih`` if non-zero, else ``iv``), and ``ih``/``iv`` are also
+    included. Returns ``None`` if no layout matches.
+    """
+    if extra_pattern is not None:
+        m = extra_pattern.match(name)
+        if m:
+            gd = m.groupdict()
+            return {
+                "base": gd.get("base", ""),
+                "step": int(gd["step"]) if gd.get("step") not in (None, "") else 0,
+                "seg": gd.get("seg", ""),
+                "i": _safe_float(gd.get("i")) if gd.get("i") not in (None, "") else float("nan"),
+            }
+
+    m = _PAT_PLATEAU_STD.match(name)
+    if m:
+        return {
+            "base": m.group("base"),
+            "step": int(m.group("step")),
+            "seg": m.group("seg"),
+            "i": _safe_float(m.group("i")),
+        }
+
+    m = _PAT_PLATEAU_HV.match(name)
+    if m:
+        ih = _safe_float(m.group("ih"))
+        iv = _safe_float(m.group("iv"))
+        i_active = ih if (np.isfinite(ih) and ih != 0.0) else iv
+        return {
+            "base": m.group("base"),
+            "step": int(m.group("step")),
+            "seg": m.group("seg"),
+            "i": i_active,
+            "ih": ih,
+            "iv": iv,
+        }
+
+    return None
+
+
 @dataclass(frozen=True)
 class PlateauReaderConfig:
     """Reader configuration for plateau-based text files (``*_raw_measurement_data.txt``).
@@ -91,42 +171,49 @@ class PlateauReader:
         - ``k`` is not time; it exists only as an ordering axis for plotting.
     """
 
-    _PAT = re.compile(
-        r"^(?P<base>.+?)_Run_(?P<step>\d+)_I_(?P<i>[-\d.]+)A_(?P<seg>[^_]+)_raw_measurement_data\.txt$",
-        flags=re.IGNORECASE,
-    )
+    #: Standard pattern (kept for backward compatibility / introspection).
+    _PAT = _PAT_PLATEAU_STD
 
     def __init__(self, config: Optional[PlateauReaderConfig] = None):
         self.config = config or PlateauReaderConfig()
+        # Optional caller-supplied filename pattern; otherwise the shared parser
+        # (standard + H/V layouts) is used.
         if self.config.filename_pattern is not None:
-            self._pat = re.compile(self.config.filename_pattern, flags=re.IGNORECASE)
+            self._extra_pat: Optional[re.Pattern] = re.compile(
+                self.config.filename_pattern, flags=re.IGNORECASE
+            )
         else:
-            self._pat = self._PAT
+            self._extra_pat = None
+
+    def _parse(self, name: str) -> Optional[dict]:
+        return parse_plateau_filename(name, extra_pattern=self._extra_pat)
 
     def _find_plateau_files(self, representative: Path) -> Tuple[str, str, List[Path]]:
-        m = self._pat.match(representative.name)
-        if not m:
+        info = self._parse(representative.name)
+        if not info:
             raise ValueError(f"Not a plateau raw_measurement_data file: {representative.name}")
-        base = m.group("base")
-        seg = m.group("seg")
-        glob_pat = f"{base}_Run_*_I_*A_{seg}_raw_measurement_data.txt"
-        files = list(representative.parent.glob(glob_pat))
+        base = info["base"]
+        seg = info["seg"]
 
-        def step_key(p: Path) -> Tuple[int, float, str]:
-            mm = self._pat.match(p.name)
-            if not mm:
-                return (10**9, float("nan"), p.name)
-            step = int(mm.group("step"))
-            try:
-                curr = float(mm.group("i"))
-            except Exception:
-                curr = float("nan")
-            return (step, curr, p.name)
+        # Broad glob on base+suffix (layout-agnostic), then filter by a successful
+        # parse that yields the SAME segment. This matches both the standard
+        # ``_I_<cur>A_`` layout and the H/V ``..IH_..IV_..`` layout.
+        glob_pat = f"{base}_Run_*_raw_measurement_data.txt"
+        matched: List[Tuple[int, float, str, Path]] = []
+        for p in representative.parent.glob(glob_pat):
+            ci = self._parse(p.name)
+            if ci and ci["seg"] == seg:
+                step = int(ci["step"])
+                curr = ci.get("i", float("nan"))
+                curr_key = curr if np.isfinite(curr) else float("inf")
+                matched.append((step, curr_key, p.name, p))
 
-        files.sort(key=step_key)
-        if not files:
-            raise FileNotFoundError(f"No plateau files matched {glob_pat} in {representative.parent}")
-        return base, seg, files
+        if not matched:
+            raise FileNotFoundError(
+                f"No plateau files matched base='{base}', segment='{seg}' in {representative.parent}"
+            )
+        matched.sort(key=lambda x: (x[0], x[1], x[2]))
+        return base, seg, [m[3] for m in matched]
 
     def _read_one(self, path: Path) -> np.ndarray:
         # whitespace-separated numeric file, no header
@@ -195,12 +282,9 @@ class PlateauReader:
         last_plateau_end_t: Optional[float] = None
 
         for pid, f in enumerate(files):
-            mm = self._pat.match(f.name)
-            step = int(mm.group("step")) if mm else pid
-            try:
-                i_hint = float(mm.group("i")) if mm else float("nan")
-            except Exception:
-                i_hint = float("nan")
+            fi = self._parse(f.name)
+            step = int(fi["step"]) if fi else pid
+            i_hint = float(fi["i"]) if fi else float("nan")
 
             mat = self._read_one(f)
             if mat.ndim != 2 or mat.shape[1] < 3:

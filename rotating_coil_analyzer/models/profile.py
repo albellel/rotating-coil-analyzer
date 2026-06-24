@@ -53,6 +53,18 @@ class AnalysisProfile:
         Coil length in metres (used for provenance/export, not pipeline math).
     skew_main : bool
         If True, use Im(main_field) for normalization instead of Re.
+    dit_signed : bool
+        If True, use signed thresholds for the ``dit`` di/dt correction
+        (FFMM C++ native path). Default False uses absolute-value thresholds.
+    max_zR : float or None
+        If not None, clamp ``|zR|`` after cel and before fed. Default None
+        (no clamping).
+    encoder_offset_rad : float
+        Known encoder trigger offset in radians, pre-rotated out before the
+        rotation step. Default 0.0.
+    flip_signal_polarity : bool
+        If True, negate all calibrated harmonics after kn (for inverted
+        coil/cable polarity). Default False.
     """
 
     magnet_order: int
@@ -69,6 +81,12 @@ class AnalysisProfile:
     abs_calib: float = 1.0
     l_coil_m: Optional[float] = None
     skew_main: bool = False
+
+    # Sign-convention / correction knobs (forwarded to the pipeline)
+    dit_signed: bool = False
+    max_zR: Optional[float] = None
+    encoder_offset_rad: float = 0.0
+    flip_signal_polarity: bool = False
 
     # ------------------------------------------------------------------
     # Factory

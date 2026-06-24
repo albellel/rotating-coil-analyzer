@@ -213,6 +213,12 @@ class StreamingReader:
                 continue
             n_scalars = file_size // bps
 
+            # Read the raw file once per dtype: the loaded buffer is identical
+            # for every column-count candidate, only the reshape differs.
+            arr = np.fromfile(path, dtype=dtype)
+            if arr.size != n_scalars:
+                arr = arr[:n_scalars]
+
             # total columns = 3 + n_currents  (allow 0 currents)
             for n_curr in range(0, max(0, int(cfg.max_currents)) + 1):
                 ncols = 3 + n_curr
@@ -221,9 +227,6 @@ class StreamingReader:
                 if n_scalars % ncols != 0:
                     continue
 
-                arr = np.fromfile(path, dtype=dtype)
-                if arr.size != n_scalars:
-                    arr = arr[:n_scalars]
                 with np.errstate(all="ignore"):
                     mat = arr.reshape(-1, ncols).astype(np.float64, copy=False)
 

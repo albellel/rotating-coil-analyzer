@@ -20,6 +20,7 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     plot_hysteresis,
     build_run_averages,
 )
+from rotating_coil_analyzer.analysis.kn_pipeline import safe_normalize_to_units
 from tools_for_data_analysis.fitting.eddy import (
     fit_eddy_per_run,
     EddyFitResult,
@@ -110,31 +111,44 @@ def build_physics_plots_panel(
         m = int(mr.magnet_order)
         orders = mr.orders
 
+        # Normalised "units" coefficients: prefer those carried by the
+        # MergeResult; otherwise recompute from C_merged. C_merged is in
+        # Tesla unless 'nor' ran upstream, so the b{n}/a{n} units columns must
+        # come from C_units, NOT from C_merged.
+        C_units = getattr(mr, "C_units", None)
+        ok_from_units = None
+        if C_units is None:
+            C_units, ok_from_units = safe_normalize_to_units(mr.C_merged, magnet_order=m)
+
         # Build per-turn data
         data: dict = {
             "turn": np.arange(n_turns),
             "B1_T": np.real(mr.C_merged[:, m - 1]) if m >= 1 else np.real(mr.C_merged[:, 0]),
         }
 
-        # Add harmonic columns from C_merged
-        # For C_units we need to recompute — use C_merged for Tesla columns
-        # and attempt units from the merge result
-        if hasattr(mr, 'C_abs') and mr.C_abs is not None:
-            data["I_mean_A"] = np.zeros(n_turns)  # will be filled from plateau_info or result
+        # Per-turn mean current: prefer the value carried from the pipeline,
+        # fall back to plateau_info below, else zeros.
+        I_mean_mr = getattr(mr, "I_mean_A", None)
+        if I_mean_mr is not None and len(I_mean_mr) == n_turns:
+            data["I_mean_A"] = np.asarray(I_mean_mr, dtype=float)
         else:
             data["I_mean_A"] = np.zeros(n_turns)
 
-        # Try to get I_mean and ok_main from the kn_provenance
-        if hasattr(mr, 'kn_provenance') and mr.kn_provenance is not None:
-            data["ok_main"] = np.ones(n_turns, dtype=bool)
+        # Normalisation quality flag: prefer the mask from the merge result.
+        ok_main = getattr(mr, "ok_main", None)
+        if ok_main is None:
+            ok_main = ok_from_units
+        if ok_main is not None and len(ok_main) == n_turns:
+            data["ok_main"] = np.asarray(ok_main, dtype=bool)
         else:
             data["ok_main"] = np.ones(n_turns, dtype=bool)
 
-        # Harmonic unit columns (b/a for orders > m)
+        # Harmonic unit columns (b/a for orders > m) from C_units (units),
+        # not from the Tesla C_merged.
         for j, n_ord in enumerate([int(x) for x in orders]):
             if n_ord > m:
-                data[f"b{n_ord}_units"] = np.real(mr.C_merged[:, j])
-                data[f"a{n_ord}_units"] = np.imag(mr.C_merged[:, j])
+                data[f"b{n_ord}_units"] = np.real(C_units[:, j])
+                data[f"a{n_ord}_units"] = np.imag(C_units[:, j])
 
         # Fill plateau info
         if plateau_info is not None:
@@ -390,7 +404,14 @@ def build_physics_plots_panel(
             groups = plateau_info["groups"]
             m = int(mr.magnet_order)
             B1_all = np.real(mr.C_merged[:, m - 1]) if m >= 1 else np.real(mr.C_merged[:, 0])
-            I_mean_all = plateau_info.get("I_mean", np.zeros(len(B1_all)))
+            I_mean_all = plateau_info.get("I_mean")
+            if I_mean_all is None or len(I_mean_all) != len(B1_all):
+                I_mean_mr = getattr(mr, "I_mean_A", None)
+                I_mean_all = (
+                    np.asarray(I_mean_mr, dtype=float)
+                    if I_mean_mr is not None and len(I_mean_mr) == len(B1_all)
+                    else np.zeros(len(B1_all))
+                )
 
             results: list[EddyFitResult] = []
             prev_I = 0.0

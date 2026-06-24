@@ -36,18 +36,6 @@ plateau_summary
     Per-run/per-level mean+std of B1, TF, and all harmonics.
 plot_hysteresis
     Hysteresis loop with run-order gradient coloring.
-eddy_model
-    Exponential eddy-current settling model for curve_fit.
-double_eddy_model
-    Two-exponential eddy-current model (2 time constants).
-triple_eddy_model
-    Three-exponential eddy-current model (3 time constants).
-validate_eddy_model_selection
-    AICc-based model selection across 1/2/3-tau fits.
-EddyFitResult
-    Dataclass result container for eddy fits (B_inf, A, tau, R2, quality).
-fit_eddy_per_run
-    Fit single-exponential eddy model with 2-pass MAD clipping.
 CelFedDiagnostic
     Dataclass result container for cel/fed safety diagnostic.
 diagnose_cel_fed
@@ -63,18 +51,15 @@ diff_sigma
 SPS_CURRENT_THRESHOLDS
     Default current thresholds dict for SPS cycle classification.
 
-Continuous-time signal processing (integral coil / DCCT):
-downsample_block_avg
-    Block-average downsample a 1-D array.
-detect_plateaus_continuous
-    Plateau detection on a uniformly sampled time series (e.g. DCCT at
-    100 Hz after downsampling).
-IntegrationWindow
-    Frozen dataclass describing one integration window between settled
-    idle plateaus, including drift-baseline indices.
-find_integration_windows
-    Identify MD1 / SFTPRO / LHC integration windows from idle-plateau-
-    bounded excursions.
+Note
+----
+Eddy-current models/fitting (``eddy_model``, ``double_eddy_model``,
+``triple_eddy_model``, ``validate_eddy_model_selection``, ``EddyFitResult``,
+``fit_eddy_per_run``) and the continuous-time signal helpers
+(``downsample_block_avg``, ``detect_plateaus_continuous``,
+``IntegrationWindow``, ``find_integration_windows``) now live in the companion
+package ``tools_for_data_analysis`` (import eddy from
+``tools_for_data_analysis.fitting.eddy``). They are NOT re-exported here.
 """
 
 from __future__ import annotations

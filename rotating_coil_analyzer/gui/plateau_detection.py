@@ -322,7 +322,15 @@ def build_plateau_detection_panel(
 
             # Display summary
             if summary_df.empty:
-                summary_html.value = "<b>No plateaus found.</b> Try lowering the threshold."
+                summary_html.value = (
+                    "<b>No plateaus found.</b> Adjust the detection parameters: "
+                    "<b>raise</b> the threshold if the current channel is noisy or is a "
+                    "near-constant reference (its within-turn block range exceeds the "
+                    "threshold), or <b>lower</b> it only if the current is very clean. "
+                    "Also check <b>Min length</b> — plateaus shorter than it are rejected. "
+                    "Note: for file-based plateau (staircase) data the segment is already "
+                    "split per run via <code>plateau_id</code>, so this tab is usually not needed."
+                )
             else:
                 n_total_used = int(np.sum(is_used))
                 summary_html.value = (

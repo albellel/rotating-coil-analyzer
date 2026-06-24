@@ -517,14 +517,7 @@ def build_phase4_plots_panel(
         _plot(dd_primary.value, dd_secondary.value or None)
 
     def _saveas_dialog(ext: str) -> Optional[str]:
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-        except Exception:
-            return None
-
-        root = tk.Tk()
-        root.withdraw()
+        from rotating_coil_analyzer.gui._dialogs import saveas_dialog
 
         initialdir = None
         try:
@@ -535,13 +528,11 @@ def build_phase4_plots_panel(
         except Exception:
             initialdir = None
 
-        path = filedialog.asksaveasfilename(
+        return saveas_dialog(
             defaultextension=f".{ext}",
             filetypes=[(ext.upper(), f"*.{ext}"), ("All files", "*.*")],
             initialdir=initialdir,
         )
-        root.destroy()
-        return path or None
 
     def _on_save(_btn):
         if state.fig is None:

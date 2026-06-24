@@ -71,28 +71,8 @@ def _df_head_to_html(df: pd.DataFrame, n: int = 12, title: str = "") -> str:
 
 def _browse_for_folder() -> Optional[str]:
     """Native folder chooser (tkinter). Returns None if unavailable/cancelled."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception:
-        return None
-
-    root = None
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            root.attributes("-topmost", True)
-        except Exception:
-            pass
-        p = filedialog.askdirectory(title="Select measurement folder")
-        return str(p) if p else None
-    finally:
-        try:
-            if root is not None:
-                root.destroy()
-        except Exception:
-            pass
+    from rotating_coil_analyzer.gui._dialogs import browse_for_folder
+    return browse_for_folder(title="Select measurement folder")
 
 
 @dataclass

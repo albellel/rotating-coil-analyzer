@@ -609,4 +609,8 @@ def compute_from_profile(
         skew_main=profile.skew_main,
         eps_main=profile.min_main_field_T,
         legacy_rotate_excludes_last=profile.legacy_rotate_excludes_last,
+        dit_signed=getattr(profile, "dit_signed", False),
+        max_zR=getattr(profile, "max_zR", None),
+        encoder_offset_rad=getattr(profile, "encoder_offset_rad", 0.0),
+        flip_signal_polarity=getattr(profile, "flip_signal_polarity", False),
     )

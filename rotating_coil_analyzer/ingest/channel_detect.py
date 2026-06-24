@@ -177,6 +177,17 @@ def detect_current_channel(
     best_ks = [k for r, k in ranges if np.isfinite(r) and abs(r - best_range) <= 0.0]
     best_k = min(best_ks) if best_ks else (ranges[0][1] if ranges else start_col)
 
+    # If no candidate had a finite range, every column failed the
+    # finite-fraction requirement. The fallback selection is unreliable
+    # (possibly all-NaN) -- warn loudly rather than returning it silently.
+    if not best_ks:
+        warnings.append(
+            f"WARNING: no current candidate met the finite-fraction requirement "
+            f"(min_finite_frac={min_finite_frac}); falling back to col{best_k}, "
+            "which may be unreliable (possibly all-NaN). Consider an explicit "
+            "ColumnMapping(current_col=...)."
+        )
+
     I_main = mat[:, best_k].astype(np.float64, copy=False)
     rng_txt = ", ".join(
         f"col{k}:{r:.6g}" for r, k in sorted(ranges, key=lambda ri: (-ri[0], ri[1]))

@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import re
 
 from rotating_coil_analyzer.models.catalog import MeasurementCatalog, SegmentSpec
+from rotating_coil_analyzer.ingest.readers_plateau import parse_plateau_filename
 
 
 _BOOL_TRUE = {"true", "1", "yes", "on"}
@@ -95,16 +96,26 @@ def _parse_table(value: str) -> List[List[str]]:
 
 def find_parameters_txt(selected_dir: Path, max_up: int = 2) -> Path:
     """
-    Search Parameters.txt in selected_dir or up to max_up parent levels.
+    Search for the parameters file in selected_dir or up to max_up parent levels.
     Returns the first match (nearest to selected_dir).
+
+    At each level the exact name ``Parameters.txt`` is preferred; if it is absent
+    a single ``*_Parameters.txt`` file is accepted as a fallback (FFMM names it
+    ``<magnet>_<timestamp>_Parameters.txt``). Among multiple matches the
+    lexicographically first is chosen for determinism.
     """
     p = Path(selected_dir).expanduser().resolve()
     for up in range(max_up + 1):
         cand = p / "Parameters.txt"
         if cand.exists() and cand.is_file():
             return cand
+        globbed = sorted(q for q in p.glob("*_Parameters.txt") if q.is_file())
+        if globbed:
+            return globbed[0]
         p = p.parent
-    raise FileNotFoundError(f"Parameters.txt not found in {selected_dir} or up to {max_up} parent folders.")
+    raise FileNotFoundError(
+        f"Parameters.txt (or *_Parameters.txt) not found in {selected_dir} or up to {max_up} parent folders."
+    )
 
 
 def _find_fdis_table_key(params: Dict[str, str], ap: int, strict: bool = True) -> Tuple[str, List[str]]:
@@ -271,11 +282,9 @@ class MeasurementDiscovery:
             flags=re.IGNORECASE,
         )
 
-        # B) Plateau (DC acquisition, no aperture token in filename typically)
-        pat_plateau = re.compile(
-            r"^(?P<base>.+?)_Run_(?P<step>\d+)_I_(?P<i>[-\d.]+)A_(?P<seg>[^_]+)_raw_measurement_data\.txt$",
-            flags=re.IGNORECASE,
-        )
+        # B) Plateau (DC acquisition, no aperture token in filename typically).
+        #    Filename parsing (standard + H/V layouts) is delegated to the shared
+        #    parser in readers_plateau, so discovery and the reader stay in sync.
 
         for p in parameters_root.rglob("*"):
             if not p.is_file():
@@ -319,10 +328,10 @@ class MeasurementDiscovery:
                         segment_files[key] = p
                 continue
 
-            m2 = pat_plateau.match(name)
-            if m2:
-                base = m2.group("base")
-                seg_id = m2.group("seg")
+            info2 = parse_plateau_filename(name)
+            if info2:
+                base = info2["base"]
+                seg_id = info2["seg"]
                 # determine aperture: prefer folder hint if multiple apertures enabled
                 ap = 1
                 if 2 in enabled_aps:
@@ -345,10 +354,9 @@ class MeasurementDiscovery:
                     segment_files[key] = p
                 else:
                     # keep the one with the smallest step number for determinism
-                    def step_of(path: Path) -> int:
-                        mm = pat_plateau.match(path.name)
-                        return int(mm.group("step")) if mm else 10**9
-                    if step_of(p) < step_of(prev):
+                    prev_info = parse_plateau_filename(prev.name)
+                    prev_step = int(prev_info["step"]) if prev_info else 10**9
+                    if int(info2["step"]) < prev_step:
                         segment_files[key] = p
                 continue
 

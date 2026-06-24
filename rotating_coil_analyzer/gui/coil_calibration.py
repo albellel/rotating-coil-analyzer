@@ -54,32 +54,8 @@ def _openfile_dialog(
     filetypes: list[tuple[str, str]] | None = None,
 ) -> Optional[str]:
     """Open a native Open dialog (best effort). Returns None if tkinter unavailable."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception:
-        return None
-
-    root = None
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            root.attributes("-topmost", True)
-        except Exception:
-            pass
-
-        path = filedialog.askopenfilename(
-            title=title,
-            filetypes=filetypes or [("All files", "*.*")],
-        )
-        return str(path) if path else None
-    finally:
-        try:
-            if root is not None:
-                root.destroy()
-        except Exception:
-            pass
+    from rotating_coil_analyzer.gui._dialogs import open_file_dialog
+    return open_file_dialog(title=title, filetypes=filetypes)
 
 
 def _saveas_dialog(
@@ -90,34 +66,13 @@ def _saveas_dialog(
     title: str = "Save file",
 ) -> Optional[str]:
     """Open a native Save-As dialog (best effort). Returns None if tkinter unavailable."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception:
-        return None
-
-    root = None
-    try:
-        root = tk.Tk()
-        root.withdraw()
-        try:
-            root.attributes("-topmost", True)
-        except Exception:
-            pass
-
-        path = filedialog.asksaveasfilename(
-            title=title,
-            initialfile=initialfile,
-            defaultextension=defaultextension,
-            filetypes=filetypes,
-        )
-        return str(path) if path else None
-    finally:
-        try:
-            if root is not None:
-                root.destroy()
-        except Exception:
-            pass
+    from rotating_coil_analyzer.gui._dialogs import saveas_dialog
+    return saveas_dialog(
+        initialfile=initialfile,
+        defaultextension=defaultextension,
+        filetypes=filetypes,
+        title=title,
+    )
 
 
 def _clear_button_handlers(btn: w.Button) -> None:

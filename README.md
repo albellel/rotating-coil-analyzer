@@ -24,7 +24,7 @@ Downsampling (when used for plotting) is **decimation only** (keep every Kth sam
 
 ### Supported input formats
 - **Streaming binary** (`*.bin`): continuous acquisition data, "corr/generic" variants supported via `Parameters.txt` FDIs table mapping.
-- **Plateau text** (`*_raw_measurement_data.txt`): DC plateau acquisition, multi-file plateau sequences concatenated in correct order, with plateau metadata propagated per turn.
+- **Plateau text** (`*_raw_measurement_data.txt`): DC plateau acquisition, multi-file plateau sequences concatenated in correct order, with plateau metadata propagated per turn. Both the standard `_Run_<step>_I_<current>A_<seg>_` naming and the H/V steerer `_Run_<step>IH_<ih>IV_<iv>_<seg>_` naming (e.g. FFMM degauss) are recognised, and the parameters file may be named either `Parameters.txt` or `<magnet>_<timestamp>_Parameters.txt`.
 - **Measurement-head CSV**: geometry files for computing kn calibration coefficients.
 
 ### Data model
@@ -124,39 +124,30 @@ gui  # Display the GUI
 
 ## Notebooks
 
-Example and analysis notebooks are in `rotating_coil_analyzer/notebooks/`:
+This is the **magnet-agnostic library repo**. The magnet-specific measurement
+campaigns (SPS MBB, LEAR MC62, ...) and their analysis/R&D notebooks live in
+their own repositories (`mbb-data-analysis`, `mc62-data-analysis`,
+`mba-data-analysis`), which depend on this package. Only example/tool and
+parity-validation notebooks remain here, under `rotating_coil_analyzer/notebooks/`:
 
-### Tools
+### Tools (example / tutorial)
 - `tools/analysis_gui.ipynb` -- Combined GUI (Catalog + Harmonics workflow)
 - `tools/kn_from_mh_csv.ipynb` -- Compute kn calibration coefficients from measurement-head CSV
 
-### SPS MBB dipole
-- `SPS_MBB/2025-12-12_MBB/` -- CS and NCS harmonic analysis (Dec 2025 campaign)
-- `SPS_MBB/2026-02-06_CS_supercycle/` -- CS harmonics, 200 GeV & 26 GeV analysis, comparison (Feb 2026 supercycle campaign)
-- `SPS_MBB/2026-02-25_2Hz/` -- 200 GeV & 26 GeV analysis, comparison, body-vs-integrated field, turn-averaging sensitivity (Feb 2026, 2 Hz rotation)
-- `SPS_MBB/2026-03-06_max_speed_NMR/` -- 200 GeV & 26 GeV analysis at max speed (~176 RPM), NMR/Hall probe visualization, comparison, hysteresis analysis (Mar 2026, per-segment Kn)
-
-### LEAR MC62 dipole
-- `LEAR_MC62/00_system_check/` -- System check (10 turns)
-- `LEAR_MC62/01_with_shims/` -- Staircase analysis + eddy-current settling (with shims, 1 Hz)
-- `LEAR_MC62/02_without_shims/` -- Staircase analysis + FFMM parity validation (without shims, 1 Hz)
-- `LEAR_MC62/03_2Hz_afternoon/` -- Streaming staircase analysis + eddy-current (2 Hz)
-- `LEAR_MC62/04_2Hz_morning/` -- Reproducibility repeat (2 Hz, morning)
-- `LEAR_MC62/05_4Hz/` -- Staircase analysis at 4 Hz (~238 RPM), FFMM golden standard, eddy-current settling (Mar 2026)
-  - `analysis.ipynb` -- Full analysis: plateau detection, harmonics, FFMM parity, eddy settling, hysteresis
-  - `marusov_reconstruction.ipynb` -- R&D: Marusov (2013) 2D temporal decomposition. Identity validated at machine epsilon, temporal filtering, full-stream comparison
-  - `eddy_transfer_function.ipynb` -- R&D: Multi-tau eddy fitting (1/2/3-tau, AICc selection), eddy amplitude vs dI/dt, static magnetization, model validation
-  - `marusov_guide.md` -- Plain-language guide to Marusov's 2D Fourier decomposition (theory, formulas, implementation, practical recommendations)
-- `LEAR_MC62/comparisons/` -- Shims effect (01 vs 02), reproducibility (03 vs 04), speed effect (1 Hz vs 4 Hz), 2022 vs 2024 cross-campaign
-
-### LIU BTP8 quadrupole
-- `LIU_BTP8/2019-07-17/b3_sextupole.ipynb` -- b3 sextupole analysis
+### Parity validation
+- `LIU_BTP8/2019-07-17/b3_sextupole.ipynb` -- b3 sextupole analysis (quadrupole)
 - `LIU_BTP8/2019-07-17/parity_validation.ipynb` -- Validation against legacy C++ results
+- `SM18/2024-12-04_parity/parity_validation.ipynb` -- SM18 streaming parity against legacy results
+- `Buckley_steerer/2026-06-23_degauss_parity/parity_validation.ipynb` -- Degauss staircase parity vs FFMM golden (dipole, machine precision) + degauss field decay
+- `Buckley_steerer/2026-06-23_degauss_parity/gui_walkthrough.ipynb` -- Interactive GUI walkthrough on the degauss dataset (loaded natively, no renaming)
 
-### SM18 test bench
-- `SM18/2024-12-04_parity/parity_validation.ipynb` -- Validation against legacy results
+### Reference documents
+- `notebooks/pipeline_reference.md` -- End-to-end pipeline explained: what each stage does, where it sits, and why (integrate-to-flux, dit, dri modes, Kn, rot, cel, fed, merge, nor)
+- `notebooks/correction_options_reference.md` -- Option-by-option guide (cel/fed failure modes, benchmark across implementations)
+- `notebooks/physics_reference.md` -- Physics background for the analysis quantities
 
-All notebooks use `%matplotlib widget` for interactive zoomable plots.
+All notebooks use `%matplotlib widget` for interactive zoomable plots. For a
+hands-on walkthrough of the API, see [GUIDE.md](GUIDE.md).
 
 ---
 
@@ -175,14 +166,14 @@ For **streaming (continuous) acquisition** measurements where the magnet current
 | `build_run_averages` | Per-run mean b3 with run ordering (for hysteresis / ramp analysis) |
 | `diagnose_cel_fed` | Run pipeline with/without cel+fed, return diagnostic with SAFE/UNSAFE/MIXED recommendation |
 | `diagnose_fdi_transitions` | Detect FDI stuck-channel issues at plateau boundaries |
-| `fit_eddy_per_run` | Fit exponential eddy-current settling model per run |
-| `eddy_model` | Exponential model `B(t) = B_inf + A*exp(-t/tau)` for `curve_fit` |
-| `double_eddy_model` | Two-exponential model `B(t) = B_inf + A1*exp(-t/tau1) + A2*exp(-t/tau2)` |
-| `triple_eddy_model` | Three-exponential model (3 time constants) |
-| `validate_eddy_model_selection` | AICc-based model selection across 1/2/3-tau fits |
-| `EddyFitResult` | Dataclass result container for eddy fits (B_inf, A, tau, pcov) |
 | `ba_table_from_C` | Convert complex coefficients to legacy B/A DataFrame (all Tesla) |
 | `mixed_format_table` | Bottura Section 3.7 mixed-format DataFrame (Tesla for n <= m, units for n > m) |
+
+> **Eddy-current fitting** (`eddy_model`, `double_eddy_model`, `triple_eddy_model`,
+> `validate_eddy_model_selection`, `EddyFitResult`, `fit_eddy_per_run`) and the
+> continuous-time signal helpers now live in the companion package
+> `tools_for_data_analysis` — import them from
+> `tools_for_data_analysis.fitting.eddy`. They are not part of this package.
 
 ### Quick example
 
@@ -237,7 +228,7 @@ label = classify_current(I_value, thresholds=psb_thresholds)
 ## Running Tests
 
 ```bash
-# Run all tests (126 tests)
+# Run all tests (149 tests)
 python -m pytest rotating_coil_analyzer/tests/ -v
 
 # Run specific test file
@@ -310,17 +301,17 @@ rotating_coil_analyzer/
 │   └── discovery.py         #   Measurement folder discovery
 ├── models/                 # Data models (SegmentFrame, MeasurementCatalog, AnalysisProfile)
 ├── presentation/           # PowerPoint report generation helpers
-├── notebooks/              # Jupyter analysis & example notebooks (37 active)
-├── tests/                  # Unit tests (126 tests)
+├── notebooks/              # Example/tool + parity-validation notebooks + reference docs
+├── tests/                  # Unit tests (149 tests)
 └── validation/             # Golden reference validation (C++ parity)
 scripts/
-├── generate_notebooks.py      # Unified notebook generator (SPS MBB + LEAR MC62)
-├── nb_helpers.py              # Notebook construction helpers (code(), md(), write_notebook())
-├── generate_marusov_nb.py     # Marusov 2D reconstruction R&D notebook generator (MC62 4 Hz)
-├── generate_dynamic_eddy_nb.py # Dynamic eddy correction R&D notebook generator
-├── generate_rd_notebooks.py   # Eddy transfer function R&D notebook generator (MC62 4 Hz)
 └── btp8_bruteforce_turns.py   # Brute-force turns-per-revolution search for BTP8
 ```
+
+> Notebook generators and `nb_helpers` are no longer kept here. Programmatic
+> notebook construction now uses `tools_for_data_analysis.nb_helpers`, and the
+> magnet campaign notebooks live in their own repos (`mbb-data-analysis`,
+> `mc62-data-analysis`, `mba-data-analysis`).
 
 ---
 
