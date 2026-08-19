@@ -765,7 +765,33 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 drift_cmp=drift_cmp,
             )
 
-            meta: Dict[str, Any] = {"mean_current_A": np.mean(I_turns, axis=1)}
+            # Current reference for plots/tables. Prefer the commanded set current
+            # (plateau_I_hint, parsed from the filename) when it is available and finite:
+            # for some datasets — e.g. the Buckley steerer degauss — the raw current
+            # column is a near-constant reference reading (~1000 in its own raw units),
+            # not the magnet drive, so the measured mean is meaningless. The hint is the
+            # only honest per-run current. Falls back to the measured mean otherwise.
+            measured_current_A = np.mean(I_turns, axis=1)
+            i_hint = getattr(tb, "plateau_I_hint", None)
+            if i_hint is not None:
+                i_hint_valid = np.asarray(i_hint, dtype=float)[valid_turn]
+            else:
+                i_hint_valid = None
+
+            if i_hint_valid is not None and i_hint_valid.size and np.all(np.isfinite(i_hint_valid)):
+                mean_current_A = i_hint_valid
+                with out_log:
+                    print(
+                        "Current reference: using commanded set current (plateau_I_hint from filename); "
+                        "the raw measured current column is ignored for this dataset."
+                    )
+            else:
+                mean_current_A = measured_current_A
+
+            meta: Dict[str, Any] = {
+                "mean_current_A": mean_current_A,
+                "measured_current_A": measured_current_A,
+            }
             meta.update(prov)
             if getattr(tb, "plateau_id", None) is not None:
                 meta["plateau_id"] = np.asarray(tb.plateau_id[valid_turn]).astype(int)
