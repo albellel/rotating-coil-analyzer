@@ -317,7 +317,9 @@ scripts/
 
 ## Documentation
 
-- **[DOCUMENTATION.md](DOCUMENTATION.md)** -- Comprehensive reference: architecture, pipeline steps, models, GUI, function reference, cross-implementation comparison (Bottura, FFMM C++, Pentella).
+- **[docs/](docs/README.md)** -- Theory-to-code documentation (consolidated 2026-08-20 from the retired LaTeX repo `RC-analyzer-documentation`): measurement principle, ingest and time policy, signal processing, FFT, kn calibration, corrections, merge/normalisation, validation, usage examples, and the [Bottura equation → function cross-reference with the documented deviations](docs/10_bottura_cross_reference.md). LaTeX-ready formulas.
+- **[GUIDE.md](GUIDE.md)** -- Hands-on walkthrough of the GUI and of the programmatic streaming pipeline (the recipe the magnet repos use).
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** -- Architecture, data models, GUI, function reference, cross-implementation comparison (FFMM C++, Pentella).
 - **[PARITY_REPORT.md](PARITY_REPORT.md)** -- Machine-precision parity validation against the legacy C++ analyzer (SM18, BTP8, MC62).
 - **[Correction Options Reference](rotating_coil_analyzer/notebooks/correction_options_reference.md)** -- Option-by-option guide with cel/fed failure modes and benchmark comparison across all four implementations.
 
@@ -327,8 +329,8 @@ scripts/
 
 The analysis algorithms follow the standard procedures described in:
 
-- **Bottura, L.** -- *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets -- Part I: Harmonics* (included in `theory/` folder)
-- **Marusov, I.** (2013) -- *Measurement of a time-periodic magnetic field using a rotating coil*, NIM-A 711, 121--123. See [marusov_guide.md](rotating_coil_analyzer/notebooks/LEAR_MC62/05_4Hz/marusov_guide.md) for a comprehensive plain-language explanation.
+- **Bottura, L.** -- *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets -- Part I: Harmonics*, MTA-IN-97-007 (included in `theory/` folder; bib key `bottura1997`). The equation-by-equation transcription lives in the bibliography note `bibliography-review/magnetic_measurements/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`; the equation → function map with the documented deviations is [docs/10_bottura_cross_reference.md](docs/10_bottura_cross_reference.md).
+- **Marusov, I.** (2013) -- *Measurement of a time-periodic magnetic field using a rotating coil*, NIM-A 711, 121--123 (`theory/`). The plain-language guide `marusov_guide.md` moved with the LEAR MC62 campaign to the `mc62-data-analysis` repo.
 
 Key formulas implemented:
 - FFT-based harmonic extraction: `f_n = 2 * FFT(flux) / N`

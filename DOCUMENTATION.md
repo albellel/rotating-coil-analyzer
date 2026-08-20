@@ -49,7 +49,7 @@ rotating_coil_analyzer/
   │   ├── kn_head.py         Geometry-based Kn from measurement head CSV
   │   ├── merge.py           Abs/Cmp channel merge diagnostics
   │   ├── kn_bundle.py       Provenance containers
-  │   └── utility_functions.py  High-level wrappers, plateau detection, eddy fitting
+  │   └── utility_functions.py  High-level wrappers, plateau detection, diagnostics (eddy fitting lives in tools-for-data-analysis)
   ├── models/             Immutable data containers
   │   ├── catalog.py         Measurement catalog (filesystem discovery)
   │   ├── frames.py          In-memory segment data (SegmentFrame)
@@ -117,7 +117,7 @@ Raw Measurement Files
 │  safe_normalize_to_units()   │  Normalize to bn/an units
 │  build_harmonic_rows()       │  Convert to DataFrame-ready dicts
 │  plateau_summary()           │  Per-plateau statistics
-│  fit_eddy_per_run()          │  Exponential eddy-current model
+│  (eddy fits: tools_for_data_analysis.fitting.eddy)
 └──────────────────────────────┘
         │
         ▼  DataFrame with B_n(T), A_n(T), b_n(units), a_n(units)
@@ -141,6 +141,12 @@ Raw Measurement Files
 ## 3. Theoretical Foundation (Bottura)
 
 Reference: L. Bottura, *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets - Part I: Harmonics*, MTA-IN-97-007, CERN, 2000.
+
+> **Canonical versions (2026-08-20):** the full equation transcription is the bibliography note
+> `bibliography-review/magnetic_measurements/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`
+> (its §11 maps equations to functions); the theory-to-code chapters are in [`docs/`](docs/README.md) and the
+> equation → function table with the documented deviations is [`docs/10_bottura_cross_reference.md`](docs/10_bottura_cross_reference.md).
+> The summary below is kept for orientation only.
 
 ### 3.1 Harmonic Field Expansion
 
@@ -337,12 +343,9 @@ compute_legacy_kn_per_turn(
 - `process_kn_pipeline()`: One-call wrapper: kn → merge → normalize
 - `build_harmonic_rows()`: Converts to DataFrame-ready dicts with B_n/A_n/b_n/a_n columns
 
-**Eddy-Current Fitting**:
-- `eddy_model()`: B(t) = B∞ + A*exp(-t/τ)
-- `double_eddy_model()`: Two-exponential variant (2 time constants)
-- `triple_eddy_model()`: Three-exponential variant (3 time constants)
-- `validate_eddy_model_selection()`: AICc-based model selection across 1/2/3-tau fits
-- `fit_eddy_per_run()`: Two-pass MAD-clipped fitting with quality classification
+**Eddy-Current Fitting**: not in this package any more — `eddy_model`, `double_eddy_model`,
+`triple_eddy_model`, `validate_eddy_model_selection`, `EddyFitResult`, `fit_eddy_per_run`
+live in `tools_for_data_analysis.fitting.eddy` (no re-export here).
 
 **Diagnostics**:
 - `diagnose_cel_fed()`: Runs pipeline with/without cel+fed, recommends SAFE/UNSAFE/MIXED
@@ -644,6 +647,12 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 
 ## 12. Cross-Reference: Theory vs Implementation
 
+> **Superseded (2026-08-20)** by [`docs/10_bottura_cross_reference.md`](docs/10_bottura_cross_reference.md),
+> which carries the complete equation → function table (note numbering) and the three documented
+> deviations (no AII.15–16 forward/backward averaging; dipole centring = linearised 20-pole AIII.3;
+> `legacy_rotate_excludes_last` SM18-parity only). Sections 12–13 below are retained as the
+> 2026-03-12 audit record.
+
 ### 12.1 Bottura Equations → Code Mapping
 
 | Bottura Eq. | Description | Code Location | Status |
@@ -778,12 +787,7 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 | `diagnose_cel_fed(...)` | CEL/FED safety diagnostic |
 | `FdiTransitionCheck` | Diagnostic result dataclass for FDI stuck-channel detection |
 | `diagnose_fdi_transitions(...)` | Detect FDI stuck-channel issues at plateau transitions |
-| `eddy_model(t, B_inf, A, tau)` | B(t) = B_inf + A*exp(-t/tau) for curve_fit |
-| `double_eddy_model(t, B_inf, A1, tau1, A2, tau2)` | Two-exponential eddy model |
-| `triple_eddy_model(t, ...)` | Three-exponential eddy model |
-| `validate_eddy_model_selection(...)` | AICc-based model selection across 1/2/3-tau fits |
-| `EddyFitResult` | Result dataclass (tau, A, B_inf, R2, quality) |
-| `fit_eddy_per_run(...)` | Fit single-exponential eddy model with 2-pass MAD clipping |
+| *(eddy models / fitting)* | Moved to `tools_for_data_analysis.fitting.eddy` (`eddy_model`, `double_eddy_model`, `triple_eddy_model`, `validate_eddy_model_selection`, `EddyFitResult`, `fit_eddy_per_run`) |
 | `find_contiguous_groups(mask)` | Find contiguous True-groups in boolean mask |
 | `ba_table_from_C(C, orders)` | Complex → B/A DataFrame |
 | `mixed_format_table(C_merged, C_units, ...)` | Bottura 3.7 mixed format |
