@@ -3,7 +3,7 @@
 Theory source: L. Bottura, *Standard Analysis Procedures for Field Quality
 Measurement of the LHC Magnets — Part I: Harmonics*, MTA-IN-97-007 (rev. 2000),
 bib key `bottura1997`. Equation numbers below follow the ⭐⭐⭐ note
-`bibliography-review/magnetic_measurements/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`
+`bibliography-review/magnetic_measurements/rotating_coil_harmonics/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`
 (§2 for Eqs. 1–22, §4 for Appendix I). Nothing is re-derived here.
 
 ## 1.1 Complex multipole expansion (Eqs. 1–4)

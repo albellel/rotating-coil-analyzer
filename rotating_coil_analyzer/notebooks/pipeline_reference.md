@@ -347,4 +347,4 @@ thing, never the first.
   [`physics_reference.md`](physics_reference.md)
 - Hands-on API walkthrough: [`../../GUIDE.md`](../../GUIDE.md)
 - Theory source: Bottura, *Standard Analysis Procedures for Field Quality
-  Measurement of the LHC Magnets — Part I: Harmonics* (in `theory/`).
+  Measurement of the LHC Magnets — Part I: Harmonics* (in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`).

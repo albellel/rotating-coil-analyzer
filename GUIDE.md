@@ -310,4 +310,4 @@ against a reference (see `notebooks/correction_options_reference.md`).
   `cel`/`fed` failure modes.
 - `notebooks/SM18/2024-12-04_parity/` and `notebooks/LIU_BTP8/2019-07-17/` —
   worked parity-validation notebooks against the legacy analyzer.
-- `theory/` — the Bottura and Marusov reference papers the algorithms follow.
+- `theory/` (git-ignored) — a pointer README only: the Bottura and Marusov papers the algorithms follow live in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`.

@@ -329,8 +329,8 @@ scripts/
 
 The analysis algorithms follow the standard procedures described in:
 
-- **Bottura, L.** -- *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets -- Part I: Harmonics*, MTA-IN-97-007 (included in `theory/` folder; bib key `bottura1997`). The equation-by-equation transcription lives in the bibliography note `bibliography-review/magnetic_measurements/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`; the equation → function map with the documented deviations is [docs/10_bottura_cross_reference.md](docs/10_bottura_cross_reference.md).
-- **Marusov, I.** (2013) -- *Measurement of a time-periodic magnetic field using a rotating coil*, NIM-A 711, 121--123 (`theory/`). The plain-language guide `marusov_guide.md` moved with the LEAR MC62 campaign to the `mc62-data-analysis` repo.
+- **Bottura, L.** -- *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets -- Part I: Harmonics*, MTA-IN-97-007 (PDF in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`; bib key `bottura1997`). The equation-by-equation transcription lives in the bibliography note `bibliography-review/magnetic_measurements/rotating_coil_harmonics/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`; the equation → function map with the documented deviations is [docs/10_bottura_cross_reference.md](docs/10_bottura_cross_reference.md).
+- **Marusov, I.** (2013) -- *Measurement of a time-periodic magnetic field using a rotating coil*, NIM-A 711, 121--123 (PDF in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`, bib key `marusov2013`). The plain-language guide `marusov_guide.md` moved with the LEAR MC62 campaign to the `mc62-data-analysis` repo.
 
 Key formulas implemented:
 - FFT-based harmonic extraction: `f_n = 2 * FFT(flux) / N`

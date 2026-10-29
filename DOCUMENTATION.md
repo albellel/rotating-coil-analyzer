@@ -143,7 +143,7 @@ Raw Measurement Files
 Reference: L. Bottura, *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets - Part I: Harmonics*, MTA-IN-97-007, CERN, 2000.
 
 > **Canonical versions (2026-08-20):** the full equation transcription is the bibliography note
-> `bibliography-review/magnetic_measurements/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`
+> `bibliography-review/magnetic_measurements/rotating_coil_harmonics/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`
 > (its §11 maps equations to functions); the theory-to-code chapters are in [`docs/`](docs/README.md) and the
 > equation → function table with the documented deviations is [`docs/10_bottura_cross_reference.md`](docs/10_bottura_cross_reference.md).
 > The summary below is kept for orientation only.

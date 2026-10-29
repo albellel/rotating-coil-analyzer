@@ -3,7 +3,7 @@
 Canonical equation → function map for this repository (supersedes
 `DOCUMENTATION.md` §3, §12–13, which now point here). Equation numbers follow
 the ⭐⭐⭐ note
-`bibliography-review/magnetic_measurements/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`
+`bibliography-review/magnetic_measurements/rotating_coil_harmonics/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`
 (bib key `bottura1997`); its §11 carries the same map from the theory side and
 its §12 the flags about the source text. Verdicts and parity numbers for other
 repos: hub `bibliography-review/coordinator/hubs/rotating-coil-analyzer.md` §2–3.
