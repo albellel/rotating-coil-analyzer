@@ -30,7 +30,7 @@ repos: hub `bibliography-review/coordinator/hubs/rotating-coil-analyzer.md` §2�
 | AIII.1–2 | dipole centring, 16-pole polynomial + cost | — | not implemented (deviation 2) |
 | AIII.3 | dipole centring, 20-pole | `cel`, $m=1$: $z_R = -C^{cmp}_{10}/(10\,C^{cmp}_{11})$ | **linearised** (deviation 2) |
 | AIII.4–5 | $2m$-pole centring | `cel`, $m \ge 2$: $z_R = -C^{abs}_{m-1}/((m-1)C^{abs}_m)$ | exact |
-| AIV.1–5 | $|C_m|$, $\varphi_m$, wrap to $\pm\pi/2$, $\alpha_m = \varphi_m/m$ | `_wrap_arg_to_pm_pi_over_2`, `phi_out = wrap(arg C_m)/m` | exact |
+| AIV.1–5 | $|C_m|$, $\varphi_m$, wrap to $\pm\pi/2$, $\alpha_m = \varphi_m/m$ | `_wrap_arg_to_pm_pi_over_2`, `phi_out = wrap(arg C_m)/m`; skew main: `wrap(arg(-i C_m))/m` | exact; turns within 0.05 rad of the wrap flagged (`phi_near_wrap`) |
 | AIV.7 | gradient $g_m = B_m/R_{ref}^{m-1}$ | not computed (trivial from output) | — |
 | §3.3 order | dit? → drift → integrate → DFT → fold → $\kappa$ | same order; `dit` is an FFMM addition, not in Bottura | as written + `dit` |
 | §3.4 | AC procedure (no drift, fwd/bwd average) | — | not implemented; analyst decides on `dri` for ramps |
@@ -67,15 +67,16 @@ clamp, `diagnose_cel_fed()` (SAFE/UNSAFE/MIXED), and Bottura's own rule
 to centre only at moderate-to-high field in steady state. An automatic
 fallback (disable `cel`/`fed` when UNSAFE) is proposed, not implemented.
 
-### Deviation 3 — `legacy_rotate_excludes_last` is SM18-parity only
+### Deviation 3 — `legacy_rotate_excludes_last` is FFMM-parity only
 
 `legacy_rotate_excludes_last=True` stops the rotation loop at $n = H-1$,
-reproducing an off-by-one in the historical SM18 C++ export. AIV.6 rotates
-all orders; so do the current FFMM C++ path and Pentella. The flag has no
-theoretical basis and must be left at its default `False` for physics; it is
-set to `True` only in the SM18 golden-standard comparison
-(`PARITY_REPORT.md` §1.2; observable as an $\sim 10^{-7}$ difference on
-order 15 in the Buckley degauss parity).
+reproducing the off-by-one of the FFMM native C++ analysis (its production
+path; corrected 2026-10-30 from "historical SM18 export only" after reading the
+FFMM source, chapter 12 E1). AIV.6 rotates all orders; so do the FFMM Matlab
+path and the MMM Python analyzer. The flag has no theoretical basis and must be
+left at its default `False` for physics. It is set to `True` only to reproduce
+FFMM results files. Otherwise the difference is $1.8\times10^{-7}$ T on $B_{15}$
+in the Buckley degauss parity and $3\times10^{-6}$ units on $b_{15}$ for FCC-ee.
 
 ## 10.3 Smaller differences and gaps (not deviations from Bottura)
 
@@ -84,9 +85,9 @@ order 15 in the Buckley degauss parity).
 | `dit` current-ramp reweighting | FFMM legacy step, absent from Bottura; `dit_signed` selects C++ parity thresholds |
 | Conjugate in $1/\overline{k_n}$ | phase convention of the legacy $k_n$ files; identical for real (radial) $k_n$; parity-proven |
 | Legacy `dri` subtracts `mean(cumsum(df))` | affects only the discarded DC bin; kept for bit-for-bit C++ parity |
-| Weighted `dri` mode | implemented and unit-tested, not yet validated end-to-end on speed-ripple data |
+| Weighted `dri` mode | first-increment duration fixed 2026-10-30 (diary BF-2026-10-30-02); equals legacy for uniform $\Delta t$ (tested); not yet validated end-to-end on speed-ripple data |
 | External (ext) channel | read into `SegmentKn`/`KnBundle`, not processed by the pipeline |
-| Multi-segment $B\cdot L$-weighted merge, pulsed/time-resolved mode, impedance-gain correction | Pentella/FFMM features not in this package (`DOCUMENTATION.md` §13.2) |
+| Multi-segment $B\cdot L$-weighted merge, pulsed/time-resolved mode, impedance-gain correction | MMM-Python-analyzer/FFMM features not in this package (`DOCUMENTATION.md` §13.2) |
 | Noise → harmonic precision (`bottura1997b`) | not used as a formal uncertainty model; per-turn scatter (MAD) is the empirical stand-in |
 
 ## 10.4 What is verified

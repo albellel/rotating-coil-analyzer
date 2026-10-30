@@ -6,6 +6,14 @@ Provides interactive controls for:
 - Turn-level data quality (DQ) cuts (outlier rejection, first/last turn trimming)
 - FFT computation on absolute and compensated flux channels
 - Amplitude/phase and normal/skew (b_n/a_n) result tables per turn and per plateau
+
+Units: this tab applies NO kn calibration and NO reference radius. Every
+coefficient it shows or exports is a raw FFT coefficient of the measured
+signal (integrated flux in Wb, or the raw differential signal), phase
+referenced to the raw main harmonic. Calibrated harmonics in T / units come
+from the Harmonic Merge tab. Exported tables keep their historical column
+names (``normal_B{n}``, ``skew_A{n}``, ``amplitude_C{n}``) and carry a
+``units_note`` column stating this.
 """
 
 from dataclasses import dataclass
@@ -76,6 +84,11 @@ class HarmonicsState:
     # Debounce repeated clicks (defensive)
     last_action_key: Optional[str] = None
     last_action_t: float = 0.0
+
+    # Segment for which the main order was last pre-filled from Parameters
+    main_order_seg_key: Optional[tuple] = None
+    # Units of the last computed coefficients (for plot labels)
+    units_label: str = ""
 
 
 def _saveas_dialog(
@@ -260,8 +273,10 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
         layout=w.Layout(width="420px"),
         style=STYLE_WIDE,
     )
+    # 0 = unknown: pre-filled from Parameters.txt (magnetOrder / magnetType) when a
+    # segment is first seen; otherwise the user must enter it (no silent m=1).
     main_order = w.BoundedIntText(
-        value=1, min=1, max=50, step=1,
+        value=0, min=0, max=50, step=1,
         description="Main field order",
         layout=w.Layout(width="320px"),
         style=STYLE_MED,
@@ -435,6 +450,41 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
     def _set_status(msg: str):
         status.value = f"<b>Status:</b> {msg}"
 
+    def _seg_key(segf_any) -> Optional[tuple]:
+        if segf_any is None:
+            return None
+        return (
+            str(getattr(segf_any, "source_path", "")),
+            str(getattr(segf_any, "run_id", "")),
+            getattr(segf_any, "aperture_id", None),
+            str(getattr(segf_any, "segment", "")),
+        )
+
+    def _prefill_main_order(segf_any) -> None:
+        """Take m from Parameters only the first time a segment is seen.
+
+        A value typed by the user for the current segment is never overwritten.
+        """
+        key = _seg_key(segf_any)
+        if key is None or key == state.main_order_seg_key:
+            return
+        state.main_order_seg_key = key
+        m0 = getattr(segf_any, "magnet_order", None)
+        with out_log:
+            if m0 is not None and int(m0) > 0:
+                main_order.value = int(m0)
+                print(f"Phase reference: main field order m={int(m0)} taken from Parameters.txt.")
+            elif int(main_order.value) > 0:
+                print(
+                    "Warning: main field order not found in Parameters.txt; keeping the GUI value "
+                    f"m={int(main_order.value)}. Check it."
+                )
+            else:
+                print(
+                    "Warning: main field order not found in Parameters.txt. "
+                    "Enter 'Main field order' (1 dipole, 2 quadrupole, ...) before computing."
+                )
+
     def _clear_and_close():
         """Clear output widget and close all matplotlib figures.
 
@@ -602,6 +652,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 return
 
             src = str(segf.source_path)
+            _prefill_main_order(segf)
 
             segf2, rem = _ensure_full_turns(segf)
             tb = split_into_turns(segf2)
@@ -675,13 +726,17 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
             with out_log:
                 print(f"Applied turn dropping: kept {n_keep}/{n_total} turn(s), dropped {n_drop}.")
 
-            if getattr(segf2, "magnet_order", None) is not None and int(segf2.magnet_order) > 0:
-                main_order.value = int(segf2.magnet_order)
+            _prefill_main_order(segf2)
+            if int(main_order.value) <= 0:
                 with out_log:
-                    print(f"Phase reference: using main field order {int(segf2.magnet_order)} from Parameters.")
-            else:
-                with out_log:
-                    print(f"Phase reference: using GUI main field order {int(main_order.value)}.")
+                    print(
+                        "Main field order is unknown (not in Parameters.txt). Enter 'Main field order' "
+                        "(1 dipole, 2 quadrupole, ...) and click again."
+                    )
+                _end_action(ok=False, msg="main field order unknown")
+                return
+            with out_log:
+                print(f"Phase reference: main field order m={int(main_order.value)}.")
 
             abs_turns = tb.df_abs[valid_turn, :]
             cmp_turns = tb.df_cmp[valid_turn, :]
@@ -889,6 +944,23 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 if state.std_ba is not None:
                     state.std_ba[k] = v
 
+            # Units metadata (column names are kept for compatibility).
+            if integrate_to_flux.value:
+                units_note = "raw_flux_Wb_no_kn"
+                state.units_label = "raw flux coefficient (no kn, Wb)"
+            else:
+                units_note = "raw_differential_signal_no_kn"
+                state.units_label = "raw differential-signal coefficient (no kn)"
+            for tbl in (state.df_out, state.df_out_mean, state.df_out_std,
+                        state.df_ba, state.mean_ba, state.std_ba):
+                if tbl is not None:
+                    tbl["units_note"] = units_note
+            with out_log:
+                print(
+                    f"Units: {state.units_label}. No kn calibration and no Rref are applied in this tab; "
+                    "calibrated harmonics come from the Harmonic Merge tab."
+                )
+
             _refresh_plateau_dropdown_from_df(df_out)
             _update_plateau_info()
 
@@ -939,12 +1011,12 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                     y = g[amp_col].mean().values
                     yerr = g[amp_col].std().values
                     ax.errorbar(x, y, yerr=yerr, fmt="o", capsize=3)
-                    ttl = f"Amplitude versus current — order {n} ({title_chan} channel) — plateau mean ± standard deviation"
+                    ttl = f"Amplitude versus current — order {n} ({title_chan} channel, no kn) — plateau mean ± standard deviation"
                 else:
                     x = df[current_col].values
                     y = df[amp_col].values
                     ax.plot(x, y, marker="o", linestyle="None")
-                    ttl = f"Amplitude versus current — order {n} ({title_chan} channel)"
+                    ttl = f"Amplitude versus current — order {n} ({title_chan} channel, no kn)"
 
                 t = ax.set_title(_wrap_title(ttl, width=44), fontsize=11, pad=10)
                 try:
@@ -953,7 +1025,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                     pass
 
                 ax.set_xlabel("Mean current [A]")
-                ax.set_ylabel(f"Amplitude |C_{n}| (internal units)")
+                ax.set_ylabel(f"|C_{n}| = |FFT|/Ns, {state.units_label or 'raw coefficient (no kn)'}")
                 ax.grid(True)
                 _show_plot(fig)
 
@@ -1047,7 +1119,7 @@ def build_phase2_panel(get_segmentframe_callable, *, default_n_max: int = 20) ->
                 ax.set_xticks(x)
                 ax.set_xticklabels([str(int(n)) for n in orders])
                 ax.set_xlabel("Harmonic order n")
-                ax.set_ylabel("Normal / Skew (legacy convention)")
+                ax.set_ylabel(f"Normal / skew, {state.units_label or 'raw coefficient (no kn)'}")
 
                 I = state.plateau_current_map.get(pid, float("nan")) if state.plateau_current_map else float("nan")
                 if np.isfinite(I):

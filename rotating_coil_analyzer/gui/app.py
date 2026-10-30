@@ -15,6 +15,8 @@ Launch in a Jupyter/VS Code notebook cell::
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any
+import html as _html
+import logging
 import time
 
 import numpy as np
@@ -34,13 +36,19 @@ from rotating_coil_analyzer.models.frames import SegmentFrame
 
 from rotating_coil_analyzer.gui.harmonics import build_phase2_panel
 from rotating_coil_analyzer.gui.coil_calibration import build_phase3a_coil_calibration_panel
-from rotating_coil_analyzer.gui.harmonic_merge import build_phase3b_harmonic_merge_panel
+from rotating_coil_analyzer.gui.harmonic_merge import (
+    build_phase3b_harmonic_merge_panel,
+    kn_segment_mismatch,
+    segment_key,
+)
 from rotating_coil_analyzer.gui.plots import build_phase4_plots_panel
 from rotating_coil_analyzer.gui.plateau_detection import build_plateau_detection_panel
 from rotating_coil_analyzer.gui.physics_plots import build_physics_plots_panel
 from rotating_coil_analyzer.gui.comparison import build_comparison_panel
 from rotating_coil_analyzer.analysis.kn_bundle import KnBundle, MergeResult
 
+
+_LOGGER = logging.getLogger(__name__)
 
 # Keep a single active GUI instance per kernel (prevents multiple live instances).
 _ACTIVE_GUI: Optional[w.Widget] = None
@@ -265,12 +273,39 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
             shared["segment_frame"] = None
             shared["segment_path"] = None
 
-            table_html.value = "<div style='color:#666;'>Catalog loaded. Select run/aperture/segment, then 'Load segment'.</div>"
+            # Settings read from Parameters.txt (what the downstream tabs pre-fill).
+            r_ref = getattr(cat, "r_ref_m", None)
+            skew = getattr(cat, "skew_main", None)
+            mtype = getattr(cat, "magnet_type", None)
+            aopts = getattr(cat, "analyzer_options", None)
+            r_txt = f"{float(r_ref) * 1000.0:g} mm" if r_ref is not None else "unknown"
+            m_txt = str(cat.magnet_order) if cat.magnet_order is not None else "unknown"
+            skew_txt = "skew" if skew else ("normal" if skew is not None else "?")
+            opt_txt = ",".join(aopts) if aopts is not None else "?"
+            _log(
+                "Parameters.txt: "
+                f"magnet type={mtype if mtype else '?'}, m={m_txt}, Rref={r_txt}, "
+                f"main={skew_txt}, options={opt_txt}, "
+                f"Ns={cat.samples_per_turn}, v={cat.shaft_speed_rpm:g} rpm"
+            )
+
+            important = [str(m) for m in cat.warnings if str(m).startswith("WARNING:")]
+            if important:
+                items = "".join(f"<li>{_html.escape(m)}</li>" for m in important)
+                table_html.value = (
+                    "<div style='color:#b00; padding:6px; background:#fee; border:1px solid #c88;'>"
+                    f"<b>Catalog loaded with {len(important)} important warning(s); check them before analysing:</b>"
+                    f"<ul style='margin:4px 0 0 18px; padding:0;'>{items}</ul></div>"
+                    "<div style='color:#666; margin-top:4px;'>Select run/aperture/segment, then 'Load segment'.</div>"
+                )
+            else:
+                table_html.value = "<div style='color:#666;'>Catalog loaded. Select run/aperture/segment, then 'Load segment'.</div>"
 
             if cat.warnings:
                 _log("WARNINGS:")
                 for m in cat.warnings:
-                    _log(f"WARNING: {m}")
+                    m = str(m)
+                    _log(m if m.startswith("WARNING:") else f"WARNING: {m}")
 
             _done("catalog ready")
         except Exception as e:
@@ -322,8 +357,35 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
         st.seg_id = str(seg_id)
         st.segf = segf
 
+        # Compare with the last segment ever loaded (segment_frame is reset to
+        # None when a new catalog is loaded, so it cannot serve as the reference).
+        prev_key = shared.get("last_segment_key")
+        shared["last_segment_key"] = segment_key(segf)
         shared["segment_frame"] = segf
         shared["segment_path"] = fpath
+
+        if prev_key is not None and prev_key != segment_key(segf):
+            # Results derived from the previous segment must not be combined with this one.
+            if shared.get("merge_result") is not None:
+                shared["merge_result"] = None
+                _log("WARNING: new segment loaded: the previous merge result was cleared "
+                     "(re-run Harmonic Merge).")
+            if shared.get("plateau_info") is not None:
+                shared["plateau_info"] = None
+                _log("WARNING: new segment loaded: the previous plateau detection was cleared "
+                     "(re-run Plateau Detection).")
+
+        mismatch = kn_segment_mismatch(shared.get("kn_bundle"), segf)
+        if mismatch:
+            _log(f"WARNING: the loaded kn was computed for another segment ({mismatch}). "
+                 "Reload kn in the Coil Calibration tab; 'Apply Kn' refuses the mismatch.")
+
+        for cb in list(shared.get("segment_listeners", []) or []):
+            try:
+                cb()
+            except Exception as exc:
+                _LOGGER.exception("segment listener failed")
+                _log(f"ERROR: refreshing a tab after the segment change failed: {exc!r}")
         return segf
 
     def _plot_first_turns(segf: SegmentFrame, ycol: str, title: str):
@@ -483,7 +545,10 @@ def _build_phase1_panel(shared: Dict[str, Any]) -> w.Widget:
 
     # Two-column layout: results on the left, diagnostics on the right.
     # This avoids vertical scrolling to reach the log/status.
-    return w.VBox([top, mid, w.HBox([main_box, diag_box], layout=w.Layout(width="100%"))])
+    panel = w.VBox([top, mid, w.HBox([main_box, diag_box], layout=w.Layout(width="100%"))])
+    # Expose the Catalog log so build_gui can report tab-refresh errors there.
+    setattr(panel, "_catalog_log", _log)
+    return panel
 
 
 def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
@@ -528,6 +593,8 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
         "merge_result": None,
         "plateau_info": None,
         "n_last_turns_recommended": None,
+        # Callables run after the Catalog loads a segment (refresh dependent tabs).
+        "segment_listeners": [],
     }
 
     def set_kn_bundle(bundle: Optional[KnBundle]) -> None:
@@ -569,7 +636,11 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
         lambda: shared.get("kn_bundle"),
         set_merge_result,
         get_n_last_recommended=lambda: shared.get("n_last_turns_recommended"),
+        get_catalog_callable=lambda: shared.get("catalog"),
     )
+    _merge_refresh = getattr(phase3b, "_harmonic_merge_refresh_context", None)
+    if callable(_merge_refresh):
+        shared["segment_listeners"].append(_merge_refresh)
 
     # Tab 5: Raw Signal Plots (renamed from "Plots")
     phase4 = build_phase4_plots_panel(
@@ -578,11 +649,17 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     )
 
     # Tab 6: Physics Plots (NEW)
+    def _merge_skew_main() -> Optional[bool]:
+        getter = getattr(phase3b, "_harmonic_merge_used_params", None)
+        used = getter() if callable(getter) else None
+        return None if not used else bool(used.get("skew_main"))
+
     physics_tab = build_physics_plots_panel(
         lambda: shared.get("merge_result"),
         lambda: shared.get("plateau_info"),
         lambda: shared.get("segment_frame"),
         set_n_last_recommended,
+        get_skew_main=_merge_skew_main,
     )
 
     # Tab 7: Comparison (NEW)
@@ -605,35 +682,41 @@ def build_gui(*, clear_cell_output: bool = True) -> w.Widget:
     _HARMONIC_MERGE_TAB_IDX = 4
     _RAW_PLOTS_TAB_IDX = 5
 
+    _catalog_log = getattr(phase1, "_catalog_log", None)
+
+    def _report_refresh_error(where: str, exc: BaseException) -> None:
+        """Tab-refresh failures are reported (Catalog log + Python logging), never swallowed."""
+        _LOGGER.exception("GUI refresh failed (%s)", where)
+        if callable(_catalog_log):
+            try:
+                _catalog_log(f"ERROR: refreshing the {where} tab failed: {exc!r}")
+            except Exception:
+                _LOGGER.exception("could not write to the Catalog log")
+
+    def _refresh_tab(idx) -> None:
+        if idx == _RAW_PLOTS_TAB_IDX:
+            refresh = getattr(phase4, "_phase4_refresh_columns", None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception as exc:
+                    _report_refresh_error("Raw Signal Plots", exc)
+        elif idx == _HARMONIC_MERGE_TAB_IDX:
+            refresh = getattr(phase3b, "_harmonic_merge_refresh_context", None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception as exc:
+                    _report_refresh_error("Harmonic Merge", exc)
+
     def _on_tab_change(change):
-        try:
-            idx = change.get("new") if change.get("name") == "selected_index" else None
-            if idx == _RAW_PLOTS_TAB_IDX:
-                refresh = getattr(phase4, "_phase4_refresh_columns", None)
-                if callable(refresh):
-                    refresh()
-            elif idx == _HARMONIC_MERGE_TAB_IDX:
-                refresh = getattr(phase3b, "_harmonic_merge_refresh_context", None)
-                if callable(refresh):
-                    refresh()
-        except Exception:
-            pass
+        idx = change.get("new") if change.get("name") == "selected_index" else None
+        _refresh_tab(idx)
 
     tabs.observe(_on_tab_change, names="selected_index")
 
     # If the GUI opens already on a tab that needs refresh, do it once
-    try:
-        idx0 = getattr(tabs, "selected_index", 0)
-        if idx0 == _RAW_PLOTS_TAB_IDX:
-            refresh = getattr(phase4, "_phase4_refresh_columns", None)
-            if callable(refresh):
-                refresh()
-        elif idx0 == _HARMONIC_MERGE_TAB_IDX:
-            refresh = getattr(phase3b, "_harmonic_merge_refresh_context", None)
-            if callable(refresh):
-                refresh()
-    except Exception:
-        pass
+    _refresh_tab(getattr(tabs, "selected_index", 0))
 
 
     _ACTIVE_GUI = tabs

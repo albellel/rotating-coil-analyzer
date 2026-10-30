@@ -34,7 +34,19 @@ gui
 Walkthrough on a real dataset:
 `notebooks/Buckley_steerer/2026-06-23_degauss_parity/gui_walkthrough.ipynb`.
 
-## 9.2 Example 1 — standard analysis with a precomputed segment $k_n$
+## 9.2 Example 0 — command line, no code
+
+```bash
+rca-analyze                                   # bundled FCC-ee demo, compared with FFMM
+rca-analyze path/to/folder --kn path/to/Kn_values_Seg_Main.txt [--seg S --order m --rref R --options dri,rot]
+```
+
+Settings come from `Parameters.txt` (m from `magnetOrder`/`magnetType`, $R_{ref}$
+from `refRadius`, skew from `magnetNormSkew`, options from `magnetAnalyzer.*`)
+and are printed; the run stops if $m$ or $R_{ref}$ is unknown. Output: per-turn
+and per-plateau summary CSV in `./rca_output/`.
+
+## 9.3 Example 1 — standard analysis with a precomputed segment $k_n$
 
 ```python
 from rotating_coil_analyzer.ingest.discovery import MeasurementDiscovery
@@ -45,7 +57,10 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     process_kn_pipeline, build_harmonic_rows, diagnose_cel_fed)
 import pandas as pd
 
+from rotating_coil_analyzer.models.profile import AnalysisProfile
+
 cat = MeasurementDiscovery().build_catalog("path/to/measurement_folder")
+profile = AnalysisProfile.from_catalog(cat)    # m, Rref, skew from Parameters.txt; raises if unknown
 run_id, ap, seg = cat.runs[0], cat.enabled_apertures[0], cat.segments[0].segment_id
 seg_frame = PlateauReader().read(cat.segment_files[(run_id, ap, seg)],
                                  run_id=run_id, segment=seg,
@@ -56,22 +71,23 @@ tb = split_into_turns(seg_frame)               # (n_turns, Ns) arrays
 
 kn = load_segment_kn_txt("path/to/Kn_values_Seg_Main.txt")
 
+m, R = profile.magnet_order, profile.r_ref_m
 diag = diagnose_cel_fed(tb.df_abs, tb.df_cmp, tb.t, tb.I,
-                        kn=kn, r_ref=0.040, magnet_order=1, max_zR=0.01)
+                        kn=kn, r_ref=R, magnet_order=m, max_zR=0.01)
 OPTIONS = ("dri", "rot", "cel", "fed") if diag.recommendation == "SAFE" else ("dri", "rot")
 
-result, C_merged, C_units, ok_main = process_kn_pipeline(
+result, C_merged, C_units, ok_main = process_kn_pipeline(   # emits UserWarning on implausible setups
     tb.df_abs, tb.df_cmp, tb.t, tb.I,
-    kn=kn, r_ref=0.040, magnet_order=1, options=OPTIONS)
+    kn=kn, r_ref=R, magnet_order=m, options=OPTIONS, skew_main=profile.skew_main)
 
-df = pd.DataFrame(build_harmonic_rows(result, C_merged, C_units, ok_main, 1,
+df = pd.DataFrame(build_harmonic_rows(result, C_merged, C_units, ok_main, m,
                                       [{"plateau_id": int(p)} for p in tb.plateau_id]))
 ```
 
 For streaming data replace `PlateauReader` by `StreamingReader` and select
 plateau turns first (`GUIDE.md` §3.4–3.5).
 
-## 9.3 Example 2 — $k_n$ from a measurement-head CSV
+## 9.4 Example 2 — $k_n$ from a measurement-head CSV
 
 ```python
 from rotating_coil_analyzer.analysis.kn_head import (
@@ -100,7 +116,7 @@ Coil orientations must be radial or tangential (chapter 5.4). Compare with a
 legacy $k_n$ file: `tests/test_kn_head_csv_vs_reference.py`. Notebook:
 `notebooks/tools/kn_from_mh_csv.ipynb`.
 
-## 9.4 Example 3 — inspecting Abs vs Cmp before merging
+## 9.5 Example 3 — inspecting Abs vs Cmp before merging
 
 ```python
 from rotating_coil_analyzer.analysis.merge import recommend_merge_choice
@@ -114,7 +130,7 @@ C_merged, choice = merge_coefficients(C_abs=result.C_abs, C_cmp=result.C_cmp,
 C_units, ok = safe_normalize_to_units(C_merged, 1, min_main_field=1e-4)
 ```
 
-## 9.5 Example 4 — reproducing a legacy export (parity configuration)
+## 9.6 Example 4 — reproducing a legacy export (parity configuration)
 
 ```python
 res, Cm, Cu, ok = process_kn_pipeline(
@@ -131,7 +147,7 @@ physics use the default (chapter 6.1). Full sweep tooling:
 `notebooks/SM18/2024-12-04_parity/`, `notebooks/LIU_BTP8/2019-07-17/`,
 `notebooks/Buckley_steerer/2026-06-23_degauss_parity/`.
 
-## 9.6 Recommended workflow
+## 9.7 Recommended workflow
 
 1. Inspect the catalog and the reader warnings (trims) before anything else.
 2. Run `diagnose_cel_fed` on the highest-current data; drop `cel`/`fed` if

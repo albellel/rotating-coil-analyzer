@@ -31,6 +31,7 @@ from rotating_coil_analyzer.analysis.turns import split_into_turns
 
 from rotating_coil_analyzer.analysis.kn_pipeline import (
     LegacyKnPerTurn,
+    bucked_cmp_orders,
     compute_legacy_kn_per_turn,
     merge_coefficients,
     safe_normalize_to_units,
@@ -86,6 +87,16 @@ class HarmonicMergeState:
 
     # Outlier removal mask (True = keep)
     outlier_keep_mask: Optional[np.ndarray] = None
+
+    # Parameters actually used at the last "Apply Kn" (m, Rref, skew, absCalib).
+    # The merge, the units and the presets use THESE, never the live widgets.
+    used_params: Optional[dict] = None
+
+    # Identity of the segment / catalog the widgets were last pre-filled for.
+    seg_key: Optional[tuple] = None
+    cat_key: Optional[str] = None
+    # Last (segment, kn) pair for which a kn/segment mismatch was reported.
+    kn_warned_key: Optional[tuple] = None
 
     # Plot state
     fig: Optional[Any] = None
@@ -143,6 +154,39 @@ def _ensure_full_turns(segf: SegmentFrame) -> Tuple[SegmentFrame, int]:
     return segf2, rem
 
 
+def segment_key(segf: Optional[SegmentFrame]) -> Optional[tuple]:
+    """Identity of a loaded segment: (source file, run, aperture, segment)."""
+    if segf is None:
+        return None
+    return (
+        str(getattr(segf, "source_path", "")),
+        str(getattr(segf, "run_id", "")),
+        getattr(segf, "aperture_id", None),
+        str(getattr(segf, "segment", "")),
+    )
+
+
+def kn_segment_mismatch(bundle: Optional[KnBundle], segf: Optional[SegmentFrame]) -> Optional[str]:
+    """Describe a mismatch between the segment a kn bundle was loaded for and *segf*.
+
+    Returns None when they are consistent, or when the bundle does not record
+    a segment / aperture (e.g. a kn file loaded before any segment).
+    """
+    if bundle is None or segf is None:
+        return None
+    problems: List[str] = []
+    kn_seg = getattr(bundle, "segment_id", None)
+    if kn_seg is not None and str(kn_seg) != str(segf.segment):
+        problems.append(f"kn segment '{kn_seg}' vs loaded segment '{segf.segment}'")
+    kn_ap = getattr(bundle, "aperture_id", None)
+    seg_ap = getattr(segf, "aperture_id", None)
+    if kn_ap is not None and seg_ap is not None and int(kn_ap) != int(seg_ap):
+        problems.append(f"kn aperture {kn_ap} vs loaded aperture {seg_ap}")
+    if not problems:
+        return None
+    return "; ".join(problems)
+
+
 def build_phase3b_harmonic_merge_panel(
     get_segmentframe_callable: Callable[[], Optional[SegmentFrame]],
     get_segmentpath_callable: Callable[[], Optional[str]] | None = None,
@@ -150,6 +194,7 @@ def build_phase3b_harmonic_merge_panel(
     set_merge_result_callable: Callable[[Optional[MergeResult]], None] | None = None,
     get_profile_callable: Callable | None = None,
     get_n_last_recommended: Callable[[], Optional[int]] | None = None,
+    get_catalog_callable: Callable[[], Optional[Any]] | None = None,
 ) -> w.Widget:
     """Build the Harmonic Merge panel.
 
@@ -166,6 +211,13 @@ def build_phase3b_harmonic_merge_panel(
     get_profile_callable
         Optional.  Returns an :class:`~rotating_coil_analyzer.models.profile.AnalysisProfile`
         to pre-populate widget values (Rref, magnet order, options, etc.).
+    get_n_last_recommended
+        Accepted for backward compatibility; unused (the N-last-turns choice
+        lives in the Physics Plots tab, which computes the plateau summary).
+    get_catalog_callable
+        Optional.  Returns the current MeasurementCatalog; its Parameters.txt
+        settings (refRadius, magnet order/type, norm/skew, analyzer options)
+        pre-fill the widgets whenever a new segment is loaded.
     """
     global _ACTIVE_PHASE3B_PANEL
 
@@ -189,8 +241,11 @@ def build_phase3b_harmonic_merge_panel(
     )
 
     # ---- Numeric parameters ----
+    # Rref and m start at 0 = "unknown": they are pre-filled from Parameters.txt
+    # when a segment is loaded, otherwise the user must type them ("Apply Kn"
+    # refuses values <= 0). There is deliberately no silent magnet default.
     rref_mm = w.FloatText(
-        value=17.0,
+        value=0.0,
         description="Rref [mm]:",
         style={"description_width": "110px"},
         layout=w.Layout(width="200px"),
@@ -202,12 +257,18 @@ def build_phase3b_harmonic_merge_panel(
         layout=w.Layout(width="200px"),
     )
     magnet_order = w.IntText(
-        value=2,
+        value=0,
         description="Main order m:",
         style={"description_width": "110px"},
         layout=w.Layout(width="200px"),
     )
     skew_main = w.Checkbox(value=False, description="Skew main harmonic")
+    params_source_html = w.HTML(
+        "<i style='color:#666; font-size:11px;'>"
+        "Rref and m are taken from Parameters.txt when a segment is loaded; "
+        "0 means unknown and must be entered before 'Apply Kn'."
+        "</i>"
+    )
 
     # ---- Processing options (legacy ordering) ----
     opt_dit = w.Checkbox(value=False, description="di/dt correction")
@@ -358,19 +419,9 @@ def build_phase3b_harmonic_merge_panel(
     )
     mad_result_html = w.HTML("")
 
-    # ---- N_LAST_TURNS selection ----
-    n_last_turns = w.IntText(
-        value=0,
-        description="N last turns:",
-        style={"description_width": "100px"},
-        layout=w.Layout(width="200px"),
-    )
-    n_last_help = w.HTML(
-        "<i style='color:#666; font-size:11px;'>"
-        "0 = all turns. Used in plateau_summary export. "
-        "Recommended value set by eddy analysis (Physics tab)."
-        "</i>"
-    )
+    # (The former "N last turns" widget was removed: no export used it. The
+    #  N-last choice is made in the Physics Plots tab, where the plateau
+    #  summary is computed.)
 
     # ---- Diagnostics display ----
     diag_table_html = w.HTML("<i>Diagnostics will appear here after recommendation.</i>")
@@ -380,6 +431,120 @@ def build_phase3b_harmonic_merge_panel(
 
     def _set_status(msg: str) -> None:
         status.value = f"<b>Status:</b> {msg}"
+
+    def _warn(msg: str) -> None:
+        log.warning(f"WARNING: {msg}")
+
+    def _reset_compute_state() -> None:
+        """Forget everything derived from the last 'Apply Kn' (per-compute state)."""
+        st.result = None
+        st.opts = None
+        st.used_params = None
+        st.diag = None
+        st.choice_recommended = None
+        st.per_n_selection = None
+        st.merge_result = None
+        st.C_units = None
+        st.ok_main = None
+        st.outlier_keep_mask = None
+        mad_result_html.value = ""
+        approve_merge.value = False
+        btn_recommend.disabled = True
+        btn_apply_merge.disabled = True
+        btn_export.disabled = True
+        per_n_container.children = []
+        per_n_table_html.value = "<i>Compute harmonics first to see per-n selection table.</i>"
+        diag_table_html.value = "<i>Diagnostics will appear here after recommendation.</i>"
+
+    def _prefill_from_parameters(segf2: SegmentFrame) -> None:
+        """Pre-fill Rref / m / skew / options from Parameters.txt for a NEW segment.
+
+        Called only when the loaded segment changes, so values typed by the
+        user for the current segment are never overwritten by a refresh.
+        """
+        cat = None
+        if get_catalog_callable is not None:
+            try:
+                cat = get_catalog_callable()
+            except Exception as e:
+                _warn(f"could not read the catalog for Parameters pre-fill: {e!r}")
+                cat = None
+        cat_key = str(getattr(cat, "parameters_path", "")) if cat is not None else None
+        same_catalog = cat_key is not None and cat_key == st.cat_key
+        st.cat_key = cat_key
+
+        taken: List[str] = []
+        unknown: List[str] = []
+
+        # --- main field order m ---
+        m0 = getattr(segf2, "magnet_order", None)
+        if (m0 is None or int(m0) <= 0) and cat is not None:
+            m0 = getattr(cat, "magnet_order", None)
+        if m0 is not None and int(m0) > 0:
+            magnet_order.value = int(m0)
+            mtype = getattr(cat, "magnet_type", None) if cat is not None else None
+            taken.append(f"m={int(m0)}" + (f" ({mtype})" if mtype else ""))
+        elif same_catalog and int(magnet_order.value) > 0:
+            unknown.append(f"main order m (keeping the value you entered, m={int(magnet_order.value)})")
+        else:
+            magnet_order.value = 0
+            unknown.append("main order m")
+
+        # --- reference radius ---
+        r0 = getattr(cat, "r_ref_m", None) if cat is not None else None
+        if r0 is not None and np.isfinite(float(r0)) and float(r0) > 0:
+            rref_mm.value = float(r0) * 1000.0
+            taken.append(f"Rref={float(r0) * 1000.0:g} mm")
+        elif same_catalog and float(rref_mm.value) > 0:
+            unknown.append(f"Rref (keeping the value you entered, {float(rref_mm.value):g} mm)")
+        else:
+            rref_mm.value = 0.0
+            unknown.append("Rref")
+
+        # --- normal / skew main ---
+        sk = getattr(cat, "skew_main", None) if cat is not None else None
+        if sk is not None:
+            skew_main.value = bool(sk)
+            taken.append("skew main" if bool(sk) else "normal main")
+
+        # --- processing options (never 'nor': normalisation is done post-merge) ---
+        aopts = getattr(cat, "analyzer_options", None) if cat is not None else None
+        if aopts is not None:
+            toks = {str(t).strip().lower() for t in aopts}
+            for tok, cb in (("dit", opt_dit), ("dri", opt_dri), ("rot", opt_rot),
+                            ("cel", opt_cel), ("fed", opt_fed)):
+                cb.value = tok in toks
+            on = [t for t in ("dit", "dri", "rot", "cel", "fed") if t in toks]
+            taken.append("options=" + (",".join(on) if on else "none"))
+            if "nor" in toks:
+                log.write("Parameters.txt has nor=true; ignored here (normalisation to units "
+                          "is always done after the merge).")
+
+        # --- explicit AnalysisProfile overrides Parameters (legacy behaviour) ---
+        if get_profile_callable is not None:
+            try:
+                _profile = get_profile_callable()
+                if _profile is not None:
+                    rref_mm.value = _profile.r_ref_m * 1000.0
+                    magnet_order.value = _profile.magnet_order
+                    abs_calib.value = _profile.abs_calib
+                    drift_mode.value = _profile.drift_mode
+                    skew_main.value = _profile.skew_main
+                    taken.append("AnalysisProfile (overrides Parameters)")
+            except Exception as e:
+                _warn(f"AnalysisProfile pre-fill failed: {e!r}")
+
+        if taken:
+            log.write("Pre-filled from Parameters.txt: " + "; ".join(taken) + ".")
+        if unknown:
+            _warn("not found in Parameters.txt: " + ", ".join(unknown)
+                  + ". Enter the value(s) before 'Apply Kn'.")
+        src = "; ".join(taken) if taken else "nothing"
+        miss = (" | <b style='color:#b00;'>unknown: " + ", ".join(unknown) + "</b>") if unknown else ""
+        params_source_html.value = (
+            "<span style='font-size:11px; color:#555;'>From Parameters.txt: "
+            f"{src}{miss}</span>"
+        )
 
     def _refresh_context() -> bool:
         """Refresh context from Catalog tab and Coil Calibration tab. Returns True if ready."""
@@ -398,6 +563,18 @@ def build_phase3b_harmonic_merge_panel(
             st.kn_bundle = None
             return False
 
+        # A different segment was loaded: drop every per-compute result and
+        # pre-fill the parameters for it (only now, never on a plain refresh).
+        key = segment_key(segf)
+        if key != st.seg_key:
+            if st.seg_key is not None:
+                log.write("New segment loaded: previous harmonics / merge cleared.")
+                if set_merge_result_callable:
+                    set_merge_result_callable(None)
+            st.seg_key = key
+            _reset_compute_state()
+            _prefill_from_parameters(segf)
+
         if kn_bundle is None:
             context_html.value = (
                 "<div style='color:#960; padding:4px; background:#ffc; border:1px solid #c90;'>"
@@ -415,27 +592,6 @@ def build_phase3b_harmonic_merge_panel(
             st.seg_path = get_segmentpath_callable()
         st.kn_bundle = kn_bundle
 
-        # Auto-fill magnet order if available
-        m0 = getattr(segf2, "magnet_order", None)
-        if m0 is not None:
-            try:
-                magnet_order.value = int(m0)
-            except Exception:
-                pass
-
-        # Auto-fill from AnalysisProfile if provided
-        if get_profile_callable is not None:
-            try:
-                _profile = get_profile_callable()
-                if _profile is not None:
-                    rref_mm.value = _profile.r_ref_m * 1000.0
-                    magnet_order.value = _profile.magnet_order
-                    abs_calib.value = _profile.abs_calib
-                    drift_mode.value = _profile.drift_mode
-                    skew_main.value = _profile.skew_main
-            except Exception:
-                pass
-
         # Auto-fill compensation scheme from kn bundle if head_csv
         if kn_bundle.head_cmp_connection and not comp_scheme.value.strip():
             comp_scheme.value = kn_bundle.head_cmp_connection
@@ -444,30 +600,94 @@ def build_phase3b_harmonic_merge_panel(
         m_str = f"m={segf2.magnet_order}" if segf2.magnet_order is not None else "m=?"
         kn_src = kn_bundle.source_type
         kn_H = len(kn_bundle.kn.orders)
+        kn_for = kn_bundle.segment_id if kn_bundle.segment_id is not None else "unspecified"
+        mismatch = kn_segment_mismatch(kn_bundle, segf2)
+
+        if mismatch:
+            box = "padding:4px; background:#fee; border:1px solid #c88;"
+            mis_html = (
+                f"<br><b style='color:#b00;'>kn / segment mismatch: {mismatch}.</b> "
+                "Reload kn for this segment in the Coil Calibration tab."
+            )
+            warn_key = (key, id(kn_bundle))
+            if st.kn_warned_key != warn_key:
+                st.kn_warned_key = warn_key
+                _warn(f"kn / segment mismatch ({mismatch}). 'Apply Kn' is refused until kn "
+                      "for this segment is loaded in the Coil Calibration tab.")
+        else:
+            box = "padding:4px; background:#e8f4e8; border:1px solid #8c8;"
+            mis_html = ""
 
         context_html.value = (
-            f"<div style='padding:4px; background:#e8f4e8; border:1px solid #8c8;'>"
+            f"<div style='{box}'>"
             f"<b>Segment:</b> Run={segf2.run_id}, {ap_str}, Seg={segf2.segment}, "
             f"{m_str}, n_turns={segf2.n_turns}<br>"
-            f"<b>Kn:</b> source={kn_src}, H={kn_H}, "
+            f"<b>Kn:</b> source={kn_src}, H={kn_H}, loaded for segment={kn_for}, "
             f"ext={'yes' if kn_bundle.kn.kn_ext is not None else 'no'}"
+            f"{mis_html}"
             f"</div>"
         )
 
         if rem > 0:
             log.write(f"Trimmed {rem} samples from tail to ensure full turns.")
 
-        # Auto-fill n_last from eddy analysis recommendation
-        if get_n_last_recommended is not None and n_last_turns.value == 0:
-            try:
-                rec = get_n_last_recommended()
-                if rec is not None and rec > 0:
-                    n_last_turns.value = int(rec)
-                    log.write(f"N_LAST auto-set to {rec} from eddy analysis recommendation.")
-            except Exception:
-                pass
-
         return True
+
+    def _validate_params() -> Optional[str]:
+        """Return an error message when Rref / m are unknown or invalid."""
+        problems: List[str] = []
+        try:
+            r = float(rref_mm.value)
+        except Exception:
+            r = float("nan")
+        if not np.isfinite(r) or r <= 0.0:
+            problems.append("reference radius Rref [mm] is unknown (enter a value > 0)")
+        if int(magnet_order.value) <= 0:
+            problems.append("main field order m is unknown (enter m >= 1: 1 dipole, 2 quadrupole, ...)")
+        if problems:
+            return "; ".join(problems)
+        return None
+
+    def _current_params() -> dict:
+        return {
+            "m": int(magnet_order.value),
+            "rref_mm": float(rref_mm.value),
+            "skew_main": bool(skew_main.value),
+            "abs_calib": float(abs_calib.value),
+        }
+
+    def _m_used() -> int:
+        """Main order used at the last 'Apply Kn' (falls back to the widget)."""
+        if st.used_params is not None:
+            return int(st.used_params["m"])
+        return int(magnet_order.value)
+
+    def _main_component(C_col: np.ndarray) -> np.ndarray:
+        """Main-field component: Im for a skew main, Re otherwise (as used at Apply Kn)."""
+        skew = bool(st.used_params["skew_main"]) if st.used_params is not None else bool(skew_main.value)
+        return np.imag(C_col) if skew else np.real(C_col)
+
+    def _mad_harmonic_order(m: int, H: int) -> Optional[int]:
+        """Order offered as the 'harmonic' MAD clip column: b3, or b{m+1} when b3 is not a harmonic."""
+        if m < 3 and H >= 3:
+            return 3
+        if m + 1 <= H:
+            return m + 1
+        return None
+
+    def _update_mad_options() -> None:
+        """Relabel the MAD clip column choices for the order actually used."""
+        if st.result is None:
+            return
+        m = _m_used()
+        n_h = _mad_harmonic_order(m, int(st.result.H))
+        opts = [(f"B{m}_T (main)", "B1_T")]
+        if n_h is not None:
+            opts.append((f"b{n_h}_units", "b3_units"))
+        prev = mad_clip_col.value
+        mad_clip_col.options = opts
+        vals = [v for _, v in opts]
+        mad_clip_col.value = prev if prev in vals else vals[0]
 
     def _build_per_n_table() -> None:
         """Build the per-n selection dropdowns based on computed harmonics."""
@@ -486,7 +706,7 @@ def build_phase3b_harmonic_merge_panel(
         # Initialize selection array
         if st.per_n_selection is None or len(st.per_n_selection) != H:
             # Default: main from abs, others from cmp
-            m = int(magnet_order.value)
+            m = _m_used()
             st.per_n_selection = np.ones(H, dtype=int)  # all cmp
             if 1 <= m <= H:
                 st.per_n_selection[m - 1] = 0  # main from abs
@@ -533,7 +753,7 @@ def build_phase3b_harmonic_merge_panel(
             return
 
         H = st.result.H
-        m = int(magnet_order.value)
+        m = _m_used()
         preset = merge_preset.value
 
         if preset == "abs_all":
@@ -601,6 +821,22 @@ def build_phase3b_harmonic_merge_panel(
 
             if not _refresh_context():
                 return
+
+            # Refuse silently-wrong inputs: unknown Rref / m, or kn for another segment.
+            bad = _validate_params()
+            if bad:
+                log.write(f"<b style='color:#b00'>Apply Kn refused:</b> {bad}.")
+                return
+            mismatch = kn_segment_mismatch(st.kn_bundle, st.segf)
+            if mismatch:
+                log.write(
+                    f"<b style='color:#b00'>Apply Kn refused: kn / segment mismatch ({mismatch}).</b> "
+                    "Load or compute kn for this segment in the Coil Calibration tab."
+                )
+                return
+
+            # Every per-compute result (incl. the outlier mask) belongs to the previous run.
+            _reset_compute_state()
 
             segf = st.segf
             kn = st.kn_bundle.kn
@@ -672,6 +908,8 @@ def build_phase3b_harmonic_merge_panel(
                 except Exception as diag_err:
                     log.write(f"cel/fed diagnostic skipped: {diag_err}")
 
+            # Snapshot of the parameters used: the merge, units and presets use these.
+            params = _current_params()
             res = compute_legacy_kn_per_turn(
                 df_abs_turns=tb.df_abs,
                 df_cmp_turns=tb.df_cmp,
@@ -679,11 +917,11 @@ def build_phase3b_harmonic_merge_panel(
                 I_turns=tb.I,
                 kn=kn,
                 Rref_m=Rref_m,
-                magnet_order=int(magnet_order.value),
-                absCalib=float(abs_calib.value),
+                magnet_order=params["m"],
+                absCalib=params["abs_calib"],
                 options=tuple(opts),
                 drift_mode=str(drift_mode.value),
-                skew_main=bool(skew_main.value),
+                skew_main=params["skew_main"],
                 dit_signed=bool(opt_dit_signed.value),
                 legacy_rotate_excludes_last=bool(opt_legacy_rotate.value),
                 max_zR=max_zR_param,
@@ -692,18 +930,15 @@ def build_phase3b_harmonic_merge_panel(
             )
             st.result = res
             st.opts = tuple(opts)
+            st.used_params = params
 
-            # Reset merge state
-            st.diag = None
-            st.choice_recommended = None
-            st.per_n_selection = None
-            st.merge_result = None
-            st.C_units = None
-            st.ok_main = None
-            approve_merge.value = False
+            # Pipeline diagnostics (cel not applied, |zR|>=1, |C_m|>20 T, wrap boundary, ...)
+            for msg in getattr(res, "warnings", ()) or ():
+                _warn(f"pipeline: {msg}")
 
             # Build per-n table
             _build_per_n_table()
+            _update_mad_options()
 
             # Enable next steps
             btn_recommend.disabled = False
@@ -722,8 +957,8 @@ def build_phase3b_harmonic_merge_panel(
             # Diagnostic summary for b2 sign investigation
             phi_med = float(np.median(res.phi_out_rad))
             phi_std = float(np.std(res.phi_out_rad))
-            m = int(magnet_order.value)
-            B1_med = float(np.median(np.real(res.C_abs[:, m - 1]))) if m >= 1 else 0.0
+            m = _m_used()
+            B1_med = float(np.median(_main_component(res.C_abs[:, m - 1]))) if m >= 1 else 0.0
             b2_abs_med = float(np.median(np.real(res.C_abs[:, 1]))) if res.H >= 2 else 0.0
             b2_cmp_med = float(np.median(np.real(res.C_cmp[:, 1]))) if res.H >= 2 else 0.0
             log.write(
@@ -752,6 +987,11 @@ def build_phase3b_harmonic_merge_panel(
             _set_status("diagnosing cel/fed...")
 
             if not _refresh_context():
+                return
+
+            bad = _validate_params()
+            if bad:
+                log.write(f"<b style='color:#b00'>Diagnose cel/fed refused:</b> {bad}.")
                 return
 
             segf = st.segf
@@ -820,29 +1060,42 @@ def build_phase3b_harmonic_merge_panel(
 
             res = st.result
             mr = st.merge_result
-            m = int(magnet_order.value)
+            m = _m_used()
             clip_col = str(mad_clip_col.value)
 
-            # Build a temporary DataFrame with the clip column
+            # Build a temporary DataFrame with the clip column. The dropdown
+            # values stay "B1_T" / "b3_units" (stable tokens); the real column
+            # is the main B{m} (Im for a skew main) and b3, or b{m+1} when b3
+            # is not a harmonic for this magnet.
             n_turns = mr.C_merged.shape[0]
             if clip_col == "B1_T":
-                values = np.real(mr.C_merged[:, m - 1]) if m >= 1 else np.real(mr.C_merged[:, 0])
-            elif clip_col == "b3_units" and st.C_units is not None:
-                idx_3 = 2 if mr.C_merged.shape[1] > 2 else 0
-                values = np.real(st.C_units[:, idx_3])
+                values = _main_component(mr.C_merged[:, m - 1])
+                clip_label = f"B{m}_T"
+            elif clip_col == "b3_units":
+                n_h = _mad_harmonic_order(m, int(mr.C_merged.shape[1]))
+                if n_h is None or st.C_units is None:
+                    log.write(
+                        "<b style='color:#b00'>MAD clip refused:</b> no harmonic above the main "
+                        f"order m={m} is available."
+                    )
+                    return
+                values = np.real(st.C_units[:, n_h - 1])
+                clip_label = f"b{n_h}_units"
             else:
-                values = np.real(mr.C_merged[:, 0])
+                log.write(f"<b style='color:#b00'>MAD clip refused:</b> unknown column '{clip_col}'.")
+                return
 
             # Use a simple label (all same group if no plateau info)
             labels = np.full(n_turns, "all", dtype=object)
-            tmp_df = pd.DataFrame({clip_col: values, "label": labels})
+            tmp_df = pd.DataFrame({clip_label: values, "label": labels})
 
             df_clean, removed = mad_sigma_clip(
                 tmp_df,
-                col=clip_col,
+                col=clip_label,
                 n_sigma=float(mad_n_sigma.value),
                 label_col="label",
             )
+            clip_col = clip_label
 
             keep_mask = np.ones(n_turns, dtype=bool)
             removed_indices = tmp_df.index.difference(df_clean.index)
@@ -884,7 +1137,7 @@ def build_phase3b_harmonic_merge_panel(
             choice, diag = recommend_merge_choice(
                 C_abs=res.C_abs,
                 C_cmp=res.C_cmp,
-                magnet_order=int(magnet_order.value),
+                magnet_order=_m_used(),
                 orders=res.orders,
             )
             st.choice_recommended = choice
@@ -932,38 +1185,43 @@ def build_phase3b_harmonic_merge_panel(
                 log.write("<b style='color:#b00'>No per-n selection available.</b>")
                 return
 
+            # The merge must use the parameters of the last "Apply Kn".
+            used = st.used_params or {}
+            cur = _current_params()
+            changed = [
+                f"{k}: {used.get(k)!r} at Apply Kn, now {cur[k]!r}"
+                for k in ("m", "rref_mm", "skew_main", "abs_calib")
+                if k in used and used.get(k) != cur[k]
+            ]
+            if changed:
+                log.write(
+                    "<b style='color:#b00'>Merge refused: parameters changed since 'Apply Kn'</b> ("
+                    + "; ".join(changed)
+                    + "). Click 'Apply Kn' again to recompute with the new values."
+                )
+                return
+
             res = st.result
             H = res.H
 
-            # Use per_n_selection for custom merge
-            # Note: merge_coefficients only supports abs(0) and cmp(1)
-            # For ext channel, we need custom logic
-            has_ext_selection = np.any(st.per_n_selection == CHANNEL_EXT)
-
-            if has_ext_selection:
-                # Custom merge with ext channel
-                C_merged = np.empty_like(res.C_abs)
-                for j in range(H):
-                    ch = int(st.per_n_selection[j])
-                    if ch == CHANNEL_ABS:
-                        C_merged[:, j] = res.C_abs[:, j]
-                    elif ch == CHANNEL_CMP:
-                        C_merged[:, j] = res.C_cmp[:, j]
-                    elif ch == CHANNEL_EXT:
-                        # Ext channel not computed in LegacyKnPerTurn
-                        # This would require extending the pipeline
-                        log.write(f"<b style='color:#b00'>Ext channel selection for n={j+1} not yet supported.</b>")
-                        C_merged[:, j] = res.C_abs[:, j]  # fallback
-                choice = np.array(st.per_n_selection, copy=True)
-            else:
-                # Standard merge (abs/cmp only)
-                C_merged, choice = merge_coefficients(
-                    C_abs=res.C_abs,
-                    C_cmp=res.C_cmp,
-                    magnet_order=int(magnet_order.value),
-                    mode="custom",
-                    per_order_choice=st.per_n_selection.tolist(),
+            # The Ext channel is not processed by the pipeline (LegacyKnPerTurn
+            # has no C_ext): refuse rather than substitute Abs and record Ext.
+            ext_orders = [int(res.orders[j]) for j in range(H) if int(st.per_n_selection[j]) == CHANNEL_EXT]
+            if ext_orders:
+                log.write(
+                    "<b style='color:#b00'>Merge refused: Ext channel not processed by the pipeline yet</b> "
+                    f"(selected for n={ext_orders}). Choose Abs or Cmp for these orders."
                 )
+                return
+
+            # Standard merge (abs/cmp only)
+            C_merged, choice = merge_coefficients(
+                C_abs=res.C_abs,
+                C_cmp=res.C_cmp,
+                magnet_order=_m_used(),
+                mode="custom",
+                per_order_choice=st.per_n_selection.tolist(),
+            )
 
             # Post-merge normalization to units (Bottura 3.7 mixed format).
             # When 'nor' was checked, normalization already happened inside
@@ -978,9 +1236,9 @@ def build_phase3b_harmonic_merge_panel(
             else:
                 C_units, ok_main = safe_normalize_to_units(
                     C_merged,
-                    magnet_order=int(magnet_order.value),
-                    absCalib=float(abs_calib.value),
-                    skew_main=bool(skew_main.value),
+                    magnet_order=_m_used(),
+                    absCalib=float(used.get("abs_calib", abs_calib.value)),
+                    skew_main=bool(used.get("skew_main", skew_main.value)),
                 )
                 st.C_units = C_units
                 st.ok_main = ok_main
@@ -991,7 +1249,7 @@ def build_phase3b_harmonic_merge_panel(
                 orders=res.orders,
                 per_n_source_map=choice,
                 compensation_scheme=comp_scheme.value.strip() or "unspecified",
-                magnet_order=int(magnet_order.value),
+                magnet_order=_m_used(),
                 kn_provenance=st.kn_bundle,
                 merge_mode=merge_preset.value,
                 timestamp=KnBundle.now_iso(),
@@ -1008,6 +1266,21 @@ def build_phase3b_harmonic_merge_panel(
                 set_merge_result_callable(merge_result)
 
             btn_export.disabled = False
+
+            # Re-state the pipeline diagnostics and flag orders taken from a bucked Cmp.
+            for msg in getattr(res, "warnings", ()) or ():
+                _warn(f"pipeline: {msg}")
+            try:
+                bucked = bucked_cmp_orders(st.kn_bundle.kn, choice)
+            except Exception as e:
+                bucked = []
+                _warn(f"bucked-Cmp check failed: {e!r}")
+            if bucked:
+                _warn(
+                    f"orders n={list(bucked)} are merged from Cmp although the Cmp channel bucks them "
+                    "(|kn_cmp| ~ 0): these values are noise / ~0. Take them from Abs."
+                )
+
             log.write(
                 f"Merge applied: {merge_result.n_turns} turns, H={merge_result.H}. "
                 f"Compensation scheme: '{merge_result.compensation_scheme}'. "
@@ -1088,7 +1361,7 @@ def build_phase3b_harmonic_merge_panel(
                     mr.C_merged,
                     st.C_units,
                     mr.orders,
-                    int(magnet_order.value),
+                    _m_used(),
                     nor_was_checked=nor_was_checked,
                 ),
             ], axis=1)
@@ -1114,6 +1387,13 @@ def build_phase3b_harmonic_merge_panel(
 
             # Full metadata / provenance
             meta = mr.to_metadata_dict()
+            # Parameters used at "Apply Kn" (added columns; existing ones unchanged).
+            if st.used_params is not None:
+                meta.setdefault("r_ref_mm", st.used_params["rref_mm"])
+                meta.setdefault("skew_main", st.used_params["skew_main"])
+                meta.setdefault("abs_calib", st.used_params["abs_calib"])
+            if st.opts is not None:
+                meta.setdefault("pipeline_options", ",".join(st.opts))
             df_meta = pd.DataFrame([meta])
             meta_path = f"{root}_PROVENANCE.csv"
             df_meta.to_csv(meta_path, index=False)
@@ -1178,6 +1458,7 @@ def build_phase3b_harmonic_merge_panel(
         w.HTML("<b>Parameters</b>"),
         w.HBox([rref_mm, abs_calib, magnet_order]),
         w.HBox([skew_main]),
+        params_source_html,
     ])
 
     opts_box = w.VBox([
@@ -1205,11 +1486,6 @@ def build_phase3b_harmonic_merge_panel(
         mad_result_html,
     ])
 
-    n_last_box = w.VBox([
-        w.HTML("<b>N last turns (for summary export)</b>"),
-        w.HBox([n_last_turns, n_last_help]),
-    ])
-
     merge_box = w.VBox([
         w.HTML("<b>Merge configuration</b>"),
         w.HBox([merge_preset]),
@@ -1232,7 +1508,6 @@ def build_phase3b_harmonic_merge_panel(
             merge_box,
             w.HTML("<hr>"),
             mad_box,
-            n_last_box,
             w.HTML("<hr>"),
             diag_table_html,
             out_plot,
@@ -1252,6 +1527,9 @@ def build_phase3b_harmonic_merge_panel(
 
     # Expose refresh hook so app.py can auto-refresh context on tab switch
     setattr(panel, "_harmonic_merge_refresh_context", _refresh_context)
+    # Parameters (m, rref_mm, skew_main, abs_calib) used by the current merge,
+    # read by the Physics Plots tab (MergeResult carries no skew flag).
+    setattr(panel, "_harmonic_merge_used_params", lambda: (dict(st.used_params) if st.used_params else None))
 
     _ACTIVE_PHASE3B_PANEL = panel
     return panel

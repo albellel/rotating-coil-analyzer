@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import math
 import re
 
 from rotating_coil_analyzer.models.catalog import MeasurementCatalog, SegmentSpec
@@ -18,6 +19,23 @@ from rotating_coil_analyzer.ingest.readers_plateau import parse_plateau_filename
 
 _BOOL_TRUE = {"true", "1", "yes", "on"}
 _BOOL_FALSE = {"false", "0", "no", "off"}
+
+#: Parameters.magnetInfo.magnetType -> main field order m (fallback when
+#: Parameters.magnetAnalyzer.magnetOrder is absent, which is the usual case).
+_MAGNET_TYPE_ORDER = {
+    "dipole": 1,
+    "quadrupole": 2,
+    "sextupole": 3,
+    "octupole": 4,
+    "decapole": 5,
+    "dodecapole": 6,
+}
+
+#: Reference radii outside this range (m) are flagged as suspicious.
+_RREF_PLAUSIBLE_M = (1e-3, 0.5)
+
+#: magnetAnalyzer option flags, in pipeline order.
+_ANALYZER_OPTION_TOKENS = ("dit", "dri", "rot", "cel", "fed", "nor")
 
 
 def _parse_kv_parameters(path: Path) -> Dict[str, str]:
@@ -219,18 +237,73 @@ class MeasurementDiscovery:
 
         warnings: List[str] = []
 
-        samples_per_turn = _parse_int(params.get("Parameters.Measurement.samples"), default=512)
-        shaft_speed_rpm = _parse_float(params.get("Parameters.Measurement.v"), default=60.0)
+        samples_per_turn = _parse_int(params.get("Parameters.Measurement.samples"), default=0)
+        if samples_per_turn <= 0:
+            samples_per_turn = 512
+            warnings.append(
+                "WARNING: Parameters.Measurement.samples missing or invalid; assuming 512 samples "
+                "per turn. A wrong value misaligns every turn - check it."
+            )
+
+        shaft_speed_rpm = _parse_float(params.get("Parameters.Measurement.v"), default=float("nan"))
+        if not math.isfinite(shaft_speed_rpm):
+            # Newer FFMM versions record the motor speed under another key.
+            shaft_speed_rpm = _parse_float(params.get("Parameters.Measurement.MotorAngularSpeed"), default=float("nan"))
+        if not math.isfinite(shaft_speed_rpm):
+            shaft_speed_rpm = 60.0
+            warnings.append(
+                "WARNING: shaft speed not found (Parameters.Measurement.v / MotorAngularSpeed); "
+                "assuming 60 rpm (used only for the binary-format timing check)."
+            )
 
         # Main field order used for phase-referenced multipole conventions (legacy 'magnetOrder').
+        magnet_type = params.get("Parameters.magnetInfo.magnetType")
+        magnet_type = magnet_type.strip() if magnet_type else None
         magnet_order_raw = _parse_int(params.get("Parameters.magnetAnalyzer.magnetOrder"), default=0)
         magnet_order: Optional[int] = None
         if magnet_order_raw is not None and int(magnet_order_raw) > 0:
             magnet_order = int(magnet_order_raw)
+        elif magnet_type and magnet_type.lower() in _MAGNET_TYPE_ORDER:
+            magnet_order = _MAGNET_TYPE_ORDER[magnet_type.lower()]
+            warnings.append(
+                f"magnet order m={magnet_order} taken from Parameters.magnetInfo.magnetType='{magnet_type}' "
+                "(Parameters.magnetAnalyzer.magnetOrder not provided)."
+            )
         else:
             warnings.append(
-                "Parameters.magnetAnalyzer.magnetOrder not provided or <=0; defaulting to m=1 for phase reference (can be overridden in GUI)."
+                "WARNING: magnet order unknown (no Parameters.magnetAnalyzer.magnetOrder and no "
+                "recognised magnetInfo.magnetType). Set the main order m explicitly before "
+                "applying kn: a wrong m gives meaningless harmonics."
             )
+
+        # Reference radius recorded by the acquisition software.
+        r_ref_m: Optional[float] = _parse_float(params.get("Parameters.magnetAnalyzer.refRadius"), default=float("nan"))
+        if not (math.isfinite(r_ref_m) and r_ref_m > 0.0):
+            r_ref_m = None
+            warnings.append(
+                "WARNING: Parameters.magnetAnalyzer.refRadius not provided; set the reference "
+                "radius explicitly (every b_n scales as Rref^(n-m))."
+            )
+        elif not (_RREF_PLAUSIBLE_M[0] <= r_ref_m <= _RREF_PLAUSIBLE_M[1]):
+            warnings.append(
+                f"WARNING: Parameters.magnetAnalyzer.refRadius = {r_ref_m:g} m is outside the "
+                f"usual {_RREF_PLAUSIBLE_M[0]:g}-{_RREF_PLAUSIBLE_M[1]:g} m range (calibration "
+                "folders often store 1 m). Check it before use."
+            )
+
+        norm_skew = params.get("Parameters.magnetInfo.magnetNormSkew")
+        skew_main: Optional[bool] = None
+        if norm_skew:
+            skew_main = norm_skew.strip().lower() == "skew"
+
+        analyzer_options: Optional[Tuple[str, ...]] = None
+        flags = {
+            tok: _parse_bool(params.get(f"Parameters.magnetAnalyzer.{tok}"), default=False)
+            for tok in _ANALYZER_OPTION_TOKENS
+            if f"Parameters.magnetAnalyzer.{tok}" in params
+        }
+        if flags:
+            analyzer_options = tuple(tok for tok in _ANALYZER_OPTION_TOKENS if flags.get(tok))
 
         enabled_aps: List[int] = []
         # If keys missing: default AP1 enabled, AP2 disabled.
@@ -382,4 +455,8 @@ class MeasurementDiscovery:
             runs=tuple(runs),
             segment_files=segment_files,
             warnings=tuple(warnings),
+            r_ref_m=r_ref_m,
+            skew_main=skew_main,
+            magnet_type=magnet_type,
+            analyzer_options=analyzer_options,
         )

@@ -43,6 +43,8 @@ and point to that note.
 | 8 | [`08_validation_and_regression.md`](08_validation_and_regression.md) | Test suite, golden standards, `golden_streaming.py`, how to diagnose a discrepancy |
 | 9 | [`09_usage_examples.md`](09_usage_examples.md) | GUI walkthrough (8 tabs), precomputed $k_n$, $k_n$ from head CSV, parity configuration |
 | 10 | [`10_bottura_cross_reference.md`](10_bottura_cross_reference.md) | Equation → function table and the **three documented deviations** |
+| 11 | [`11_bugfix_diary.md`](11_bugfix_diary.md) | **Bug-fix diary**: every fix, dated, with symptom, cause, impact on earlier results and verification |
+| 12 | [`12_implementations_and_their_errors.md`](12_implementations_and_their_errors.md) | **FFMM (native C++ and Matlab paths), the MMM Python analyzer and this package compared stage by stage**; the errors of each earlier implementation and how this package handles them; reproducing an FFMM file exactly |
 
 ## The three documented deviations from Bottura (summary)
 

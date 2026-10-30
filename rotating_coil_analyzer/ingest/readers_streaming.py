@@ -117,6 +117,7 @@ class StreamingReader:
 
         if path.suffix.lower() in {".txt", ".csv"}:
             mat, ncols, warnings = self._load_ascii(path)
+            mat = self._ascii_whole_turns_and_timing(mat, Ns=Ns, shaft_speed_rpm=float(shaft_speed_rpm), warnings=warnings)
         else:
             mat, ncols, warnings = self._infer_and_load(path, Ns=Ns, shaft_speed_rpm=float(shaft_speed_rpm))
 
@@ -186,6 +187,12 @@ class StreamingReader:
         """
         Infer dtype and column count from file size and timing consistency.
         Returns (mat_float64, ncols, warnings).
+
+        Candidates are validated on read-only memory-mapped views (only the
+        time and flux columns are touched), and only the selected layout is
+        materialised as float64. Before 2026-10-30 the whole file was loaded
+        once per dtype and converted per column-count candidate, peaking at
+        ~6x the file size in RAM (11 GB file -> ~70 GB).
         """
         cfg = self.config
         warnings: List[str] = []
@@ -213,11 +220,9 @@ class StreamingReader:
                 continue
             n_scalars = file_size // bps
 
-            # Read the raw file once per dtype: the loaded buffer is identical
+            # Map the raw file once per dtype (no copy): the buffer is identical
             # for every column-count candidate, only the reshape differs.
-            arr = np.fromfile(path, dtype=dtype)
-            if arr.size != n_scalars:
-                arr = arr[:n_scalars]
+            arr = np.memmap(path, dtype=dtype, mode="r", shape=(int(n_scalars),))
 
             # total columns = 3 + n_currents  (allow 0 currents)
             for n_curr in range(0, max(0, int(cfg.max_currents)) + 1):
@@ -227,8 +232,7 @@ class StreamingReader:
                 if n_scalars % ncols != 0:
                     continue
 
-                with np.errstate(all="ignore"):
-                    mat = arr.reshape(-1, ncols).astype(np.float64, copy=False)
+                mat = arr.reshape(-1, ncols)
 
                 ok, score, rep, local_warnings, mat_out = self._validate_candidate(
                     mat,
@@ -247,7 +251,11 @@ class StreamingReader:
             msg = "No supported binary format validated for this file.\n" + "\n".join(reports[:80])
             raise ValueError(msg)
 
-        return best
+        view, ncols_best, warnings_best = best
+        with np.errstate(all="ignore"):
+            mat_best = np.array(view, dtype=np.float64)  # the only full copy
+        del view, best
+        return mat_best, ncols_best, warnings_best
 
     def _validate_candidate(
         self,
@@ -287,7 +295,7 @@ class StreamingReader:
             warnings.append(f"trim to multiple of samples_per_turn: removed {rem} rows")
             mat = mat[:-rem, :]
 
-        t = mat[:, 0]
+        t = np.asarray(mat[:, 0], dtype=np.float64)
         dt = np.diff(t)
         dt_f = dt[np.isfinite(dt)]
         if dt_f.size < 10:
@@ -314,6 +322,41 @@ class StreamingReader:
 
         rep = f"ok rows={mat.shape[0]} ncols={mat.shape[1]} dt_med={dt_med:.6g} noninc={noninc} score={score:.3f}"
         return True, score, rep, warnings, mat
+
+    def _ascii_whole_turns_and_timing(
+        self,
+        mat: np.ndarray,
+        *,
+        Ns: int,
+        shaft_speed_rpm: float,
+        warnings: List[str],
+    ) -> np.ndarray:
+        """Trim an ASCII matrix to whole turns and check dt against the nominal speed.
+
+        The binary path does both in :meth:`_validate_candidate`. For ASCII the
+        layout is unambiguous, so a timing mismatch only warns (a wrong
+        samples-per-turn value would otherwise misalign every turn silently).
+        """
+        rem = mat.shape[0] % int(Ns)
+        if rem != 0:
+            warnings.append(f"trim to multiple of samples_per_turn: removed {rem} rows")
+            mat = mat[: mat.shape[0] - rem, :]
+        v = abs(float(shaft_speed_rpm)) if shaft_speed_rpm is not None else 0.0
+        dt = np.diff(mat[:, 0])
+        dt = dt[np.isfinite(dt)]
+        if v > 0 and dt.size >= 10:
+            dt_nom = 60.0 / v / float(Ns)
+            dt_med = float(np.median(dt))
+            rel = abs(dt_med - dt_nom) / dt_nom
+            if rel > float(self.config.dt_rel_tol):
+                warnings.append(
+                    f"WARNING: median dt {dt_med:.6g} s differs by {100 * rel:.0f}% from the nominal "
+                    f"{dt_nom:.6g} s implied by {Ns} samples/turn at {v:g} rpm: check samples_per_turn "
+                    "and the shaft speed (turns may be misaligned)."
+                )
+            else:
+                warnings.append(f"dt nominal check: dt_med={dt_med:.6g}, dt_nom={dt_nom:.6g}, rel_err={rel:.3g}")
+        return mat
 
     def _load_ascii(self, path: Path) -> Tuple[np.ndarray, int, List[str]]:
         """

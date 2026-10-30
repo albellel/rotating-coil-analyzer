@@ -1,6 +1,6 @@
 # 8. Validation, regression tests and traceability
 
-Code: `rotating_coil_analyzer/tests/` (149 tests), `validation/golden_streaming.py`,
+Code: `rotating_coil_analyzer/tests/` (run `python -m pytest`), `validation/golden_streaming.py`,
 `golden_standards/`, `scripts/btp8_bruteforce_turns.py`. Numbers and
 verdicts: `PARITY_REPORT.md` (canonical — not repeated here).
 
@@ -17,7 +17,7 @@ immutable reference datasets, and the rule
 ## 8.2 Unit and integration tests
 
 ```bash
-python -m pytest rotating_coil_analyzer/tests/ -x -q        # 149 passed
+python -m pytest            # testpaths set in pyproject.toml; all must pass
 ```
 
 | Area | Files |
@@ -30,6 +30,7 @@ python -m pytest rotating_coil_analyzer/tests/ -x -q        # 149 passed
 | `AnalysisProfile` defaults, immutability, catalog integration | `test_analysis_profile.py` |
 | Streaming utilities: plateau detection, `process_kn_pipeline`, FDI diagnostic, statistics | `test_streaming_utilities.py`, `test_new_utility_functions.py` |
 | GUI widgets and events (debounce, plot lifecycle) | `test_gui_plot_widgets.py`, `test_plot_debounce.py`, `test_plot_clear_pattern.py` |
+| 2026-10-30 review fixes: skew with rotation, diagnostics (wrap boundary, silent `cel`, divergent `fed`, implausible field, bucked Cmp orders), Parameters parsing, ASCII trimming, CLI, **FCC-ee end-to-end vs FFMM** | `test_review_fixes_2026_10.py` |
 
 Synthetic data are used where an analytical expectation exists (a pure
 $\cos n\theta$ flux must return order $n$ with the $2/N_s$ amplitude; a
@@ -47,7 +48,7 @@ Immutable; never regenerated; used only for comparison.
 | `ffmm` | LEAR MC62 FFMM configuration + average results | `MC62_*_Average_results.txt` |
 | `degaussing_test` | Buckley H/V steerer degauss staircase (74 runs) | FFMM `*_Main_results.txt` |
 | `measurement_heads` | head geometry CSVs + reference $k_n$ | legacy $k_n$ TXT |
-| `pentella_analyzer` | Pentella Python reference implementation | code, for cross-reading |
+| `mmm_python_analyzer` | independent Python analyzer from the MMM section (reference implementation) | code, for cross-reading |
 | `GSI_LDM`, `example_results` | additional reference material | — |
 
 Outcomes (pointers): SM18 streaming $B_1$ max $|\Delta| \approx 1.8\times10^{-12}$ T
@@ -62,7 +63,7 @@ equation-by-equation proof: `PARITY_REPORT.md` §1–5, §8;
 > **Corrected from the old LaTeX.** The LaTeX listed "the MATLAB
 > implementation" among the legacy references. The references actually used
 > are the FFMM C++ analyzer (`MatlabAnalyzerRotCoil.cpp` is a C++ file despite
-> its name), the historical SM18 C++ export, and the Pentella Python scripts.
+> its name), the historical SM18 C++ export, and an independent Python analyzer from the MMM section.
 
 ## 8.4 `validation/golden_streaming.py`
 
@@ -91,6 +92,14 @@ the compensated-channel sensitivity and the physical relevance of the order.
 Where the reference itself is an average over an undocumented window (MC62),
 the comparison is at the plateau-average level and the tolerance is the
 reference's own scatter.
+
+## 8.5b Regression rule for changes
+
+A change to the pipeline is accepted only if, on the real golden datasets, the
+previous code and the new code give **bit-identical** outputs on every path
+the change does not intend to modify. The procedure and the 2026-10-30
+result are in `PARITY_REPORT.md` §3c, and each intended change has an entry in
+[`11_bugfix_diary.md`](11_bugfix_diary.md).
 
 ## 8.6 Traceability of results
 

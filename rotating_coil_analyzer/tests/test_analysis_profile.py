@@ -67,11 +67,16 @@ def _mock_catalog(
     magnet_order: Optional[int] = 2,
     samples_per_turn: int = 512,
     shaft_speed_rpm: float = 60.0,
+    r_ref_m: Optional[float] = None,
+    skew_main: Optional[bool] = None,
 ) -> MagicMock:
     cat = MagicMock()
     cat.magnet_order = magnet_order
     cat.samples_per_turn = samples_per_turn
     cat.shaft_speed_rpm = shaft_speed_rpm
+    cat.r_ref_m = r_ref_m
+    cat.skew_main = skew_main
+    cat.parameters_path.name = "Parameters.txt"
     return cat
 
 
@@ -83,11 +88,18 @@ def test_profile_from_catalog() -> None:
     assert p.r_ref_m == 0.02
 
 
-def test_profile_from_catalog_defaults_r_ref() -> None:
-    """When r_ref_m is not overridden, from_catalog uses the fallback."""
-    cat = _mock_catalog()
+def test_profile_from_catalog_takes_r_ref_and_skew_from_parameters() -> None:
+    cat = _mock_catalog(r_ref_m=0.010, skew_main=True)
     p = AnalysisProfile.from_catalog(cat)
-    assert p.r_ref_m == 0.017  # conservative fallback
+    assert p.r_ref_m == 0.010
+    assert p.skew_main is True
+
+
+def test_profile_from_catalog_requires_r_ref() -> None:
+    """No refRadius in Parameters and no override: refuse (no silent 17 mm)."""
+    cat = _mock_catalog(r_ref_m=None)
+    with pytest.raises(ValueError, match="r_ref_m"):
+        AnalysisProfile.from_catalog(cat)
 
 
 def test_profile_from_catalog_with_overrides() -> None:
@@ -104,9 +116,12 @@ def test_profile_from_catalog_with_overrides() -> None:
 
 
 def test_profile_from_catalog_none_magnet_order() -> None:
+    """Unknown magnet order and no override: refuse (no silent m=1)."""
     cat = _mock_catalog(magnet_order=None)
-    p = AnalysisProfile.from_catalog(cat, r_ref_m=0.05)
-    assert p.magnet_order == 1  # fallback
+    with pytest.raises(ValueError, match="magnet_order"):
+        AnalysisProfile.from_catalog(cat, r_ref_m=0.05)
+    p = AnalysisProfile.from_catalog(cat, r_ref_m=0.05, magnet_order=3)
+    assert p.magnet_order == 3
 
 
 # -----------------------------------------------------------------------

@@ -41,7 +41,7 @@ class AnalysisProfile:
         Merge strategy for abs/cmp channels.
     legacy_rotate_excludes_last : bool
         If False (default), all harmonics n=1..H are rotated, matching
-        Bottura Eq. AIV.6, the C++ analyzer, and the Pentella analyzer.
+        Bottura Eq. AIV.6, the C++ analyzer, and the MMM-section Python analyzer.
         If True, the rotation loop excludes the last harmonic (n=H).
         This was an off-by-one in some legacy SM18 code and has no
         theoretical justification (harmonic H is far below Nyquist).
@@ -102,12 +102,17 @@ class AnalysisProfile:
 
         Values populated from the catalog (ultimately from Parameters.txt):
 
-        - ``magnet_order`` (falls back to 1 if catalog has ``None``)
+        - ``magnet_order`` (``magnetOrder``, else derived from ``magnetType``)
+        - ``r_ref_m`` (``magnetAnalyzer.refRadius``)
+        - ``skew_main`` (``magnetInfo.magnetNormSkew``)
         - ``samples_per_turn``
         - ``shaft_speed_rpm``
 
-        Everything else uses class defaults unless overridden via keyword
-        arguments.  Example::
+        ``magnet_order`` and ``r_ref_m`` have no safe default: if the catalog
+        does not provide them they must be passed as overrides, otherwise a
+        ``ValueError`` is raised. (Before 2026-10-30 they silently fell back
+        to m=1 and Rref=17 mm.) Everything else uses class defaults unless
+        overridden via keyword arguments.  Example::
 
             profile = AnalysisProfile.from_catalog(cat, r_ref_m=0.059,
                                                     options=("dri","rot","cel","fed"))
@@ -116,14 +121,23 @@ class AnalysisProfile:
         from rotating_coil_analyzer.models.catalog import MeasurementCatalog  # noqa: F811
 
         base: Dict[str, Any] = dict(
-            magnet_order=catalog.magnet_order or 1,
             samples_per_turn=catalog.samples_per_turn,
             shaft_speed_rpm=catalog.shaft_speed_rpm,
         )
-        # r_ref_m has no catalog source -- require override or use a safe fallback
-        if "r_ref_m" not in overrides:
-            base["r_ref_m"] = 0.017  # 17 mm -- deliberately conservative
+        if getattr(catalog, "magnet_order", None):
+            base["magnet_order"] = int(catalog.magnet_order)
+        if getattr(catalog, "r_ref_m", None):
+            base["r_ref_m"] = float(catalog.r_ref_m)
+        if getattr(catalog, "skew_main", None) is not None:
+            base["skew_main"] = bool(catalog.skew_main)
         base.update(overrides)
+        missing = [k for k in ("magnet_order", "r_ref_m") if k not in base]
+        if missing:
+            raise ValueError(
+                f"{', '.join(missing)} not found in {catalog.parameters_path.name} "
+                "(magnetAnalyzer.magnetOrder / magnetInfo.magnetType, magnetAnalyzer.refRadius); "
+                "pass them explicitly, e.g. AnalysisProfile.from_catalog(cat, magnet_order=2, r_ref_m=0.017)."
+            )
         # Ensure options is a tuple (callers may pass a list)
         if "options" in base and not isinstance(base["options"], tuple):
             base["options"] = tuple(base["options"])

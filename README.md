@@ -93,18 +93,120 @@ The GUI has eight tabs:
 
 ## Installation
 
-### Requirements
-- Python 3.10+
-- Common scientific stack: `numpy`, `pandas`, `matplotlib`, `scipy`, `ipywidgets`
-- `ipympl` for interactive zoomable plots in Jupyter notebooks
-- Jupyter environment (recommended for the GUI and analysis notebooks)
+Requirements: Python 3.10+, git. Everything else is installed by pip.
 
-### Install (editable)
 ```bash
-pip install -e .
+git clone https://gitlab.cern.ch/albellel/rotating-coil-analyzer.git
+cd rotating-coil-analyzer
+python -m venv .venv
+# Windows: .venv\Scripts\activate      Linux/macOS: source .venv/bin/activate
+pip install -e ".[dev]"                 # numpy, pandas, scipy, matplotlib, ipywidgets, ipympl, pytest
+python -m pytest                        # all tests must pass
 ```
 
-This installs all dependencies including `ipympl` for interactive plots.
+Optional extras:
+
+| Extra | Adds | Needed for |
+|---|---|---|
+| `pip install -e ".[eddy]"` | `tools-for-data-analysis` (from gitlab.cern.ch, needs access to that repo) | eddy-current fits in the GUI *Physics Plots* tab |
+| `pip install -e ".[pptx]"` | `python-pptx`, `Pillow` | `rotating_coil_analyzer.presentation` slide helpers |
+
+Without `[eddy]` everything works except the eddy-fit button, which says so.
+
+> **Windows:** if `git clone` fails with *Filename too long*, run
+> `git config --global core.longpaths true` once, or clone into a short path
+> such as `C:\code\`.
+
+---
+
+## Quick start (5 minutes)
+
+**1. Run the bundled demo** (an FCC-ee quadrupole DC measurement shipped in the
+repo, with FFMM's own results for comparison):
+
+```bash
+rca-analyze                     # or: python -m rotating_coil_analyzer.cli
+```
+
+It prints the settings it used (taken from the measurement's `Parameters.txt`:
+m = 2, Rref = 10 mm, options), the mean $B_2$, centre and $b_n$, writes
+per-turn and summary CSVs to `./rca_output/`, and the agreement with FFMM
+($b_3$ to ~$10^{-13}$ units).
+
+**2. Run it on your own measurement** — a measurement folder (with its
+`Parameters.txt`) plus the segment kn file:
+
+```bash
+rca-analyze path/to/measurement_folder --kn path/to/Kn_values_Seg_Main.txt
+rca-analyze path/to/folder --kn kn.txt --seg NCS --order 1 --rref 0.017 --options dri,rot
+```
+
+`--order`, `--rref`, `--skew/--normal` and `--options` override what
+`Parameters.txt` says. If the main order or the reference radius cannot be
+found and is not given, the run **stops with a message** instead of guessing.
+
+**3. Interactive GUI** (Jupyter): see [Running the GUI](#running-the-gui).
+**4. Scripted analysis** in your own notebook: see [GUIDE.md](GUIDE.md) §3.
+
+### What your data must look like
+
+The package reads the folder layout written by the CERN FFMM acquisition software:
+
+- a parameters file `Parameters.txt` or `<magnet>_<timestamp>_Parameters.txt`
+  in the folder or up to two levels above it, containing an FDIs table
+  (`Measurement.AP1.FDIs` / `Parameters.MH.FDIs: TABLE{<segment>\t<abs FDI>\t<cmp FDI>\t...}`);
+- data files, either
+  - **streaming** `<run>_corr_sigs_Ap_<n>_Seg<id>.bin` (or `.txt/.csv`):
+    columns `t, flux increment 1, flux increment 2, current(s)`, float64 or float32; or
+  - **plateau** `<base>_Run_<step>_I_<current>A_<seg>_raw_measurement_data.txt`
+    (one file per current step; also the H/V steerer form `..._Run_<step>IH_<ih>IV_<iv>_<seg>_...`);
+- a **kn file**: whitespace-separated, one row per harmonic order n = 1..H,
+  4 columns `Abs_Re Abs_Im Cmp_Re Cmp_Im` (or 6 with `Ext_Re Ext_Im`).
+  It can also be computed from a measurement-head CSV
+  (`notebooks/tools/kn_from_mh_csv.ipynb`).
+
+The flux columns are **increments** from the digital integrator (FDI), not
+voltage and not integrated flux. If your data come from another system, build
+`(n_turns, Ns)` arrays yourself and call the pipeline directly (GUIDE.md §3.4).
+
+### Settings the analysis needs — read from the file, never guessed
+
+| Setting | Parameters.txt key | If missing |
+|---|---|---|
+| main order m | `magnetAnalyzer.magnetOrder`, else `magnetInfo.magnetType` (Dipole → 1, Quadrupole → 2, …) | must be given (`--order`, GUI field, `magnet_order=`) |
+| reference radius | `magnetAnalyzer.refRadius` | must be given; values outside 1 mm–0.5 m are flagged |
+| skew main | `magnetInfo.magnetNormSkew` | normal |
+| options | `magnetAnalyzer.dit/dri/rot/cel/fed` | `dri,rot` (`nor` is always applied after the merge) |
+| samples per turn | `Measurement.samples` | 512, with a WARNING |
+| shaft speed | `Measurement.v`, else `Measurement.MotorAngularSpeed` | 60 rpm, with a WARNING (only used for the timing check) |
+
+The pipeline also reports, without changing any number: `cel` requested but
+not applicable, centre offset ≥ Rref (feed-down diverges), |B_m| > 20 T, main
+angle at the ±π/2 wrap boundary (use `skew_main` or `encoder_offset_rad`), and
+orders merged from a bucked compensated channel. In scripts these are Python
+`UserWarning`s; in the GUI they go to the log.
+
+### Large files (computational cost)
+
+Measured on one 1.17 GB SM18 streaming file (57 022 turns × 512 samples,
+15 orders):
+
+| Stage | Time | Peak RAM above baseline |
+|---|---|---|
+| `StreamingReader.read` | 6.3 s | 4.2 GB (part is reclaimable page cache) |
+| `process_kn_pipeline`, all turns, `dri,rot,cel,fed` | 2.2 s | 3.3 GB |
+
+Time and memory scale linearly: an **11 GB** file takes **~1–1.5 min** of
+computation but needs **~40 GB** to load plus **~30 GB** to analyse all turns
+at once. On a smaller machine, analyse the turns in chunks (every turn is
+processed independently):
+
+```python
+for s in range(0, tb.n_turns, 50_000):
+    sl = slice(s, s + 50_000)
+    res, Cm, Cu, ok = process_kn_pipeline(tb.df_abs[sl], tb.df_cmp[sl], tb.t[sl], tb.I[sl], kn, r_ref=R, magnet_order=m)
+    ...  # append rows, then concatenate
+```
 
 ---
 
@@ -119,6 +221,14 @@ from rotating_coil_analyzer.gui.app import build_gui
 gui = build_gui()
 gui  # Display the GUI
 ```
+
+Typical session: **Catalog** → select the measurement folder and load a
+segment (WARNINGs about missing settings appear in red) → **Coil
+Calibration** → load the segment kn TXT → **Harmonic Merge** → check the main
+order m and Rref that were pre-filled from `Parameters.txt` (they start at 0
+and *Apply Kn* refuses if they are unknown) → *Apply Kn* → *Apply Merge* →
+export. Diagnostics from the pipeline are written to the tab's log. If
+`jupyter` is not installed yet: `pip install jupyterlab`.
 
 ---
 
@@ -135,6 +245,12 @@ parity-validation notebooks remain here, under `rotating_coil_analyzer/notebooks
 - `tools/kn_from_mh_csv.ipynb` -- Compute kn calibration coefficients from measurement-head CSV
 
 ### Parity validation
+
+These notebooks need the author's local `golden_standards/` datasets (large,
+not distributed with the repo). From a fresh clone, FFMM parity is reproduced
+by the bundled FCC-ee demo (`rca-analyze`) and its test
+(`test_review_fixes_2026_10.py::test_fccee_end_to_end_matches_ffmm`).
+
 - `LIU_BTP8/2019-07-17/b3_sextupole.ipynb` -- b3 sextupole analysis (quadrupole)
 - `LIU_BTP8/2019-07-17/parity_validation.ipynb` -- Validation against legacy C++ results
 - `SM18/2024-12-04_parity/parity_validation.ipynb` -- SM18 streaming parity against legacy results
@@ -197,9 +313,10 @@ I_range, I_blocks = compute_block_averaged_range(I_all, samples_per_turn=1024)
 info = detect_plateau_turns(I_blocks, I_mean, I_range, threshold=3.0)
 plateau_mask = info["is_plateau"]
 
-# Run the full Kn pipeline on plateau turns
+# Run the full Kn pipeline on plateau turns. The first two arguments are the
+# flux INCREMENTS per turn (TurnBlock.df_abs / df_cmp), not integrated flux.
 result, C_merged, C_units, ok_main = process_kn_pipeline(
-    flux_abs[plateau_mask], flux_cmp[plateau_mask],
+    df_abs[plateau_mask], df_cmp[plateau_mask],
     t[plateau_mask], I[plateau_mask],
     kn=kn, r_ref=0.02, magnet_order=1,
 )
@@ -228,8 +345,8 @@ label = classify_current(I_value, thresholds=psb_thresholds)
 ## Running Tests
 
 ```bash
-# Run all tests (149 tests)
-python -m pytest rotating_coil_analyzer/tests/ -v
+# Run all tests (pytest is in the [dev] extra; testpaths is set in pyproject.toml)
+python -m pytest
 
 # Run specific test file
 python -m pytest rotating_coil_analyzer/tests/test_kn_bundle.py -v
@@ -302,14 +419,16 @@ rotating_coil_analyzer/
 ├── models/                 # Data models (SegmentFrame, MeasurementCatalog, AnalysisProfile)
 ├── presentation/           # PowerPoint report generation helpers
 ├── notebooks/              # Example/tool + parity-validation notebooks + reference docs
-├── tests/                  # Unit tests (149 tests)
-└── validation/             # Golden reference validation (C++ parity)
+├── tests/                  # Unit + regression tests; tests/data holds the bundled FCC-ee demo
+├── validation/             # Golden reference validation (C++ parity)
+└── cli.py                  # `rca-analyze`: folder + kn file -> CSV (bundled demo without arguments)
+docs/                       # Theory-to-code chapters + 11_bugfix_diary.md
 scripts/
 └── btp8_bruteforce_turns.py   # Brute-force turns-per-revolution search for BTP8
 ```
 
 > Notebook generators and `nb_helpers` are no longer kept here. Programmatic
-> notebook construction now uses `tools_for_data_analysis.nb_helpers`, and the
+> notebook construction now uses `tools_for_data_analysis.helpers.notebook`, and the
 > magnet campaign notebooks live in their own repos (`mbb-data-analysis`,
 > `mc62-data-analysis`, `mba-data-analysis`).
 
@@ -318,8 +437,10 @@ scripts/
 ## Documentation
 
 - **[docs/](docs/README.md)** -- Theory-to-code documentation (consolidated 2026-08-20 from the retired LaTeX repo `RC-analyzer-documentation`): measurement principle, ingest and time policy, signal processing, FFT, kn calibration, corrections, merge/normalisation, validation, usage examples, and the [Bottura equation → function cross-reference with the documented deviations](docs/10_bottura_cross_reference.md). LaTeX-ready formulas.
+- **[docs/12_implementations_and_their_errors.md](docs/12_implementations_and_their_errors.md)** -- How FFMM (native C++ and Matlab paths), the MMM-section Python analyzer and this package differ. The errors the earlier tools produce: last order not rotated, skew units ~1e16, ramp correction on rising ramps only, unguarded centring and normalisation, first-sample drift. What this package does about each.
+- **[docs/11_bugfix_diary.md](docs/11_bugfix_diary.md)** -- Dated diary of every bug fix: symptom, cause, fix, whether earlier results are affected, verification.
 - **[GUIDE.md](GUIDE.md)** -- Hands-on walkthrough of the GUI and of the programmatic streaming pipeline (the recipe the magnet repos use).
-- **[DOCUMENTATION.md](DOCUMENTATION.md)** -- Architecture, data models, GUI, function reference, cross-implementation comparison (FFMM C++, Pentella).
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** -- Architecture, data models, GUI, function reference, cross-implementation comparison (FFMM C++, MMM-section Python analyzer).
 - **[PARITY_REPORT.md](PARITY_REPORT.md)** -- Machine-precision parity validation against the legacy C++ analyzer (SM18, BTP8, MC62).
 - **[Correction Options Reference](rotating_coil_analyzer/notebooks/correction_options_reference.md)** -- Option-by-option guide with cel/fed failure modes and benchmark comparison across all four implementations.
 
@@ -329,8 +450,8 @@ scripts/
 
 The analysis algorithms follow the standard procedures described in:
 
-- **Bottura, L.** -- *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets -- Part I: Harmonics*, MTA-IN-97-007 (PDF in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`; bib key `bottura1997`). The equation-by-equation transcription lives in the bibliography note `bibliography-review/magnetic_measurements/rotating_coil_harmonics/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`; the equation → function map with the documented deviations is [docs/10_bottura_cross_reference.md](docs/10_bottura_cross_reference.md).
-- **Marusov, I.** (2013) -- *Measurement of a time-periodic magnetic field using a rotating coil*, NIM-A 711, 121--123 (PDF in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`, bib key `marusov2013`). The plain-language guide `marusov_guide.md` moved with the LEAR MC62 campaign to the `mc62-data-analysis` repo.
+- **Bottura, L.** -- *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets -- Part I: Harmonics*, MTA-IN-97-007, CERN, 1997 (PDF in the author's literature repository `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`; bib key `bottura1997`). The equation-by-equation transcription lives in the bibliography note `bibliography-review/magnetic_measurements/rotating_coil_harmonics/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`; the equation → function map with the documented deviations is [docs/10_bottura_cross_reference.md](docs/10_bottura_cross_reference.md).
+- **Marusov, V.** (2013) -- *Measurement of a Time-Periodic Magnetic Field by Rotating Coil*, NIM-A 711, 121--123, doi:10.1016/j.nima.2013.01.042 (PDF in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`, bib key `marusov2013`). The plain-language guide `marusov_guide.md` moved with the LEAR MC62 campaign to the `mc62-data-analysis` repo.
 
 Key formulas implemented:
 - FFT-based harmonic extraction: `f_n = 2 * FFT(flux) / N`
@@ -340,3 +461,9 @@ Key formulas implemented:
 - Marusov temporal decomposition: `σ_{n,k} = (1/M) Σ_j C_n(j) exp(-i 2π k j / M)` — separates spatial and temporal content
 
 The implementation achieves **machine-precision parity** (float64 rounding floor) with the legacy C++ analyzer on SM18 streaming (285,095 turns, B1 diff = 1.82e-12 T) and LIU BTP8 plateau (222 turns, B1/A1 at ~1e-18 T). See [PARITY_REPORT.md](PARITY_REPORT.md) for full details.
+
+---
+
+## License
+
+MIT, see [LICENSE](LICENSE).

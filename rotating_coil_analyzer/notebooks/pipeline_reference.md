@@ -3,7 +3,7 @@
 This is the **conceptual companion** to the two lookup references:
 
 - [`correction_options_reference.md`](correction_options_reference.md) — option-by-option
-  knobs, `cel`/`fed` failure modes, sign conventions, and the Bottura/FFMM/Pentella benchmark.
+  knobs, `cel`/`fed` failure modes, sign conventions, and the Bottura/FFMM/MMM-Python-analyzer benchmark.
 - [`physics_reference.md`](physics_reference.md) — transfer function, eddy currents,
   NMR comparison, fringe-field sextupole, integrated field.
 
@@ -341,7 +341,7 @@ thing, never the first.
 
 ## 5. See also
 
-- Option knobs, `cel`/`fed` failure modes, sign conventions, FFMM/Pentella
+- Option knobs, `cel`/`fed` failure modes, sign conventions, FFMM/MMM-Python-analyzer
   benchmark: [`correction_options_reference.md`](correction_options_reference.md)
 - Transfer function, eddy/multi-$\tau$ settling, NMR, fringe sextupole:
   [`physics_reference.md`](physics_reference.md)

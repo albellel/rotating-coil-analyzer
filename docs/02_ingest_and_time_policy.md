@@ -40,8 +40,25 @@ shared by discovery and reader. Two layouts are recognised:
 
 The catalog is a frozen dataclass. Parameters are **context**: they populate
 `AnalysisProfile.from_catalog()` defaults and never silently modify data.
-$R_{ref}$ has no source in `Parameters.txt` and must be given explicitly
-(`from_catalog` falls back to a deliberately conservative 17 mm).
+Since 2026-10-30 (diary BF-2026-10-30-05/06/07) discovery also reads:
+
+| Catalog field | Parameters.txt key | If absent |
+|---|---|---|
+| `magnet_order` | `magnetAnalyzer.magnetOrder`, else `magnetInfo.magnetType` (Dipole 1 … Dodecapole 6) | `None` + WARNING |
+| `r_ref_m` | `magnetAnalyzer.refRadius` (flagged outside 1 mm – 0.5 m) | `None` + WARNING |
+| `skew_main` | `magnetInfo.magnetNormSkew` | `None` |
+| `analyzer_options` | `magnetAnalyzer.{dit,dri,rot,cel,fed,nor}` | `None` |
+| `shaft_speed_rpm` | `Measurement.v`, else `Measurement.MotorAngularSpeed` | 60 rpm + WARNING |
+| `samples_per_turn` | `Measurement.samples` | 512 + WARNING |
+
+`from_catalog` raises `ValueError` when $m$ or $R_{ref}$ is neither in the
+file nor passed explicitly (there is no silent default any more).
+
+Streaming binary files are format-detected on read-only memory maps and only
+the selected layout is copied (peak RAM ≈ 3.6× the file size, part of it
+reclaimable page cache, instead of ≈ 6×). ASCII streaming files are cut to
+whole turns and their median $\Delta t$ is checked against the nominal speed
+(warning only).
 
 ## 2.3 The no-synthetic-time rule
 

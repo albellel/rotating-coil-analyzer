@@ -21,10 +21,53 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     build_run_averages,
 )
 from rotating_coil_analyzer.analysis.kn_pipeline import safe_normalize_to_units
-from tools_for_data_analysis.fitting.eddy import (
-    fit_eddy_per_run,
-    EddyFitResult,
+
+# The eddy-current fit lives in the optional companion package
+# ``tools-for-data-analysis``. It is imported lazily inside the eddy-fit path so
+# that the GUI builds without it.
+_EDDY_MISSING_MSG = (
+    "Eddy fits need the optional package tools-for-data-analysis: "
+    "install tools-for-data-analysis (optional extra) to enable eddy fits."
 )
+
+
+def _import_eddy_fit():
+    """Return ``fit_eddy_per_run`` or None when tools-for-data-analysis is not installed."""
+    try:
+        from tools_for_data_analysis.fitting.eddy import fit_eddy_per_run
+    except ImportError:
+        return None
+    return fit_eddy_per_run
+
+
+def _branches_from_currents(I_groups: List[float]) -> List[str]:
+    """Label each plateau ascending / descending from the current sequence.
+
+    The first plateau takes the direction of the step to the second one (there
+    is no previous plateau to compare with); a lone plateau counts as reached
+    from zero current. Direction is judged on the signed
+    current, so negative and bipolar cycles are handled: a step towards more
+    positive current is "ascending", towards more negative "descending". A step
+    of exactly zero keeps the previous direction.
+    """
+    n = len(I_groups)
+    out = ["unknown"] * n
+    if n == 0:
+        return out
+    if n == 1:
+        # Single plateau: no step to judge from; reached from zero current.
+        out[0] = "ascending" if I_groups[0] > 0 else "descending"
+        return out
+    prev_dir = "ascending" if I_groups[1] >= I_groups[0] else "descending"
+    out[0] = prev_dir
+    for k in range(1, n):
+        d = I_groups[k] - I_groups[k - 1]
+        if d > 0:
+            prev_dir = "ascending"
+        elif d < 0:
+            prev_dir = "descending"
+        out[k] = prev_dir
+    return out
 
 
 @dataclass
@@ -32,7 +75,8 @@ class PhysicsPlotsState:
     """Local mutable state for the Physics Plots tab."""
 
     summary_df: Optional[pd.DataFrame] = None
-    eddy_results: Optional[List[EddyFitResult]] = None
+    eddy_results: Optional[List[Any]] = None  # EddyFitResult (tools-for-data-analysis)
+    main_order: int = 1  # main order m of the merge result used for the summary
     fig: Optional[Any] = None
     busy: bool = False
 
@@ -42,6 +86,7 @@ def build_physics_plots_panel(
     get_plateau_info: Callable[[], Optional[Dict[str, Any]]],
     get_segmentframe: Callable[[], Optional[Any]],
     set_n_last_recommended: Callable[[int], None] | None = None,
+    get_skew_main: Callable[[], Optional[bool]] | None = None,
 ) -> w.Widget:
     """Build the Physics Plots panel.
 
@@ -55,6 +100,15 @@ def build_physics_plots_panel(
         Returns the SegmentFrame from shared state.
     set_n_last_recommended
         Called with recommended N_LAST from eddy analysis.
+    get_skew_main
+        Optional.  Returns True when the merge was computed for a skew main
+        harmonic (main field = Im C_m), False/None for a normal one (Re C_m).
+
+    Notes
+    -----
+    The main-field column is kept internally as ``B1_T`` (the name
+    ``plateau_summary`` expects) but holds the main harmonic ``B{m}`` of the
+    merge result; plots and labels name it ``B{m}``.
     """
     st = PhysicsPlotsState()
     log = HtmlLog(title="Physics Plots log")
@@ -72,7 +126,7 @@ def build_physics_plots_panel(
 
     btn_hysteresis = w.Button(description="Hysteresis B1 vs I", button_style="")
     btn_tf = w.Button(description="Transfer function vs I", button_style="")
-    btn_ld = w.Button(description="Differential inductance", button_style="")
+    btn_ld = w.Button(description="Differential TF dB/dI", button_style="")
     harmonic_dd = w.Dropdown(
         options=[("b3_units", "b3_units"), ("b5_units", "b5_units"),
                  ("a2_units", "a2_units"), ("b2_units", "b2_units")],
@@ -93,6 +147,10 @@ def build_physics_plots_panel(
     eddy_html = w.HTML("")
     for b in [btn_eddy_hist, btn_eddy_vs_I]:
         b.disabled = True
+    if _import_eddy_fit() is None:
+        btn_eddy.disabled = True
+        btn_eddy.tooltip = _EDDY_MISSING_MSG
+        eddy_html.value = f"<i style='color:#960;'>{_EDDY_MISSING_MSG}</i>"
 
     out_plot = w.Output(
         layout=w.Layout(border="1px solid #ddd", padding="6px", width="100%", height="420px")
@@ -100,6 +158,24 @@ def build_physics_plots_panel(
 
     def _set_status(msg: str) -> None:
         status.value = f"<b>Status:</b> {msg}"
+
+    def _is_skew_main(mr) -> bool:
+        skew = None
+        if get_skew_main is not None:
+            try:
+                skew = get_skew_main()
+            except Exception as e:
+                log.write(f"WARNING: could not read the skew-main flag: {e!r}; assuming a normal main.")
+                skew = None
+        if skew is None:
+            skew = getattr(mr, "skew_main", None)
+        return bool(skew)
+
+    def _main_field(mr) -> np.ndarray:
+        """Main harmonic B{m} per turn: Im C_m for a skew main, Re C_m otherwise."""
+        m = int(mr.magnet_order)
+        col = mr.C_merged[:, m - 1] if m >= 1 else mr.C_merged[:, 0]
+        return np.imag(col) if _is_skew_main(mr) else np.real(col)
 
     def _build_analysis_df(mr, plateau_info) -> Optional[pd.DataFrame]:
         """Build a DataFrame suitable for plateau_summary from merge result + plateau info."""
@@ -118,12 +194,15 @@ def build_physics_plots_panel(
         C_units = getattr(mr, "C_units", None)
         ok_from_units = None
         if C_units is None:
-            C_units, ok_from_units = safe_normalize_to_units(mr.C_merged, magnet_order=m)
+            C_units, ok_from_units = safe_normalize_to_units(
+                mr.C_merged, magnet_order=m, skew_main=_is_skew_main(mr)
+            )
 
-        # Build per-turn data
+        # Build per-turn data. "B1_T" is the internal name plateau_summary
+        # expects; it holds the MAIN harmonic B{m} (Im for a skew main).
         data: dict = {
             "turn": np.arange(n_turns),
-            "B1_T": np.real(mr.C_merged[:, m - 1]) if m >= 1 else np.real(mr.C_merged[:, 0]),
+            "B1_T": _main_field(mr),
         }
 
         # Per-turn mean current: prefer the value carried from the pipeline,
@@ -166,15 +245,22 @@ def build_physics_plots_panel(
             I_nom = np.zeros(n_turns)
             branch = np.full(n_turns, "unknown", dtype=object)
 
-            prev_I = 0.0
+            if groups and max(int(ge) for _, ge in groups) >= n_turns:
+                log.write(
+                    "WARNING: plateau detection does not match the merge result "
+                    f"(plateaus reach turn {max(int(ge) for _, ge in groups)}, merge has {n_turns} turns). "
+                    "Re-run Plateau Detection and Harmonic Merge on the same segment."
+                )
+                return None
+
+            I_groups = [float(np.mean(data["I_mean_A"][gs:ge + 1])) for gs, ge in groups]
+            branches = _branches_from_currents(I_groups)
             for gid, (gs, ge) in enumerate(groups):
                 run_id[gs:ge + 1] = gid
                 for t in range(gs, ge + 1):
                     turn_in_run[t] = t - gs
-                I_grp = float(np.mean(data["I_mean_A"][gs:ge + 1]))
-                I_nom[gs:ge + 1] = I_grp
-                branch[gs:ge + 1] = "ascending" if I_grp > prev_I else "descending"
-                prev_I = I_grp
+                I_nom[gs:ge + 1] = I_groups[gid]
+                branch[gs:ge + 1] = branches[gid]
 
             data["run_id"] = run_id
             data["turn_in_run"] = turn_in_run
@@ -214,6 +300,22 @@ def build_physics_plots_panel(
 
             summ = plateau_summary(df, n_last=int(n_last.value))
             st.summary_df = summ
+            st.main_order = int(mr.magnet_order)
+
+            # Offer only the harmonic columns this summary actually has
+            # (e.g. no b2 for a quadrupole, where B2 is the main field).
+            avail = [c[: -len("_mean")] for c in summ.columns
+                     if c.endswith("_units_mean") and summ[c].notna().any()]
+            if avail:
+                def _order_key(name: str):
+                    try:
+                        return (int(name[1:].split("_")[0]), name[0] != "b")
+                    except ValueError:
+                        return (10 ** 6, True)
+                avail = sorted(avail, key=_order_key)
+                prev = harmonic_dd.value
+                harmonic_dd.options = [(c, c) for c in avail]
+                harmonic_dd.value = prev if prev in avail else avail[0]
 
             summary_html.value = (
                 f"<b>Summary ({len(summ)} runs):</b><br>"
@@ -257,11 +359,13 @@ def build_physics_plots_panel(
             _set_status("plotting hysteresis...")
             summ = st.summary_df
 
+            mo = int(st.main_order)
+
             def plot_fn(fig, ax):
                 plot_hysteresis(ax, summ, "I_nom", "B1_mean", "B1_std")
                 ax.set_xlabel("I_nom [A]")
-                ax.set_ylabel("B1 [T]")
-                ax.set_title("Hysteresis: B1 vs I")
+                ax.set_ylabel(f"B{mo} at Rref [T]")
+                ax.set_title(f"Hysteresis: B{mo} vs I")
                 ax.legend()
                 ax.grid(True, alpha=0.3)
 
@@ -293,7 +397,7 @@ def build_physics_plots_panel(
                         ax.plot(seg.loc[m, "I_nom"], seg.loc[m, "TF"], "o-",
                                 color=col, ms=4, label=br)
                 ax.set_xlabel("I_nom [A]")
-                ax.set_ylabel("TF [T/kA]")
+                ax.set_ylabel(f"TF = B{int(st.main_order)}/I [T/kA]")
                 ax.set_title("Transfer Function vs I")
                 ax.legend()
                 ax.grid(True, alpha=0.3)
@@ -319,18 +423,35 @@ def build_physics_plots_panel(
                     ax.text(0.5, 0.5, "Need >= 2 good runs for Ld", ha="center",
                             va="center", transform=ax.transAxes)
                     return
-                seg = summ[good].sort_values("I_nom")
-                I_vals = seg["I_nom"].values
-                B1_vals = seg["B1_mean"].values
-                # Ld = dB1/dI (central differences, A -> kA)
-                dI = np.diff(I_vals) / 1000.0  # kA
-                dB = np.diff(B1_vals)
-                Ld = dB / dI
-                I_mid = (I_vals[:-1] + I_vals[1:]) / 2.0
-                ax.plot(I_mid, Ld, "o-", ms=4)
+                # dB/dI per hysteresis branch: mixing the up and down branches
+                # pairs plateaus at the same current (dI = 0 -> inf). Within a
+                # branch, sort by current and skip repeated currents.
+                branches = (summ.loc[good, "branch"].unique()
+                            if "branch" in summ.columns else [None])
+                n_plotted = 0
+                for br in branches:
+                    sel = good if br is None else good & (summ["branch"] == br)
+                    seg = summ[sel].sort_values("I_nom")
+                    I_vals = seg["I_nom"].values
+                    B1_vals = seg["B1_mean"].values
+                    dI = np.diff(I_vals) / 1000.0  # A -> kA
+                    dB = np.diff(B1_vals)
+                    keep = np.abs(dI) > 0
+                    if not keep.any():
+                        continue
+                    I_mid = ((I_vals[:-1] + I_vals[1:]) / 2.0)[keep]
+                    ax.plot(I_mid, dB[keep] / dI[keep], "o-", ms=4,
+                            label=str(br) if br is not None else None)
+                    n_plotted += 1
+                if n_plotted == 0:
+                    ax.text(0.5, 0.5, "Need >= 2 runs at different currents on one branch",
+                            ha="center", va="center", transform=ax.transAxes)
+                    return
+                if branches[0] is not None:
+                    ax.legend()
                 ax.set_xlabel("I [A]")
-                ax.set_ylabel("Ld = dB1/dI [T/kA]")
-                ax.set_title("Differential Inductance vs I")
+                ax.set_ylabel(f"dB{int(st.main_order)}/dI [T/kA]")
+                ax.set_title("Differential transfer function dB/dI vs I")
                 ax.grid(True, alpha=0.3)
 
             _plot_with(plot_fn)
@@ -391,6 +512,12 @@ def build_physics_plots_panel(
         try:
             _set_status("fitting eddy tau...")
 
+            fit_eddy_per_run = _import_eddy_fit()
+            if fit_eddy_per_run is None:
+                log.write(f"WARNING: {_EDDY_MISSING_MSG}")
+                eddy_html.value = f"<i style='color:#960;'>{_EDDY_MISSING_MSG}</i>"
+                return
+
             mr = get_merge_result()
             plateau_info = get_plateau_info()
             df = _build_analysis_df(mr, plateau_info)
@@ -403,7 +530,7 @@ def build_physics_plots_panel(
 
             groups = plateau_info["groups"]
             m = int(mr.magnet_order)
-            B1_all = np.real(mr.C_merged[:, m - 1]) if m >= 1 else np.real(mr.C_merged[:, 0])
+            B1_all = _main_field(mr)  # main harmonic B{m} (Im for a skew main)
             I_mean_all = plateau_info.get("I_mean")
             if I_mean_all is None or len(I_mean_all) != len(B1_all):
                 I_mean_mr = getattr(mr, "I_mean_A", None)
@@ -413,15 +540,22 @@ def build_physics_plots_panel(
                     else np.zeros(len(B1_all))
                 )
 
-            results: list[EddyFitResult] = []
-            prev_I = 0.0
+            if max(int(ge) for _, ge in groups) >= len(B1_all):
+                log.write(
+                    "WARNING: plateau detection does not match the merge result; "
+                    "re-run Plateau Detection and Harmonic Merge on the same segment."
+                )
+                return
+
+            results: list = []
+            I_groups = [float(np.mean(I_mean_all[gs:ge + 1])) for gs, ge in groups]
+            branches = _branches_from_currents(I_groups)
             for gid, (gs, ge) in enumerate(groups):
                 turns = np.arange(ge - gs + 1, dtype=float)
                 B1_run = B1_all[gs:ge + 1]
                 I_run = I_mean_all[gs:ge + 1]
-                I_nom = float(np.mean(I_run))
-                branch = "ascending" if I_nom > prev_I else "descending"
-                prev_I = I_nom
+                I_nom = I_groups[gid]
+                branch = branches[gid]
 
                 if len(turns) < 10:
                     continue
@@ -560,7 +694,7 @@ def build_physics_plots_panel(
     header = w.HTML(
         "<h3 style='margin:0;'>Physics Plots</h3>"
         "<div style='color:#555; line-height:1.35; margin-bottom:8px;'>"
-        "Hysteresis loops, transfer function, differential inductance, "
+        "Hysteresis loops, transfer function, differential transfer function dB/dI, "
         "eddy-current settling analysis. Requires merge result + plateau detection."
         "</div>"
     )

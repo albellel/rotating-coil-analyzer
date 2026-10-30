@@ -12,7 +12,10 @@ from rotating_coil_analyzer.analysis.utility_functions import (
     plateau_summary,
     plot_hysteresis,
 )
-from tools_for_data_analysis.fitting.eddy import eddy_model
+try:  # optional companion package (pip install -e .[eddy])
+    from tools_for_data_analysis.fitting.eddy import eddy_model
+except ImportError:  # pragma: no cover - depends on the environment
+    eddy_model = None
 
 
 # =====================================================================
@@ -130,6 +133,7 @@ class TestPlateauSummary:
 #  eddy_model
 # =====================================================================
 
+@pytest.mark.skipif(eddy_model is None, reason="tools-for-data-analysis (optional extra) not installed")
 class TestEddyModel:
     def test_known_values(self):
         # At t=0: B_inf + A

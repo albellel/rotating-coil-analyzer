@@ -87,6 +87,9 @@ def test_integrate_to_flux_weighted_removes_dt_weighted_offset() -> None:
     Ns = 6
     dt = np.array([0.0, 0.5, 1.5, 1.0, 2.0, 0.5])
     t = np.cumsum(dt)
+    # The first increment of a turn spans the gap to the previous turn; for a
+    # single turn it is the median measured interval (here 1.0).
+    dt[0] = np.median(np.diff(t))
 
     # Make df = c * dt so that sum(df)/sum(dt) = c.
     c = 3.7
@@ -141,6 +144,7 @@ def test_provenance_columns_populates_didt_and_weighted_drift() -> None:
     # One turn, variable dt.
     dt = np.array([0.0, 0.5, 1.5, 1.0, 2.0, 0.5])
     t = np.cumsum(dt)[None, :]
+    dt[0] = np.median(np.diff(t[0]))  # duration of the first increment
 
     # Create a ramping current so di/dt triggers.
     I = np.array([[20.0, 21.0, 22.0, 23.0, 24.0, 25.0]])
@@ -222,3 +226,33 @@ def test_append_tag_to_path() -> None:
     # No extension.
     p3 = append_tag_to_path("/tmp/df_out", "abc")
     assert p3 == "/tmp/df_out_abc"
+
+
+def test_integrate_to_flux_weighted_equals_legacy_for_uniform_dt() -> None:
+    # Regression (2026-10-30): with uniform sampling the weighted (Bottura
+    # AII.12-14) and legacy drift modes must give the same harmonics. The old
+    # weighted mode set the first increment's duration to 0 and differed.
+    rng = np.random.default_rng(0)
+    n_turns, Ns, dt = 3, 64, 1e-3
+    t = (np.arange(n_turns * Ns) * dt).reshape(n_turns, Ns)
+    th = 2 * np.pi * np.arange(Ns) / Ns
+    df = np.diff(np.cos(th) + 0.01 * np.sin(3 * th), prepend=np.cos(-2 * np.pi / Ns))
+    df = np.tile(df, (n_turns, 1)) + 1e-4 + 1e-6 * rng.standard_normal((n_turns, Ns))
+    fl, _ = integrate_to_flux(df, drift=True, drift_mode="legacy")
+    fw, _ = integrate_to_flux(df, drift=True, drift_mode="weighted", t_turns=t)
+    Fl = np.fft.fft(fl, axis=1)[:, 1:16]
+    Fw = np.fft.fft(fw, axis=1)[:, 1:16]
+    assert np.max(np.abs(Fw - Fl)) < 1e-12 * np.max(np.abs(Fl))
+
+
+def test_integrate_to_flux_weighted_uses_gap_to_previous_turn() -> None:
+    # Contiguous turns: the first increment of turn i spans t[i,0]-t[i-1,-1].
+    Ns = 4
+    dt_all = np.array([0.1, 0.2, 0.1, 0.2, 0.3, 0.1, 0.2, 0.1])
+    t = np.cumsum(dt_all).reshape(2, Ns)
+    c = 2.0
+    df = c * dt_all.reshape(2, Ns)
+    df[0, 0] = c * np.median(np.diff(t[0]))  # turn 0 has no predecessor
+    flux, diag = integrate_to_flux(df, drift=True, drift_mode="weighted", t_turns=t)
+    assert np.allclose(diag.offset_per_s, c)
+    assert np.allclose(flux, 0.0, atol=1e-12)

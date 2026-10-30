@@ -42,11 +42,13 @@ Implemented steps
      This matches the legacy C++ implementation exactly.
 
    - "weighted" (Bottura):
-       dt_k = t_k - t_{k-1}   (measured)
+       dt_k = t_k - t_{k-1}   (measured; for k=0 the gap to the previous
+                               turn, see _increment_durations)
        df_k <- df_k - (sum(df)/sum(dt)) * dt_k
        flux = cumsum(df)
 
-     This form is more appropriate when dt varies within a turn.
+     This form is more appropriate when dt varies within a turn. For uniform
+     sampling it equals the legacy mode up to the (discarded) DC bin.
 
 3) Provenance columns (recommended)
 
@@ -249,6 +251,36 @@ def apply_di_dt_to_channels(
     return df_abs_corr, df_cmp_corr, res
 
 
+def _increment_durations(t: np.ndarray) -> np.ndarray:
+    """Duration of each incremental sample, from the measured timestamps.
+
+    Increment ``k`` of a turn spans ``(t_{k-1}, t_k]``. Inside a turn this is
+    ``t_k - t_{k-1}``. The first increment of a turn spans the gap from the
+    last sample of the previous turn; that value is used when the previous row
+    of ``t`` is the contiguous previous turn (gap positive and below 10 times
+    the turn's median interval). Otherwise (first turn, a selected subset of
+    turns, a plateau boundary) the first duration falls back to the turn's own
+    median measured interval. No timestamp is created or modified; only the
+    weight of the first increment is estimated.
+
+    Before 2026-10-30 the first duration was set to 0, so sample 0 received no
+    drift correction and the total time was (Ns-1)*dt: the weighted mode then
+    differed from the legacy mode even for perfectly uniform sampling (see
+    docs/11_bugfix_diary.md).
+    """
+    n_turns = t.shape[0]
+    dt_in = np.diff(t, axis=1)
+    with np.errstate(all="ignore"):
+        med = np.nanmedian(dt_in, axis=1) if dt_in.shape[1] else np.full(n_turns, np.nan)
+    dt0 = np.full(n_turns, np.nan, dtype=float)
+    if n_turns > 1:
+        dt0[1:] = t[1:, 0] - t[:-1, -1]
+    with np.errstate(invalid="ignore"):
+        contiguous = np.isfinite(dt0) & (dt0 > 0.0) & (dt0 < 10.0 * med)
+    dt0 = np.where(contiguous, dt0, med)
+    return np.concatenate([dt0[:, None], dt_in], axis=1)
+
+
 def integrate_to_flux(
     df_turns: np.ndarray,
     *,
@@ -316,9 +348,7 @@ def integrate_to_flux(
 
     _validate_2d_same_shape(df_turns, t_turns)
     t = np.asarray(t_turns, dtype=float)
-
-    # dt_k = t_k - t_{k-1}; prepend makes dt[*,0] = 0.
-    dt = np.diff(t, axis=1, prepend=t[:, :1])
+    dt = _increment_durations(t)
 
     finite = np.all(np.isfinite(df), axis=1) & np.all(np.isfinite(dt), axis=1)
     total_time = np.sum(dt, axis=1)

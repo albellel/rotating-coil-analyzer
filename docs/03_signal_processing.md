@@ -90,16 +90,26 @@ plain AII.14 result; keeping it gives bit-for-bit parity
 **`drift_mode="weighted"`** (Bottura AII.12–14 with measured intervals):
 
 $$
-\Delta t_k = t_k - t_{k-1}\ (\Delta t_0 = 0), \qquad
+\Delta t_k = t_k - t_{k-1}\ \ (k \ge 1), \qquad
 \Delta\psi_k \leftarrow \Delta\psi_k - \frac{\sum_j \Delta\psi_j}{\sum_j \Delta t_j}\,\Delta t_k,
 \qquad \psi = \operatorname{cumsum}(\Delta\psi).
 $$
 
+The first increment of a turn spans the gap to the previous turn:
+$\Delta t_0 = t_0 - t^{prev}_{N_s-1}$ when the previous row is the contiguous
+previous turn ($0 < \Delta t_0 < 10\,\mathrm{median}(\Delta t)$), otherwise the
+turn's median measured interval (first turn, selected turns, plateau
+boundary). No timestamp is created. For uniform sampling the weighted mode
+then equals the legacy mode up to the discarded DC bin. (Until 2026-10-30
+$\Delta t_0 = 0$ was used, which left sample 0 uncorrected and made the
+weighted mode differ from legacy even for uniform sampling — diary
+BF-2026-10-30-02.)
+
 Requires `t_turns`; turns whose total time is non-positive or non-finite are
 left uncorrected and flagged (`DriftResult.applied`, `offset_per_s`). This is
 the mode appropriate when the rotation speed ripples within a turn; it is
-implemented and unit-tested but **not yet validated end-to-end** on a speed-
-ripple dataset (hub §4 open flag).
+unit-tested (including weighted ≡ legacy at uniform $\Delta t$) but **not yet
+validated end-to-end** on a speed-ripple dataset (hub §4 open flag).
 
 Without `"dri"` in `options`, $\psi = \operatorname{cumsum}(\Delta\psi)$ with
 no correction.

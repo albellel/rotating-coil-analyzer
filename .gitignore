@@ -144,3 +144,8 @@ rotating_coil_analyzer/notebooks/**/*.pdf
 # Large data files (HDF5, etc.)
 # =========================
 *.h5
+
+# =========================
+# rca-analyze default output folder (demo data + CSVs)
+# =========================
+rca_output/

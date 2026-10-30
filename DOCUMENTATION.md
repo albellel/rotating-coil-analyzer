@@ -18,7 +18,7 @@
 8. [Validation & Testing](#8-validation--testing)
 9. [Notebooks & Campaigns](#9-notebooks--campaigns)
 10. [Parity with FFMM (C++ Golden Standard)](#10-parity-with-ffmm-c-golden-standard)
-11. [Parity with Pentella Analyzer](#11-parity-with-pentella-analyzer)
+11. [Parity with the MMM Python analyzer](#11-parity-with-the-mmm-python-analyzer)
 12. [Cross-Reference: Theory vs Implementation](#12-cross-reference-theory-vs-implementation)
 13. [Identified Deviations & Suggestions](#13-identified-deviations--suggestions)
 14. [Function Reference](#14-function-reference)
@@ -74,7 +74,7 @@ rotating_coil_analyzer/
   │   └── pptx_helpers.py     Slide layout and chart utilities
   ├── validation/         Golden-standard validation tools
   │   └── golden_streaming.py  Streaming validation workflow (C++ parity)
-  ├── tests/              149 tests, all passing
+  ├── tests/              unit + regression tests (run `python -m pytest`)
   ├── notebooks/          Example/tool + parity-validation notebooks + reference docs
   └── scripts/            Standalone utility scripts (btp8_bruteforce_turns.py)
 ```
@@ -297,8 +297,8 @@ compute_legacy_kn_per_turn(
 
 6. **rot** (if in options): Extract phase, rotate ALL harmonics k=1..H
    ```python
-   φ = arg(C_abs[:, m-1])    # phase of main harmonic
-   # Wrap to [-π/2, π/2]
+   φ = arg(C_abs[:, m-1])    # phase of main harmonic; skew_main: arg(-i * C_abs[:, m-1])
+   # Wrap to [-π/2, π/2]  (turns within 0.05 rad of ±π/2 flagged in phi_near_wrap)
    φ_mech = φ / m
    C[:, k] *= exp(-i * φ_mech * (k+1))   for k=0..H-1
    ```
@@ -309,6 +309,7 @@ compute_legacy_kn_per_turn(
    - Dipole (m=1): `zR = -C_cmp[:,9] / (10 * C_cmp[:,10])` (n=10,11 from compensated)
    - Quadrupole+ (m≥2): `zR = -C_abs[:,m-2] / ((m-1) * C_abs[:,m-1])` (robust)
    - `max_zR` clamp: if |zR| > max_zR, set zR=0 and flag in `zR_clamped`
+   - `cel_applied` (per turn) says where it was actually applied; dipole with H < 11 → not applied, reported in `warnings`
 
 8. **fed** (if in options): Binomial feeddown expansion
    ```python
@@ -376,6 +377,10 @@ In-memory representation of one loaded segment:
 Frozen pipeline configuration:
 - Required: `magnet_order`, `r_ref_m`, `samples_per_turn`, `shaft_speed_rpm`
 - Optional: `options`, `drift_mode`, `merge_mode`, `legacy_rotate_excludes_last`, etc.
+- `from_catalog(cat, **overrides)` takes `magnet_order` (magnetOrder, else magnetType),
+  `r_ref_m` (refRadius) and `skew_main` (magnetNormSkew) from `Parameters.txt`;
+  raises `ValueError` if `magnet_order` or `r_ref_m` is known neither from the file
+  nor from the overrides (no silent m=1 / 17 mm since 2026-10-30).
 
 ### 5.4 LegacyKnPerTurn
 
@@ -385,6 +390,8 @@ Full pipeline result per turn:
 - `phi_out_rad`, `zR`, `z_m`, `x_m`, `y_m`: Rotation and center location
 - `main_field`, `main_field_db`: Main harmonic value
 - `I_mean_A`, `dI_dt_A_per_s`, `duration_s`, `time_median_s`: Diagnostics
+- `dit_applied`, `cel_applied`, `phi_near_wrap`: per-turn flags (None if the option was off)
+- `warnings`: diagnostics (cel not applied, |zR| ≥ 1, |C_m| > 20 T, wrap boundary); `process_kn_pipeline` re-emits them as `UserWarning`
 
 ### 5.5 KnBundle / MergeResult
 
@@ -460,7 +467,7 @@ Full provenance containers:
 
 ### 8.1 Test Suite
 
-- **149 tests**, all passing
+- Full suite passes (`python -m pytest`); the 2026-10-30 fixes are in `docs/11_bugfix_diary.md`
 - Run with: `python -m pytest rotating_coil_analyzer/tests/ -x -q`
 
 | Category | Tests | Coverage |
@@ -504,7 +511,7 @@ notebooks live here; the magnet measurement campaigns moved to their own repos.
 Magnet campaign notebooks (SPS MBB, LEAR MC62, ...) live in the sibling repos
 `mbb-data-analysis`, `mc62-data-analysis`, `mba-data-analysis`, which depend on
 this package. Programmatic notebook construction in those repos uses
-`tools_for_data_analysis.nb_helpers` (mandatory — prevents encoding/f-string bugs).
+`tools_for_data_analysis.helpers.notebook` (mandatory — prevents encoding/f-string bugs).
 For a hands-on API walkthrough see `GUIDE.md`.
 
 ### 9.2 Magnet Parameters
@@ -601,11 +608,11 @@ Machine-precision parity has been achieved on all golden standard datasets. See 
 
 ---
 
-## 11. Parity with Pentella Analyzer
+## 11. Parity with the MMM Python analyzer
 
-### 11.1 Pentella Pipeline Summary
+### 11.1 MMM Python analyzer: pipeline summary
 
-The Pentella analyzer (`rotcoil_lib.py`) implements:
+An independent Python analyzer used in the MMM section (`rotcoil_lib.py`) implements:
 
 ```
 1. di/dt correction (optional)
@@ -623,7 +630,7 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 
 ### 11.2 Parity Points
 
-| Feature | Pentella | Python Analyzer | Status |
+| Feature | MMM Python analyzer | This package | Status |
 |---------|----------|-----------------|--------|
 | FFT formula | (2/N) * FFT(flux)[n] | (2/Ns) * FFT(flux)[1:H+1] | **Match** |
 | Kn formula | rRef^(n-1) / conj(kn_n) * f_n | (1/conj(kn)) * Rref^k * f | **Match** |
@@ -632,7 +639,7 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 | Feeddown | Σ C(k,n) * (Dz/rRef)^(k-n) * C_k | Same binomial | **Match** |
 | Normalization | (C / B_main) * 1e4 | 10^4 * C / B_m | **Match** |
 
-### 11.3 Pentella-Specific Features Not in Python Analyzer
+### 11.3 MMM-analyzer features not in this package
 
 | Feature | Description | Needed? |
 |---------|-------------|---------|
@@ -710,12 +717,12 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 ### 13.2 Potential Improvements
 
 #### D. Multi-Segment Support
-- **Gap**: Pentella supports IntegralSegment and CentralSegment (B*L weighted merge)
+- **Gap**: The MMM Python analyzer supports IntegralSegment and CentralSegment (B*L weighted merge)
 - **Impact**: Cannot analyze magnets with multiple coil positions in a single pipeline call
 - **Recommendation**: Add multi-segment merge to utility_functions.py (weighted by B*L per segment)
 
 #### E. Pulsed Mode
-- **Gap**: Pentella and FFMM both support time-resolved pulsed measurements
+- **Gap**: The MMM Python analyzer and FFMM both support time-resolved pulsed measurements
 - **Impact**: Cannot analyze AC/pulsed measurements
 - **Recommendation**: Share `rot_coil_analyzer_turn()` concept — make the per-turn analyzer callable per time-step
 
@@ -724,7 +731,7 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 - **Recommendation**: Add ext processing path (parallel to abs/cmp) for triple-coil configurations
 
 #### G. Impedance Gain Correction
-- **Gap**: Pentella applies `(Z_coil + Z_inst) / Z_inst` gain correction
+- **Gap**: The MMM Python analyzer applies `(Z_coil + Z_inst) / Z_inst` gain correction
 - **Assessment**: Not needed if hardware/calibration handles it upstream. But should be documented.
 - **Recommendation**: Add optional impedance gain parameter to AnalysisProfile for traceability
 
@@ -826,7 +833,7 @@ The Pentella analyzer (`rotcoil_lib.py`) implements:
 - All pipeline steps follow this reference exactly
 
 ### Marusov (2013) — 2D Fourier Decomposition
-- **Marusov, I.** — *Measurement of a time-periodic magnetic field using a rotating coil*, NIM-A 711, pp. 121-123
+- **Marusov, V.** — *Measurement of a Time-Periodic Magnetic Field by Rotating Coil*, NIM-A 711, pp. 121-123
 - Extends the per-turn FFT analysis to a 2D decomposition in both angle (spatial, index n) and time (temporal, index k)
 - The 2D coefficient σ_{n,k} captures the temporal evolution of each spatial harmonic
 - Truncating to K temporal modes provides bandwidth-limited reconstruction
@@ -887,4 +894,4 @@ Measurement.AP1.FDIs = TABLE{NCS\t0\t2\t0.7\nCS\t1\t3\t0.7}
 
 ---
 
-*End of documentation. Updated 2026-03-05 from full repository analysis including comparison with FFMM C++ golden standard, Pentella analyzer, and Bottura's theoretical framework.*
+*End of documentation. Updated 2026-03-05 from full repository analysis including comparison with FFMM C++ golden standard, the MMM-section Python analyzer, and Bottura's theoretical framework.*

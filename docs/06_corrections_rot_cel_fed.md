@@ -43,11 +43,13 @@ $|C_m| < $ `eps_main` (default $10^{-20}$) or non-finite, for which
 $\phi_{out} = 0$ and no rotation is effectively applied.
 
 **`legacy_rotate_excludes_last`** (default `False`): when `True` the loop
-stops at $n = H-1$, reproducing an off-by-one in the historical SM18 C++
-export. This has **no theoretical basis** and exists only to reach
-bit-for-bit parity with that export (`PARITY_REPORT.md` §1.2). Everything
-else — Bottura AIV.6, the current FFMM C++ path, Pentella — rotates all
-orders; use the default.
+stops at $n = H-1$, reproducing the off-by-one of the FFMM **native C++**
+analysis (`for (k = 1; k < nrHarmonics; ++k)`), which is FFMM's production path
+and therefore behind every FFMM results file (SM18 2024, Buckley 2026,
+FCC-ee 2023). This has **no theoretical basis** and exists only to reach
+bit-for-bit parity with FFMM files (`PARITY_REPORT.md` §1.2, chapter 12 E1).
+Bottura AIV.6, the FFMM Matlab path and the MMM Python analyzer rotate all
+orders; use the default for physics.
 
 ## 6.2 Centre location — `cel` (AIII.1–5)
 
@@ -117,8 +119,20 @@ is the identity.
 |---|---|---|---|
 | `flip_signal_polarity` | after $k_n$, before the DB snapshot | $C_n \leftarrow -C_n$ for all $n$, both channels; $B_1$ sign flips, $b_n/a_n$ unchanged | genuine cable/coil polarity swap |
 | `encoder_offset_rad` | after the DB snapshot, before `rot` | pre-rotation $C_n \leftarrow C_n e^{-i n \delta}$; final harmonics identical (the `rot` step compensates) but `phi_out` then reflects the magnet angle only and avoids wrap edge cases. At $\delta = \pi$ odd orders negate, even orders unchanged | known encoder index offset (all MC62 campaigns use $\pi$) |
-| `skew_main` | normalisation | divide by $A_m$ instead of $B_m$ | skew magnets |
-| `absCalib` | normalisation / `main_field` | scalar factor on the main field (legacy) | leave at 1.0 |
+| `skew_main` | `rot` reference and normalisation | `rot` puts $C_m$ on the imaginary axis (reference $rg(-i\,C_m)$); normalise by $A_m$ instead of $B_m$ | skew magnets (fixed 2026-10-30, diary BF-2026-10-30-01: before, `rot` ignored it and units were ~$10^{16}$) |
+| `absCalib` | normalisation / `main_field` | scalar factor on the main field only (legacy C++ semantics; exported $B_n$ in tesla are not scaled) | leave at 1.0 |
+
+**Wrap boundary.** The reference $rg C_m$ is wrapped to $[-\pi/2, \pi/2]$. When
+the main angle lies within 0.05 rad of $\pm\pi/2$ (a skew magnet analysed as
+normal, or a magnet mounted at $\pm 90°/m$), noise flips the wrapped
+reference by $\pi/m$ between turns and the **sign** of every tesla value flips
+with it (normalised units are unaffected). Such turns are flagged in
+`phi_near_wrap` and reported; use `skew_main` or `encoder_offset_rad`.
+
+**Reported, never silently applied (2026-10-30).** `cel_applied` / `dit_applied`
+say per turn whether the correction was actually applied (dipole `cel` needs
+$H \ge 11$); $|z_R| \ge 1$ before `fed` and $|C_m| > 20$ T are reported in
+`LegacyKnPerTurn.warnings`.
 
 Diagnosing which knob applies: even-order sign flip with odd orders unchanged
 ⇒ encoder offset; all orders flipped ⇒ polarity. Full decision table in

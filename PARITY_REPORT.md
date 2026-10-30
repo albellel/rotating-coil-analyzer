@@ -274,6 +274,53 @@ This validation **cannot achieve machine precision** because:
 
 ---
 
+## 3b. FCC-ee quadrupole (bundled demo) — reproducible from a fresh clone
+
+Added 2026-10-30. The only golden dataset **shipped with the repository**
+(`rotating_coil_analyzer/tests/data/20231110_140210_FCC-ee_center_DC_PXMQNDI8WC-CR000001.zip`,
+50 turns, 1024 samples/turn, 250 A DC, ABCD-bucked quadrupole head). FFMM ran
+`dri rot nor cel fed`, $R_{ref}$ = 10 mm; this package runs
+`process_kn_pipeline(options=("dri","rot","cel","fed"))` with $m = 2$ and
+$R_{ref}$ read from `Parameters.txt` and normalises after the merge. Test:
+`test_review_fixes_2026_10.py::test_fccee_end_to_end_matches_ffmm`; command:
+`rca-analyze`.
+
+| Order | mean $|b_n|$ (units) | max per-turn $|\Delta b_n|$ vs FFMM (units) |
+|---|---|---|
+| 3 | 51.6 | 3.1e-13 |
+| 4 | 0.29 | 1.7e-13 |
+| 5 | 0.19 | 3.5e-12 |
+| 6 | 0.18 | 7.2e-11 |
+| 7 | 1.0e-2 | 8.4e-10 |
+| 8 | 6.3e-5 | 9.8e-9 |
+| 9 | 7.0e-4 | 7.8e-8 |
+| 10 | 1.1e-3 | 4.2e-7 |
+| 11–15 | ≤ 1.5e-5 | ≤ 8.9e-6 |
+
+Centre $dx, dy$ and roll angle agree to $<10^{-9}$ mm and $<10^{-12}$ rad.
+With `legacy_rotate_excludes_last=True` (FFMM's convention, chapter 12 E1)
+$b_{15}$ agrees to $6\times10^{-18}$ units, so the order-15 entry is
+FFMM's rotation off-by-one. On orders 7–14 the difference grows by ~×10 per
+order. Its cause is **not established**: it is not the rotation, and not the
+ASCII input precision (15 significant digits). Orders $n \ge 11$ are at
+the noise floor of this measurement. All differences are below $10^{-9}$ of the
+main field.
+
+## 3c. Regression of the 2026-10-30 fixes against the previous code
+
+The previous code (git `a484df0`) and the fixed code were run on identical
+inputs: SM18 streaming (20 000 turns), Buckley degauss (1 421 turns),
+FCC-ee (50 turns), each with eight option sets (legacy with `nor`;
+`dri,rot,cel,fed`; signed `dit`; `dit` + `max_zR`;
+`legacy_rotate_excludes_last`; encoder offset $\pi$ + polarity flip; no drift;
+`process_kn_pipeline` defaults). Every output array ($C_{abs}$, $C_{cmp}$, DB
+snapshot, $z_R$, $\varphi$, main field, centre, current, merged and unit
+tables) is **bit-identical**. The intended differences are the skew-with-rotation
+fix and the weighted drift fix (`docs/11_bugfix_diary.md`). The memory-mapped
+streaming reader returns bit-identical frames, columns, warnings and turn
+counts on all five 1.17 GB SM18 segments. **All parity numbers in this
+report therefore still hold.**
+
 ## 4. Cross-Validation: Equations Proven Identical
 
 ### 4.1 What SM18 Proves
@@ -389,8 +436,8 @@ for k in range(1, H+1):  # k=1..H (all harmonics)
 
 **Match**: Identical rotation formula. The range issue:
 - C++ `for k=1; k < nrHarmonics` rotates k=1..14 (indices 0..13). nrHarmonics=15, so k goes 1,2,...,14. This is 14 out of 15 harmonics.
-- **SM18 C++ has an off-by-one**: It uses `k < nrHarmonics` which excludes the last (k=15). The `legacy_rotate_excludes_last=True` flag replicates this.
-- **Standard FFMM C++ and Pentella**: Both rotate ALL harmonics k=1..H. The Python default `legacy_rotate_excludes_last=False` matches this.
+- **FFMM native C++ has an off-by-one**: it uses `k < nrHarmonics`, which excludes the last order (k=15). This is FFMM's production path (FFMM `master` 10ea291f, 2025-09-03), not only the 2024 SM18 export: the Buckley 2026 and FCC-ee 2023 files show it too. The `legacy_rotate_excludes_last=True` flag replicates it. *(Corrected 2026-10-30; this line used to say that standard FFMM C++ rotates all orders.)*
+- **FFMM Matlab path and the MMM Python analyzer**: both rotate ALL harmonics k=1..H. The Python default `legacy_rotate_excludes_last=False` matches this and Bottura AIV.6.
 
 ### 5.5 CEL (Center Location)
 

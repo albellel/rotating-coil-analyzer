@@ -40,7 +40,7 @@ The head is read through two channels with independent sensitivities:
 
 An optional third **external** channel (`kn_ext`) is read from 6-column files
 and carried in `SegmentKn`/`KnBundle`, but `compute_legacy_kn_per_turn`
-processes only abs and cmp (gap vs Pentella, `DOCUMENTATION.md` §13.2 F).
+processes only abs and cmp (gap vs the MMM Python analyzer, `DOCUMENTATION.md` §13.2 F).
 The two channels stay separate through calibration, rotation, centring and
 feed-down; they are combined only by the explicit merge step (chapter 7).
 

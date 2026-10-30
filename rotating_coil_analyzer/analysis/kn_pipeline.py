@@ -32,11 +32,28 @@ The implementation below follows the legacy C++ analyzer semantics in
 """
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence
 
 import math
 
 import numpy as np
+
+
+#: Main-harmonic angles closer than this to the +/-pi/2 wrap boundary (after
+#: the optional skew shift) are flagged in ``LegacyKnPerTurn.phi_near_wrap``:
+#: noise can flip the wrapped reference by pi/m turn to turn there, which
+#: flips the sign of the Tesla values (normalised units are unaffected).
+WRAP_BOUNDARY_TOL_RAD = 0.05
+
+#: Main-field magnitudes above this are reported as implausible in
+#: ``LegacyKnPerTurn.warnings`` (normal-conducting and superconducting
+#: accelerator magnets stay well below it at the reference radius).
+MAX_PLAUSIBLE_FIELD_T = 20.0
+
+#: An order taken from the compensated channel whose |kn_cmp| is below this
+#: fraction of |kn_abs| is a bucked order: its Cmp harmonic is noise divided
+#: by ~0. See :func:`bucked_cmp_orders`.
+BUCKED_KN_REL_TOL = 1e-6
 
 from .preprocess import (
     DriftMode,
@@ -101,6 +118,17 @@ class LegacyKnPerTurn:
     time_median_s: np.ndarray  # (n_turns,)
 
     encoder_offset_rad: float = 0.0  # known encoder offset subtracted before rotation
+
+    # Which corrections were actually applied, per turn (None = option not requested)
+    dit_applied: Optional[np.ndarray] = None  # (n_turns,) bool
+    cel_applied: Optional[np.ndarray] = None  # (n_turns,) bool
+    # True where the main-harmonic angle sits within WRAP_BOUNDARY_TOL_RAD of the
+    # +/-pi/2 wrap boundary ("rot" only): the turn's Tesla sign is unreliable.
+    phi_near_wrap: Optional[np.ndarray] = None  # (n_turns,) bool
+    # Human-readable diagnostics (silent no-ops, implausible values). The core
+    # never prints or raises on these; callers decide (process_kn_pipeline
+    # re-emits them as Python warnings, the GUI writes them to its log).
+    warnings: tuple[str, ...] = ()
 
     @property
     def H(self) -> int:
@@ -212,10 +240,14 @@ def compute_legacy_kn_per_turn(
     drift_mode:
         Drift mode for the "dri" option.
     skew_main:
-        If True, main component is taken from Im(main_field) instead of Re(main_field)
-        in the normalization step (legacy "skw" option).
+        If True, the main harmonic is skew: the rotation step turns C_m onto the
+        imaginary axis (reference angle arg(C_m) - pi/2, so A_m carries the main
+        field) and the normalization step divides by Im(main_field) instead of
+        Re(main_field) (legacy "skw" option). Before 2026-10-30 the rotation
+        ignored this flag and made C_m real, so Im(main) was ~1e-17 |C_m| and the
+        normalised harmonics came out ~1e16 (see docs/11_bugfix_diary.md).
     legacy_rotate_excludes_last:
-        If False (default), rotate all harmonics n=1..H (Bottura Eq. AIV.6, C++, Pentella).
+        If False (default), rotate all harmonics n=1..H (Bottura Eq. AIV.6, C++, MMM Python analyzer).
         If True, exclude the last harmonic from rotation (legacy SM18 off-by-one).
     dit_signed:
         If True, use signed thresholds for the dit correction matching the
@@ -270,11 +302,15 @@ def compute_legacy_kn_per_turn(
     if m > H:
         raise ValueError(f"magnet_order m={m} exceeds available harmonics H={H} from kn file")
 
+    diag: List[str] = []
+
     # --- di/dt correction (optional) ---
+    dit_applied: Optional[np.ndarray] = None
     if "dit" in opt:
-        df_abs, df_cmp, _ = apply_di_dt_to_channels(
+        df_abs, df_cmp, dit_res = apply_di_dt_to_channels(
             df_abs, df_cmp, t, I, signed=bool(dit_signed),
         )
+        dit_applied = np.asarray(dit_res.applied, dtype=bool)
 
     # For reporting (match C++: polyfit slope and mean current)
     I_mean = np.mean(I, axis=1)
@@ -330,14 +366,31 @@ def compute_legacy_kn_per_turn(
     # --- rotation reference computed post-kn, pre-rotation (legacy) ---
     c_m = C_abs[:, m - 1]
     mag_m = np.abs(c_m)
-    arg_m = np.angle(c_m)
+    # Skew main: reference the angle to the imaginary axis, so the rotation
+    # below turns C_m into +/- i|C_m| (A_m carries the main field).
+    arg_m = np.angle(c_m * (-1j)) if bool(skew_main) else np.angle(c_m)
     bad_phi = (~np.isfinite(mag_m)) | (mag_m < float(eps_main)) | (~np.isfinite(arg_m))
     arg_wrapped = _wrap_arg_to_pm_pi_over_2(arg_m)
     phi_out = np.where(bad_phi, 0.0, arg_wrapped / float(m))
 
+    phi_near_wrap: Optional[np.ndarray] = None
+    if "rot" in opt:
+        phi_near_wrap = (~bad_phi) & (
+            np.abs(np.abs(arg_m) - np.pi / 2.0) < WRAP_BOUNDARY_TOL_RAD
+        )
+        n_wrap = int(np.sum(phi_near_wrap))
+        if n_wrap:
+            diag.append(
+                f"{n_wrap}/{n_turns} turns have the main-harmonic angle within "
+                f"{WRAP_BOUNDARY_TOL_RAD} rad of the +/-pi/2 wrap boundary: the rotation "
+                f"reference can flip by pi/m between turns, flipping the sign of B_n/A_n "
+                f"in Tesla (normalised units are unaffected). For a skew magnet use "
+                f"skew_main=True; otherwise move the reference with encoder_offset_rad."
+            )
+
     # --- rotation (optional) ---
     if "rot" in opt:
-        # default: rotate ALL harmonics (Bottura AIV.6, C++, Pentella)
+        # default: rotate ALL harmonics (Bottura AIV.6, C++, MMM Python analyzer)
         k_max = H - 1 if legacy_rotate_excludes_last else H
         for k in range(1, k_max + 1):
             # harmonic order k corresponds to column k-1
@@ -351,7 +404,9 @@ def compute_legacy_kn_per_turn(
     z = np.zeros(n_turns, dtype=complex)
     x = np.zeros(n_turns, dtype=float)
     y = np.zeros(n_turns, dtype=float)
+    cel_applied: Optional[np.ndarray] = None
     if "cel" in opt:
+        ok_cel = np.zeros(n_turns, dtype=bool)
         if m == 1:
             # legacy dipole special case uses compensated harmonics n=10 and n=11
             if H >= 11:
@@ -359,18 +414,24 @@ def compute_legacy_kn_per_turn(
                 Cn_2 = C_cmp[:, 10]
                 ok_cel = np.isfinite(Cn_2) & (np.abs(Cn_2) > float(eps_main))
                 zR[ok_cel] = -(Cn_1[ok_cel] / (10.0 * Cn_2[ok_cel]))
-            # else: zR stays 0+0j (initialized above)
+            else:
+                # zR stays 0+0j (initialized above)
+                diag.append(
+                    f"cel requested for a dipole but the kn file has only H={H} orders; "
+                    "the dipole centre needs the compensated n=10 and n=11 harmonics, so "
+                    "cel (and therefore fed) was NOT applied."
+                )
         else:
-            if m >= 2:
-                Cn_1 = C_abs[:, m - 2]
-                Cn_2 = C_abs[:, m - 1]
-                ok_cel = np.isfinite(Cn_2) & (np.abs(Cn_2) > float(eps_main))
-                zR[ok_cel] = -(Cn_1[ok_cel] / ((m - 1.0) * Cn_2[ok_cel]))
-            # else: zR stays 0+0j
+            Cn_1 = C_abs[:, m - 2]
+            Cn_2 = C_abs[:, m - 1]
+            ok_cel = np.isfinite(Cn_2) & (np.abs(Cn_2) > float(eps_main))
+            zR[ok_cel] = -(Cn_1[ok_cel] / ((m - 1.0) * Cn_2[ok_cel]))
 
         bad_zR = ~np.isfinite(zR)
         if np.any(bad_zR):
             zR[bad_zR] = 0.0
+            ok_cel = ok_cel & ~bad_zR
+        cel_applied = np.array(ok_cel, dtype=bool)
 
         z = Rref * zR
         x = np.real(z)
@@ -383,6 +444,8 @@ def compute_legacy_kn_per_turn(
         zR_clamped = suspect
         if np.any(suspect):
             zR[suspect] = 0.0
+            if cel_applied is not None:
+                cel_applied = cel_applied & ~suspect
             # recompute z, x, y for clamped turns
             z = Rref * zR
             x = np.real(z)
@@ -390,6 +453,13 @@ def compute_legacy_kn_per_turn(
 
     # --- feeddown (optional) ---
     if "fed" in opt:
+        n_div = int(np.sum(np.abs(zR) >= 1.0))
+        if n_div:
+            diag.append(
+                f"{n_div}/{n_turns} turns have |zR| >= 1 (centre offset >= Rref): the "
+                "feed-down series diverges and fed corrupts every order. Check the "
+                "magnet order and kn, use max_zR, or drop cel/fed (see diagnose_cel_fed)."
+            )
         # tmp[n] = sum_{k=n..H-1} comb(k,n) * zR^{k-n} * C[k]
         tmp_abs = np.zeros_like(C_abs)
         tmp_cmp = np.zeros_like(C_cmp)
@@ -412,6 +482,14 @@ def compute_legacy_kn_per_turn(
     # --- normalization (optional) ---
     main_field_db = C_abs_db[:, m - 1] * float(absCalib)
     main_field = C_abs[:, m - 1] * float(absCalib)
+    with np.errstate(invalid="ignore"):
+        n_big = int(np.sum(np.abs(main_field) > MAX_PLAUSIBLE_FIELD_T))
+    if n_big:
+        diag.append(
+            f"{n_big}/{n_turns} turns have |C_m| > {MAX_PLAUSIBLE_FIELD_T:g} T at Rref: "
+            "implausible for an accelerator magnet. Check magnet_order (the main "
+            "harmonic must not come from a bucked order), Rref and the kn file."
+        )
     if "nor" in opt:
         main_comp = np.imag(main_field) if bool(skew_main) else np.real(main_field)
         scale = np.full_like(main_comp, np.nan, dtype=float)
@@ -440,7 +518,48 @@ def compute_legacy_kn_per_turn(
         dI_dt_A_per_s=dI_dt,
         duration_s=duration,
         time_median_s=time_median,
+        dit_applied=dit_applied,
+        cel_applied=cel_applied,
+        phi_near_wrap=phi_near_wrap,
+        warnings=tuple(diag),
     )
+
+
+def bucked_cmp_orders(
+    kn: SegmentKn,
+    choice: Sequence[int],
+    *,
+    rel_tol: float = BUCKED_KN_REL_TOL,
+) -> list[int]:
+    """Return the orders taken from Cmp although the Cmp channel bucks them.
+
+    A compensated (bucked) channel is wired so that some orders cancel:
+    ``|kn_cmp(n)|`` is then ~0 and ``C_cmp(n) = f_n / conj(kn_cmp(n))`` is the
+    noise divided by ~0. Merging such an order from Cmp yields garbage.
+
+    Parameters
+    ----------
+    kn:
+        Segment kn.
+    choice:
+        Per-order merge choice from :func:`merge_coefficients` (0 abs, 1 cmp;
+        other values, e.g. ext, are ignored).
+    rel_tol:
+        An order is bucked when ``|kn_cmp(n)| < rel_tol * |kn_abs(n)|``.
+
+    Returns
+    -------
+    list of int
+        Harmonic orders n (1-based) that come from a bucked Cmp order.
+    """
+    ch = np.asarray(choice, dtype=int)
+    kc = np.abs(np.asarray(kn.kn_cmp, dtype=complex))
+    ka = np.abs(np.asarray(kn.kn_abs, dtype=complex))
+    out: list[int] = []
+    for j in range(min(ch.size, kc.size)):
+        if ch[j] == 1 and kc[j] < float(rel_tol) * ka[j]:
+            out.append(int(kn.orders[j]))
+    return out
 
 
 def merge_coefficients(

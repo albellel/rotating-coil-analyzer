@@ -57,7 +57,7 @@ C_n = \frac{R_{ref}^{\,n-1}}{\overline{k_n}}\; f_n \qquad [\mathrm{T}],
 $$
 
 `C = f * (1/conj(kn)) * Rref**(n-1)` (`sens_abs`, `sens_cmp`). The complex
-**conjugate** follows the FFMM / Pentella convention for how the segment
+**conjugate** follows the FFMM / MMM Python analyzer convention for how the segment
 $k_n$ files store the sensitivity phase; for a purely radial coil $k_n$ is
 real and the two agree trivially. This convention is parity-proven to machine
 precision (`PARITY_REPORT.md` §5.3).

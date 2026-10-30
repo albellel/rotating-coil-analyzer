@@ -65,6 +65,7 @@ package ``tools_for_data_analysis`` (import eddy from
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict
@@ -74,8 +75,10 @@ import pandas as pd
 
 from ..ingest.channel_detect import robust_range
 from .kn_pipeline import (
+    BUCKED_KN_REL_TOL,
     LegacyKnPerTurn,
     SegmentKn,
+    bucked_cmp_orders,
     compute_legacy_kn_per_turn,
     merge_coefficients,
     safe_normalize_to_units,
@@ -455,16 +458,25 @@ def process_kn_pipeline(
     encoder_offset_rad: float = 0.0,
     flip_signal_polarity: bool = False,
     legacy_rotate_excludes_last: bool = False,
+    skew_main: bool = False,
 ):
     """Run the full Kn pipeline on selected turns.
 
     Wraps :func:`compute_legacy_kn_per_turn`, :func:`merge_coefficients`,
     and :func:`safe_normalize_to_units` into a single call.
 
+    Diagnostics that the core collects in ``result.warnings`` (cel silently
+    not applied, |zR| >= 1, implausible field, angle at the wrap boundary) and
+    orders merged from a bucked Cmp channel (:func:`bucked_cmp_orders`) are
+    re-emitted here as :class:`UserWarning`. The numbers are not changed.
+
     Parameters
     ----------
     flux_abs_turns, flux_cmp_turns : ndarray, shape (n_turns, Ns)
-        Absolute and compensated flux per turn.
+        Absolute and compensated **incremental** signals per turn (the flux
+        increments from the integrator, e.g. ``TurnBlock.df_abs``). The name
+        is historical: integration to flux happens inside (``dri`` option).
+        Do not pass already-integrated flux.
     t_turns, I_turns : ndarray, shape (n_turns, Ns)
         Time and current per turn.
     kn : SegmentKn
@@ -500,6 +512,9 @@ def process_kn_pipeline(
         If True, exclude the last harmonic (k=H) from rotation.
         Matches the SM18 C++ off-by-one behaviour.  Default False
         rotates all harmonics k=1..H (Bottura AIV.6, standard FFMM).
+    skew_main : bool
+        True for a skew main harmonic: rotation puts C_m on the imaginary
+        axis and normalisation divides by Im(C_m) = A_m. Default False.
 
     Returns
     -------
@@ -527,9 +542,10 @@ def process_kn_pipeline(
         max_zR=max_zR,
         encoder_offset_rad=encoder_offset_rad,
         flip_signal_polarity=flip_signal_polarity,
+        skew_main=skew_main,
     )
 
-    C_merged, _ = merge_coefficients(
+    C_merged, choice = merge_coefficients(
         C_abs=result.C_abs,
         C_cmp=result.C_cmp,
         magnet_order=magnet_order,
@@ -540,7 +556,21 @@ def process_kn_pipeline(
         C_merged,
         magnet_order=magnet_order,
         min_main_field=min_b1_T,
+        skew_main=skew_main,
     )
+
+    for msg in result.warnings:
+        warnings.warn(msg, UserWarning, stacklevel=2)
+    bucked = bucked_cmp_orders(kn, choice)
+    if bucked:
+        warnings.warn(
+            f"orders {bucked} are merged from the compensated channel, but the Cmp "
+            f"channel bucks them (|kn_cmp| < {BUCKED_KN_REL_TOL:g} |kn_abs|): those "
+            "harmonics are noise divided by ~0. Check magnet_order or take these "
+            "orders from Abs (merge_mode='custom').",
+            UserWarning,
+            stacklevel=2,
+        )
 
     return result, C_merged, C_units, ok_main
 

@@ -16,15 +16,16 @@ stable import surface external notebooks bind to.
 ## 0. Install
 
 ```bash
-pip install -e .          # editable install, pulls numpy/pandas/scipy/matplotlib/ipywidgets/ipympl
+pip install -e ".[dev]"   # numpy/pandas/scipy/matplotlib/ipywidgets/ipympl + pytest
+pip install -e ".[eddy]"  # optional: tools-for-data-analysis (eddy fits, §3.10)
+rca-analyze               # bundled FCC-ee demo, end to end (see README Quick start)
 ```
 
-The package also depends on the companion library `tools-for-data-analysis`
-(declared in `pyproject.toml`), which provides the **eddy-current models and
-fitting** (`eddy_model`, `double_eddy_model`, `triple_eddy_model`,
-`fit_eddy_per_run`, `EddyFitResult`, ...) and continuous-time signal helpers.
-These used to live in `rotating_coil_analyzer` but were moved out; import them
-from `tools_for_data_analysis.fitting.eddy`.
+The companion library `tools-for-data-analysis` is an **optional** extra. It
+provides the **eddy-current models and fitting** (`eddy_model`,
+`double_eddy_model`, `triple_eddy_model`, `fit_eddy_per_run`, `EddyFitResult`,
+...) and continuous-time signal helpers, imported from
+`tools_for_data_analysis.fitting.eddy`. Everything in §1–§3.9 works without it.
 
 ---
 
@@ -138,7 +139,12 @@ from rotating_coil_analyzer.ingest.readers_streaming import StreamingReader
 from rotating_coil_analyzer.analysis.turns import split_into_turns
 
 seg = StreamingReader().read(path, run_id="run", segment="seg",
-                             samples_per_turn=Ns, magnet_order=MAGNET_ORDER)
+                             samples_per_turn=Ns, shaft_speed_rpm=60.0,
+                             magnet_order=MAGNET_ORDER)
+# shaft_speed_rpm is required: it drives the binary-format timing check.
+# For FFMM folders take Ns, speed, m and Rref from the catalog instead:
+#   cat = MeasurementDiscovery().build_catalog(folder)
+#   profile = AnalysisProfile.from_catalog(cat)   # raises if m or Rref is unknown
 tb  = split_into_turns(seg)         # TurnBlock with (n_turns, Ns) arrays
 
 flux_abs = tb.df_abs                # (n_turns, Ns) incremental absolute flux
@@ -197,6 +203,23 @@ result, C_merged, C_units, ok_main = process_kn_pipeline(
 # C_units  : (n_sel, H) complex, units (NaN where main field too weak)
 # ok_main  : (n_sel,)  bool — True where |B_main| > min_b1_T
 ```
+
+For a **skew** main harmonic pass `skew_main=True`: the rotation then puts
+$C_m$ on the imaginary axis and the units are $10^4\,C_n/A_m$.
+
+**Diagnostics (no number is changed).** `process_kn_pipeline` emits a
+`UserWarning` when the result cannot be trusted as configured, and the same
+messages are in `result.warnings`:
+
+| Message about | Meaning | What to do |
+|---|---|---|
+| cel NOT applied | dipole `cel` needs orders 10 and 11, kn has fewer | use a kn file with H ≥ 11 or drop `cel`/`fed` |
+| \|zR\| ≥ 1 | centre offset ≥ Rref, feed-down diverges | check m and kn; `max_zR`; or drop `cel`/`fed` |
+| \|C_m\| > 20 T | implausible main field | wrong m (main taken from a bucked order), Rref or kn |
+| wrap boundary | main angle within 0.05 rad of ±π/2: B_m sign flips turn to turn | `skew_main=True` for a skew magnet, else `encoder_offset_rad` |
+| bucks them | an order merged from Cmp is cancelled by the bucking (\|kn_cmp\| ≈ 0) | check m, or take that order from Abs (`merge_mode="custom"`) |
+
+Per-turn flags: `result.cel_applied`, `result.dit_applied`, `result.phi_near_wrap`.
 
 ### 3.7 Build a tidy DataFrame
 
@@ -279,8 +302,9 @@ res, Cm, Cu, ok = process_kn_pipeline(
 ```
 
 `legacy_rotate_excludes_last=False` (the default) rotates **all** harmonics
-`k=1..H` per Bottura Eq. AIV.6 and matches the modern FFMM C++ and Pentella
-implementations. Only set it to `True` to reproduce the historical SM18 export.
+`k=1..H` per Bottura Eq. AIV.6, like the FFMM Matlab path and the MMM Python analyzer.
+FFMM's production (native C++) analysis skips the last order; set it to `True`
+only to reproduce an FFMM results file (`docs/12_implementations_and_their_errors.md` E1).
 See `PARITY_REPORT.md` for the validated tolerances.
 
 ---

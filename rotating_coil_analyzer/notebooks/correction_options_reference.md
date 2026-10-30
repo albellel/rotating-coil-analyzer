@@ -126,7 +126,7 @@ Compare your b_n signs against a reference measurement (e.g., EDMS report):
 #### MC62 2024 example
 
 The MC62 2024 campaign shows B1 negative at positive current.  Comparison
-with the 2022 EDMS report (Pentella / Di Capua) shows the clear even/odd
+with the 2022 EDMS report shows the clear even/odd
 pattern:
 
 ```
@@ -719,7 +719,7 @@ and conditionally disable cel/fed when the diagnostic says `UNSAFE`.
 
 ---
 
-## Benchmark Comparison: Bottura Theory, Pentella Analyzer, FFMM
+## Benchmark Comparison: Bottura Theory, MMM Python Analyzer, FFMM
 
 This section documents a systematic stage-by-stage comparison of our pipeline
 against the three reference implementations:
@@ -727,7 +727,7 @@ against the three reference implementations:
 - **Bottura**: L. Bottura, *Standard Analysis Procedures for Field Quality
   Measurement of the LHC Magnets - Part I: Harmonics*, MTA-IN-97-007 (1997,
   rev. 2000).  The theoretical reference.
-- **Pentella**: `golden_standards/pentella_analyzer/rotcoil_lib.py`.
+- **MMM Python analyzer** (an independent Python analyzer from the MMM section): local reference copy `golden_standards/mmm_python_analyzer/rotcoil_lib.py` (not in the repo).
   A modern Python library with DC and pulsed modes.
 - **FFMM**: `golden_standards/ffmm/` (C++ core + Matlab prototype).
   The CERN production analyzer.
@@ -766,7 +766,7 @@ C_n = f_n * Rref^(n-1) / conj(kn_n)
 | Implementation | Formula | Matches? |
 |---------------|---------|----------|
 | Bottura Eq. AII.22 | `Xi_n / (kappa_n * Rref^(n-1))` | Equivalent (real kappa) |
-| Pentella | `Rref^(n-1) * f_n / conj(kn)` | Identical |
+| MMM Python analyzer | `Rref^(n-1) * f_n / conj(kn)` | Identical |
 | FFMM (C++ & Matlab) | `(1/conj(Kn)) * Rref^(n-1) * F_n` | Identical |
 | This code | `f_n * (Rref^idx / conj(kn))` | Identical |
 
@@ -777,7 +777,7 @@ Two modes implemented, both validated:
 | Mode | Formula | Matches |
 |------|---------|---------|
 | `legacy` | `cumsum(df - mean(df)) - mean(cumsum(df))` | FFMM C++ line ~127 |
-| `weighted` | `offset = sum(df)/sum(dt); df -= offset*dt; cumsum` | Bottura Eq. AII.14, Pentella |
+| `weighted` | `offset = sum(df)/sum(dt); df -= offset*dt; cumsum` | Bottura Eq. AII.14, MMM Python analyzer |
 
 Default is `legacy` for FFMM parity.  For encoder-triggered systems with
 uniform timing, both modes give equivalent results.  The `weighted` mode
@@ -806,15 +806,16 @@ Applied to **all** harmonics k = 1 .. H by default.
 | Implementation | Range | Notes |
 |---------------|-------|-------|
 | Bottura AIV.6 | All orders | Theory |
-| Pentella | k = 1 .. N | All harmonics |
+| MMM Python analyzer | k = 1 .. N | All harmonics |
 | FFMM Matlab | k = 1 .. 15 | All harmonics |
-| FFMM C++ | k = 1 .. 14 | Off-by-one (`k < nrHarmonics` with nrH=15) |
+| FFMM C++ (native, production) | k = 1 .. 14 | Off-by-one (`k < nrHarmonics` with nrH=15) |
 | This code (default) | k = 1 .. H | `legacy_rotate_excludes_last=False` |
 | This code (SM18 parity) | k = 1 .. H-1 | `legacy_rotate_excludes_last=True` |
 
-The FFMM C++ off-by-one is harmless in practice (harmonic H is near
-Nyquist, negligible amplitude), but the `True` option exists for
-exact SM18 parity when needed.
+The FFMM C++ off-by-one leaves order H in the coil frame. It is small in
+practice ($1.8\times10^{-7}$ T on $B_{15}$ for the Buckley steerer,
+$3\times10^{-6}$ units on $b_{15}$ for the FCC-ee quadrupole), and the `True`
+option reproduces it for exact FFMM parity.
 
 #### 6. Center Localization (CEL)
 
@@ -878,7 +879,7 @@ Activation thresholds:
 |------|----------------|------------------|
 | `signed=True` (FFMM C++) | `dI/dt > 0.1` | `mean(I) > 10` |
 | `signed=False` (our default) | `\|dI/dt\| > 0.1` | `\|mean(I)\| > 10` |
-| Pentella | `RR > 0.1` and `curr_AVG > 10` | Same as `signed=True` |
+| MMM Python analyzer | `RR > 0.1` and `curr_AVG > 10` | Same as `signed=True` |
 
 The weight formula `I_mean / I_k` is the same in all implementations.
 The `signed=False` mode extends it to negative-current ramps by using
@@ -897,13 +898,13 @@ post-merge via `safe_normalize_to_units()`.  This preserves B_main in
 Tesla throughout and implements the Bottura Section 3.7 "record" format
 (Tesla for n <= m, units for n > m).  See the `nor` section above.
 
-**FFMM** and **Pentella** normalize in-pipeline (`nor` in options).  The
+**FFMM** and **MMM Python analyzer** normalize in-pipeline (`nor` in options).  The
 harmonic ratios are mathematically identical; the difference is B_main
 retention.
 
 #### D2. Feeddown allowed for dipoles (with diagnostic guard)
 
-**FFMM C++** skips feeddown entirely when `MagOrder == 1`.  Our code
+The **FFMM Matlab path** skips centring and feeddown entirely when `MagOrder == 1`; the FFMM **native C++** path (production) applies them to dipoles too, without guards (`docs/12_implementations_and_their_errors.md` E4–E5).  Our code
 applies feeddown if requested, but `diagnose_cel_fed()` flags unsafe
 turns and notebooks auto-disable cel/fed when the diagnostic says
 `UNSAFE`.  This is more flexible: dipole feeddown IS valid when
@@ -911,7 +912,7 @@ compensated SNR is sufficient (large coils, high current).
 
 #### D3. No impedance gain correction in pipeline
 
-**Pentella** applies a circuit impedance correction before harmonic
+**MMM Python analyzer** applies a circuit impedance correction before harmonic
 analysis: `gain = (Z_coil + Z_inst) / Z_inst`.  This compensates for
 the voltage-divider effect of the coil impedance against the instrument
 input impedance (typically 400 kOhm).
@@ -926,7 +927,7 @@ applied during data ingestion (before the pipeline).
 
 #### D4. No encoder-step phase offset
 
-**Pentella** subtracts `2*pi/encStep` from the computed roll angle after
+**MMM Python analyzer** subtracts `2*pi/encStep` from the computed roll angle after
 rotation, compensating for a half-sample (or one-sample) phase offset
 in the FFT grid.  This is small (~6 mrad for 1024 encoder steps) and
 affects only the **reported roll angle**, not harmonic amplitudes.
@@ -936,21 +937,21 @@ the FFMM convention (no offset).
 
 #### D5. No revolve_z transformation
 
-**Pentella** offers a `rev` option that flips signs of specific harmonic
+**MMM Python analyzer** offers a `rev` option that flips signs of specific harmonic
 components (even b_n, odd a_n) for special cross-coil geometries.
 This is not needed for standard rotating-coil measurements and is
 not implemented.
 
 #### D6. No external (Ext) coil channel
 
-**Pentella** supports a 3-coil system (Abs, Cmp, Ext) where the external
+**MMM Python analyzer** supports a 3-coil system (Abs, Cmp, Ext) where the external
 coil provides an independent gradient reference.  Our pipeline handles
 the standard 2-channel case (Abs + Cmp), which covers all measurements
 in this project.
 
 #### D7. No bucking ratio overwrite
 
-**FFMM** overwrites C_cmp harmonics 1..m with the bucking ratio
+The **FFMM Matlab path** (not the native C++ production path) overwrites C_cmp harmonics 1..m with the bucking ratio
 `|FFT_abs[k] / FFT_cmp[k]|` after analysis.  This is a diagnostic
 metric (compensation quality), not a harmonic correction.  Our code
 preserves the original C_cmp values and computes merge diagnostics
@@ -973,7 +974,7 @@ not in the weight formula.  This matches the physics: the ratio
 (guaranteed by the `min(|I|) > eps` check).
 
 **Impact:** Only affected unsigned mode with negative currents.  No
-golden standard tests use this path (FFMM uses signed mode, Pentella
+golden standard tests use this path (FFMM uses signed mode, MMM Python analyzer
 uses positive-only thresholds).  A regression test was added:
 `test_di_dt_weights_negative_current_gives_positive_weights()`.
 
@@ -981,7 +982,7 @@ uses positive-only thresholds).  A regression test was added:
 
 ### Verification Summary
 
-| Pipeline Stage | Bottura | Pentella | FFMM | This Code |
+| Pipeline Stage | Bottura | MMM Python analyzer | FFMM | This Code |
 |---------------|---------|----------|------|-----------|
 | FFT: `2*FFT/N` | Eq. AII.20 | `2*fft/N` | `2*fft/N` | `2*fft/N` |
 | Kn: `f/conj(kn)*R^(n-1)` | Eq. AII.22 | `conj(kn)` | `conj(kn)` | `conj(kn)` |

@@ -6,9 +6,9 @@ This package provides the Jupyter notebook GUI with eight tabs:
 1. Plateau Detection: Streaming supercycle plateau detection
 2. Harmonics: Turn QC, FFT computation, amplitude plots
 3. Coil Calibration: Load or compute kn coefficients
-4. Harmonic Merge: Apply kn and merge Abs/Cmp channels (+ cel/fed diag, MAD, N_LAST)
+4. Harmonic Merge: Apply kn and merge Abs/Cmp channels (+ cel/fed diag, MAD)
 5. Raw Signal Plots: Read-only exploration plots
-6. Physics Plots: Hysteresis, TF, Ld, eddy-current settling
+6. Physics Plots: Hysteresis, TF, dB/dI, eddy-current settling (eddy fits need tools-for-data-analysis)
 7. Comparison: Cross-measurement comparison
 
 Entry point:

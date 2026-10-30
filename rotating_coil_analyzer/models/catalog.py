@@ -58,6 +58,14 @@ class MeasurementCatalog:
     magnet_order: Optional[int] = None
     warnings: Tuple[str, ...] = ()
 
+    # Analysis settings recorded by the acquisition software in Parameters.txt
+    # (None = not present). They are what FFMM used; the GUI and
+    # AnalysisProfile.from_catalog start from them.
+    r_ref_m: Optional[float] = None  # Parameters.magnetAnalyzer.refRadius
+    skew_main: Optional[bool] = None  # Parameters.magnetInfo.magnetNormSkew == "skew"
+    magnet_type: Optional[str] = None  # Parameters.magnetInfo.magnetType
+    analyzer_options: Optional[Tuple[str, ...]] = None  # magnetAnalyzer.{dit,dri,rot,cel,fed,nor} == true
+
     @property
     def logical_apertures(self) -> List[Optional[int]]:
         """
