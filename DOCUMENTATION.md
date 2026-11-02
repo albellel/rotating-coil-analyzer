@@ -711,8 +711,8 @@ An independent Python analyzer used in the MMM section (`rotcoil_lib.py`) implem
 - **Recommendation**: This is a known limitation of the compensated coil technique for dipoles. The current diagnostic approach is the correct solution. Consider adding automatic fallback (disable cel/fed when UNSAFE) as a pipeline option.
 
 #### C. Weighted Drift Mode Not Widely Used
-- **What**: Bottura AII.14 weighted drift is implemented but all notebooks use "legacy"
-- **Recommendation**: Consider testing weighted drift on supercycle data where Δt varies. The legacy mode assumes uniform sampling.
+- **What**: Bottura AII.14 weighted drift is implemented. Legacy remains the default; three `mbb-data-analysis` notebooks run weighted as a cross-check. A known-answer test covers it end to end (diary BF-2026-11-02-02).
+- **Recommendation**: Streaming supercycle data have not been tested. The legacy mode assumes uniform sampling.
 
 ### 13.2 Potential Improvements
 
@@ -747,7 +747,6 @@ An independent Python analyzer used in the MMM section (`rotcoil_lib.py`) implem
 - Consider standardizing `FLIP_SIGNAL_POLARITY=False` as a default in AnalysisProfile rather than repeating in each notebook.
 
 #### J. Test Coverage Gaps
-- No test for weighted drift mode end-to-end (only unit test for formula)
 - No test for `legacy_rotate_excludes_last=True` path (SM18 parity)
 - No integration test for streaming supercycle plateau detection
 - Consider adding parametric tests across magnet types

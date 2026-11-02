@@ -85,7 +85,7 @@ in the Buckley degauss parity and $3\times10^{-6}$ units on $b_{15}$ for FCC-ee.
 | `dit` current-ramp reweighting | FFMM legacy step, absent from Bottura; `dit_signed` selects C++ parity thresholds |
 | Conjugate in $1/\overline{k_n}$ | phase convention of the legacy $k_n$ files; identical for real (radial) $k_n$; parity-proven |
 | Legacy `dri` subtracts `mean(cumsum(df))` | affects only the discarded DC bin; kept for bit-for-bit C++ parity |
-| Weighted `dri` mode | first-increment duration fixed 2026-10-30 (diary BF-2026-10-30-02); equals legacy for uniform $\Delta t$ (tested); not yet validated end-to-end on speed-ripple data |
+| Weighted `dri` mode | first-increment duration fixed 2026-10-30 (diary BF-2026-10-30-02); equals legacy for uniform $\Delta t$ (tested); known-answer test on non-uniform timing, assuming a constant drift voltage over the turn (diary BF-2026-11-02-02); streaming supercycle data not tested |
 | External (ext) channel | read into `SegmentKn`/`KnBundle`, not processed by the pipeline |
 | Multi-segment $B\cdot L$-weighted merge, pulsed/time-resolved mode, impedance-gain correction | MMM-Python-analyzer/FFMM features not in this package (`DOCUMENTATION.md` §13.2) |
 | Noise → harmonic precision (`bottura1997b`) | not used as a formal uncertainty model; per-turn scatter (MAD) is the empirical stand-in |

@@ -346,6 +346,7 @@ label = classify_current(I_value, thresholds=psb_thresholds)
 
 ```bash
 # Run all tests (pytest is in the [dev] extra; testpaths is set in pyproject.toml)
+# GitLab CI (.gitlab-ci.yml) runs them on a development install and on the built wheel
 python -m pytest
 
 # Run specific test file
@@ -466,4 +467,6 @@ The implementation achieves **machine-precision parity** (float64 rounding floor
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+This repository is not released under an open-source licence. Licensing has to
+go through the CERN Open Source Program Office process first. Please contact the
+author before reusing or redistributing the code.

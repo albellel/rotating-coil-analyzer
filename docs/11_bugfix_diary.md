@@ -19,6 +19,47 @@ Entry template:
 
 ---
 
+## 2026-11-02 — weighted drift validated; licence withdrawn
+
+### BF-2026-11-02-02 — weighted drift had no end-to-end test, and a wrong impact claim
+- Component: `tests/test_weighted_drift_known_answer.py` (new); no package code changed.
+- Symptom: BF-2026-10-30-02 said no analysis repo uses weighted drift. Three
+  `mbb-data-analysis` notebooks do, as a cross-check, and their stated agreement
+  ($< 0.002$ units) predated that fix.
+- Cause: the claim was not checked against the consumer repos, and only the formula
+  had a test.
+- Fix: known-answer test through `compute_legacy_kn_per_turn`: known harmonics plus a
+  constant drift voltage on non-uniform timing shaped like the MBB data. The MBB
+  notebooks were re-run and their statements corrected (MBB hub §6).
+- Earlier results affected: legacy results no (all 39 numeric columns bit-identical on
+  three MBB notebooks, `a484df0` vs current). Weighted results yes.
+- Verification: the new test passes (weighted error $3\times10^{-16}$, legacy
+  $2.6\times10^{-6}$ on the same input) and fails on the pre-fix code
+  (weighted error $1.1\times10^{-6}$). A one-off run, not kept, repeated this on the real
+  MBB timestamps, coil angle and per-turn drift: fixed weighted recovered the truth to
+  rounding. Its legacy error reproduced the real $W-L$ with correlation 1.0000 on $B_1$,
+  $b_3$ and $b_8$ and at least 0.9999 on $b_{15}$. That correlation follows largely from
+  the algebra, so it confirms the arithmetic.
+- Not established: that real integrator drift is a constant voltage over a turn; this
+  test assumes it. Streaming supercycle data were not tested. The default stays `legacy`
+  for FFMM parity.
+
+### BF-2026-11-02-01 — MIT licence granted without the CERN process
+- Component: `LICENSE`, `pyproject.toml`, `README.md`.
+- Symptom: `LICENSE` (added in BF-2026-10-30-10) granted MIT under
+  `Copyright (c) 2026 Alberto Bellelli`.
+- Cause: the CERN OSPO guidance makes CERN the copyright holder of work by its
+  personnel (associates: unless the home institution has a specific agreement),
+  and the licence is chosen with the OSPO. Neither was checked.
+- Fix: `LICENSE` and the `license` metadata removed; the README states that no
+  open-source licence is granted. The MIT file remains in the git history
+  (`ff7cf50`).
+- Earlier results affected: no, no code changed.
+- Verification: `pyproject.toml` parses; no licence declaration left in tracked
+  text other than this diary.
+
+---
+
 ## 2026-10-30 — deep review: physics fixes, safe defaults, external usability
 
 **Scope check (applies to every entry below).** Every path that already worked
@@ -63,7 +104,10 @@ their numbers do not change.
   turn when the turns are contiguous; otherwise (first turn, selected turns,
   plateau boundary) the turn's median measured interval. No timestamp is
   created. For uniform sampling weighted ≡ legacy up to the discarded DC bin.
-- Earlier results affected: only `drift_mode="weighted"` (not used by any analysis repo).
+- Earlier results affected: only `drift_mode="weighted"`. (Corrected 2026-11-02:
+  this entry first said no analysis repo uses it. Three `mbb-data-analysis`
+  notebooks run it as a legacy-vs-weighted cross-check, and their stated
+  agreement predates this fix; see hub §6.)
 - Verification: `test_preprocess.py::test_integrate_to_flux_weighted_equals_legacy_for_uniform_dt`,
   `::test_integrate_to_flux_weighted_uses_gap_to_previous_turn`.
 

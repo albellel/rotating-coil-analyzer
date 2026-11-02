@@ -1,0 +1,27 @@
+# Acc-Py CI templates, as in coil-calibration and btrain-hystory:
+# https://gitlab.cern.ch/acc-co/devops/python/acc-py-gitlab-ci-templates
+#
+# There is deliberately no publish job. Releasing a package needs the CERN OSPO
+# process first (see README, License).
+include:
+  - project: acc-co/devops/python/acc-py-gitlab-ci-templates
+    file: v2/python.gitlab-ci.yml
+
+variables:
+  project_name: rotating_coil_analyzer
+  distribution_name: rotating-coil-analyzer
+  PY_VERSION: "3.11"
+  ACC_PY_BASE_IMAGE_TAG: "2023.06"
+
+# Development install, tested with pytest.
+test_dev:
+  extends: .acc_py_dev_test
+
+# Build the wheel.
+build_wheel:
+  extends: .acc_py_build_wheel
+
+# Install the wheel and test it: this catches files missing from the package,
+# such as the bundled demo data.
+test_wheel:
+  extends: .acc_py_wheel_test

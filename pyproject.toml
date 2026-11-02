@@ -7,7 +7,6 @@ name = "rotating-coil-analyzer"
 version = "0.2.0"
 description = "Python analyzer for CERN accelerator-magnet rotating-coil measurements (FFMM-compatible)."
 readme = "README.md"
-license = { text = "MIT" }
 authors = [{ name = "Alberto Bellelli" }]
 requires-python = ">=3.10"
 dependencies = [
@@ -28,6 +27,8 @@ eddy = [
 # PowerPoint helpers in rotating_coil_analyzer.presentation
 pptx = ["python-pptx>=0.6", "Pillow>=9"]
 dev = ["pytest>=7"]
+# Installed by the Acc-Py CI templates.
+test = ["pytest>=7"]
 
 [project.scripts]
 rca-analyze = "rotating_coil_analyzer.cli:main"
