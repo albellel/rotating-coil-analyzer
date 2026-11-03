@@ -147,3 +147,4 @@ rca_output/
 
 # SM18 parity notebook: ~285k points per trace make the SVG copies huge
 notebooks/SM18/**/figures/*.svg
+notebooks/SM18/**/figures/.editable/
