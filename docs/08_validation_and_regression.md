@@ -1,7 +1,7 @@
 # 8. Validation, regression tests and traceability
 
 Code: `rotating_coil_analyzer/tests/` (run `python -m pytest`), `validation/golden_streaming.py`,
-`golden_standards/`, `scripts/btp8_bruteforce_turns.py`. Numbers and
+`golden_standards/`. Numbers and
 verdicts: `PARITY_REPORT.md` (canonical — not repeated here).
 
 ## 8.1 Principle
@@ -54,7 +54,7 @@ Immutable; never regenerated; used only for comparison.
 Outcomes (pointers): SM18 streaming $B_1$ max $|\Delta| \approx 1.8\times10^{-12}$ T
 over 285 095 turns with `("dri","rot","nor","cel")`, `legacy_rotate_excludes_last=True`;
 LIU BTP8 at the floating-point floor after brute-force recovery of the
-undocumented turn selection (`scripts/btp8_bruteforce_turns.py`); MC62 limited
+undocumented turn selection (`PARITY_REPORT.md` §2.3, script retired); MC62 limited
 to ~µT by the reference's averaging window, not by the pipeline; Buckley
 degauss worst $|\Delta| \approx 10^{-16}$ T. Details, tolerances and the
 equation-by-equation proof: `PARITY_REPORT.md` §1–5, §8;

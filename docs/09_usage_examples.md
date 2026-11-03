@@ -28,7 +28,7 @@ gui
 | 3 Coil Calibration | load segment TXT **or** compute from head CSV; state the compensation scheme; export TXT → `KnBundle` | 5 |
 | 4 Harmonic Merge | apply $k_n$, rotation, cel/fed; recommendation table; per-order Abs/Cmp choice; normalise; export CSV with full provenance → `MergeResult` | 6, 7 |
 | 5 Raw Signal Plots | time-series exploration, decimation only | — |
-| 6 Physics Plots | hysteresis $B$ vs $I$, transfer function $B_1/I$, $L_d = dB_1/dI$, eddy settling fits (fitting from `tools_for_data_analysis.fitting.eddy`) | `notebooks/physics_reference.md` |
+| 6 Physics Plots | hysteresis $B$ vs $I$, transfer function $B_1/I$, $L_d = dB_1/dI$, eddy settling fits (fitting from `tools_for_data_analysis.fitting.eddy`) | `physics_reference.md` |
 | 7 Comparison | two exported CSVs, $\Delta$ with propagated $\sigma$ | — |
 
 Walkthrough on a real dataset:
@@ -137,7 +137,7 @@ res, Cm, Cu, ok = process_kn_pipeline(
     df_abs, df_cmp, t, I, kn=kn, r_ref=0.050, magnet_order=1,
     options=("dri", "rot"), drift_mode="legacy",
     dit_signed=True,                      # FFMM signed thresholds (only matters with "dit")
-    legacy_rotate_excludes_last=True,     # ONLY for the historical SM18 export
+    legacy_rotate_excludes_last=True,     # ONLY for FFMM parity (SM18 export, native C++)
 )
 ```
 

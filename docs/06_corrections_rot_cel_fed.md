@@ -3,7 +3,7 @@
 Code: `analysis/kn_pipeline.compute_legacy_kn_per_turn` (steps after the
 $k_n$ application), `_wrap_arg_to_pm_pi_over_2`. Bottura counterpart:
 Appendix IV (rotation), Appendix III (centring, feed-down). Option guide with
-failure modes: `notebooks/correction_options_reference.md`.
+failure modes: `correction_options_reference.md`.
 
 Fixed order (legacy FFMM ordering, enforced regardless of which options are
 on):
@@ -136,7 +136,7 @@ $H \ge 11$); $|z_R| \ge 1$ before `fed` and $|C_m| > 20$ T are reported in
 
 Diagnosing which knob applies: even-order sign flip with odd orders unchanged
 ⇒ encoder offset; all orders flipped ⇒ polarity. Full decision table in
-`notebooks/correction_options_reference.md`, "Sign-Convention Parameters".
+`correction_options_reference.md`, "Sign-Convention Parameters".
 Consumers should state their chosen polarity convention in their campaign
 `report.md` (hub §4).
 

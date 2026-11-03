@@ -159,7 +159,7 @@ compare 6 turns × 29 channels (B1, A1, B2 in Tesla + b3..b15, a3..a15 in units)
 **Result**: The correct combination is identified with a **gap ratio of 10,000–123,000×**
 between best and second-best score.  Turn selection is **unambiguous** for every run.
 
-Script: `scripts/btp8_bruteforce_turns.py`
+The search script was a one-off investigation and was retired on 2026-11-02 (recoverable from git history, last in commit `8d6d5e5`; it iterated `itertools.combinations` over the raw turns of each run and scored each combination against the reference). The recovered selections are tabulated below and used in `notebooks/LIU_BTP8/2019-07-17/parity_validation.ipynb`.
 
 ### 2.4 Recovered Turn Selections
 
@@ -191,7 +191,6 @@ With turn selection solved, the residual is decomposed into Tesla and unit chann
 | **B2 (T)** | 4e-10 | 5e-9 | 5e-8 | Sub-nanotesla, ~15 ppb relative |
 | **Units (worst)** | 6e-7 | 2e-6 | 4e-4 | Sub-ppm at high I, scales as 1/C_m |
 
-Script: `scripts/btp8_residual_decomposition.py`
 
 ### 2.6 B2 Residual Analysis
 

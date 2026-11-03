@@ -109,7 +109,6 @@ Optional extras:
 | Extra | Adds | Needed for |
 |---|---|---|
 | `pip install -e ".[eddy]"` | `tools-for-data-analysis` (from gitlab.cern.ch, needs access to that repo) | eddy-current fits in the GUI *Physics Plots* tab |
-| `pip install -e ".[pptx]"` | `python-pptx`, `Pillow` | `rotating_coil_analyzer.presentation` slide helpers |
 
 Without `[eddy]` everything works except the eddy-fit button, which says so.
 
@@ -146,7 +145,7 @@ rca-analyze path/to/folder --kn kn.txt --seg NCS --order 1 --rref 0.017 --option
 found and is not given, the run **stops with a message** instead of guessing.
 
 **3. Interactive GUI** (Jupyter): see [Running the GUI](#running-the-gui).
-**4. Scripted analysis** in your own notebook: see [GUIDE.md](GUIDE.md) §3.
+**4. Scripted analysis** in your own notebook: see [GUIDE.md](docs/GUIDE.md) §3.
 
 ### What your data must look like
 
@@ -167,7 +166,7 @@ The package reads the folder layout written by the CERN FFMM acquisition softwar
 
 The flux columns are **increments** from the digital integrator (FDI), not
 voltage and not integrated flux. If your data come from another system, build
-`(n_turns, Ns)` arrays yourself and call the pipeline directly (GUIDE.md §3.4).
+`(n_turns, Ns)` arrays yourself and call the pipeline directly (docs/GUIDE.md §3.4).
 
 ### Settings the analysis needs — read from the file, never guessed
 
@@ -238,7 +237,7 @@ This is the **magnet-agnostic library repo**. The magnet-specific measurement
 campaigns (SPS MBB, LEAR MC62, ...) and their analysis/R&D notebooks live in
 their own repositories (`mbb-data-analysis`, `mc62-data-analysis`,
 `mba-data-analysis`), which depend on this package. Only example/tool and
-parity-validation notebooks remain here, under `rotating_coil_analyzer/notebooks/`:
+parity-validation notebooks remain here, under `notebooks/`:
 
 ### Tools (example / tutorial)
 - `tools/analysis_gui.ipynb` -- Combined GUI (Catalog + Harmonics workflow)
@@ -258,12 +257,12 @@ by the bundled FCC-ee demo (`rca-analyze`) and its test
 - `Buckley_steerer/2026-06-23_degauss_parity/gui_walkthrough.ipynb` -- Interactive GUI walkthrough on the degauss dataset (loaded natively, no renaming)
 
 ### Reference documents
-- `notebooks/pipeline_reference.md` -- End-to-end pipeline explained: what each stage does, where it sits, and why (integrate-to-flux, dit, dri modes, Kn, rot, cel, fed, merge, nor)
-- `notebooks/correction_options_reference.md` -- Option-by-option guide (cel/fed failure modes, benchmark across implementations)
-- `notebooks/physics_reference.md` -- Physics background for the analysis quantities
+- `docs/pipeline_reference.md` -- End-to-end pipeline explained: what each stage does, where it sits, and why (integrate-to-flux, dit, dri modes, Kn, rot, cel, fed, merge, nor)
+- `docs/correction_options_reference.md` -- Option-by-option guide (cel/fed failure modes, benchmark across implementations)
+- `docs/physics_reference.md` -- Physics background for the analysis quantities
 
 All notebooks use `%matplotlib widget` for interactive zoomable plots. For a
-hands-on walkthrough of the API, see [GUIDE.md](GUIDE.md).
+hands-on walkthrough of the API, see [GUIDE.md](docs/GUIDE.md).
 
 ---
 
@@ -418,14 +417,11 @@ rotating_coil_analyzer/
 │   ├── channel_detect.py    #   Automatic flux/current channel detection
 │   └── discovery.py         #   Measurement folder discovery
 ├── models/                 # Data models (SegmentFrame, MeasurementCatalog, AnalysisProfile)
-├── presentation/           # PowerPoint report generation helpers
-├── notebooks/              # Example/tool + parity-validation notebooks + reference docs
 ├── tests/                  # Unit + regression tests; tests/data holds the bundled FCC-ee demo
 ├── validation/             # Golden reference validation (C++ parity)
 └── cli.py                  # `rca-analyze`: folder + kn file -> CSV (bundled demo without arguments)
-docs/                       # Theory-to-code chapters + 11_bugfix_diary.md
-scripts/
-└── btp8_bruteforce_turns.py   # Brute-force turns-per-revolution search for BTP8
+docs/                       # Theory-to-code chapters, GUIDE.md, PARITY_REPORT.md, reference docs, 11_bugfix_diary.md
+notebooks/                  # Tool (GUI, kn from CSV) and parity-validation notebooks (SM18, LIU BTP8, Buckley)
 ```
 
 > Notebook generators and `nb_helpers` are no longer kept here. Programmatic
@@ -440,10 +436,10 @@ scripts/
 - **[docs/](docs/README.md)** -- Theory-to-code documentation (consolidated 2026-08-20 from the retired LaTeX repo `RC-analyzer-documentation`): measurement principle, ingest and time policy, signal processing, FFT, kn calibration, corrections, merge/normalisation, validation, usage examples, and the [Bottura equation → function cross-reference with the documented deviations](docs/10_bottura_cross_reference.md). LaTeX-ready formulas.
 - **[docs/12_implementations_and_their_errors.md](docs/12_implementations_and_their_errors.md)** -- How FFMM (native C++ and Matlab paths), the MMM-section Python analyzer and this package differ. The errors the earlier tools produce: last order not rotated, skew units ~1e16, ramp correction on rising ramps only, unguarded centring and normalisation, first-sample drift. What this package does about each.
 - **[docs/11_bugfix_diary.md](docs/11_bugfix_diary.md)** -- Dated diary of every bug fix: symptom, cause, fix, whether earlier results are affected, verification.
-- **[GUIDE.md](GUIDE.md)** -- Hands-on walkthrough of the GUI and of the programmatic streaming pipeline (the recipe the magnet repos use).
+- **[GUIDE.md](docs/GUIDE.md)** -- Hands-on walkthrough of the GUI and of the programmatic streaming pipeline (the recipe the magnet repos use).
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** -- Architecture, data models, GUI, function reference, cross-implementation comparison (FFMM C++, MMM-section Python analyzer).
-- **[PARITY_REPORT.md](PARITY_REPORT.md)** -- Machine-precision parity validation against the legacy C++ analyzer (SM18, BTP8, MC62).
-- **[Correction Options Reference](rotating_coil_analyzer/notebooks/correction_options_reference.md)** -- Option-by-option guide with cel/fed failure modes and benchmark comparison across all four implementations.
+- **[PARITY_REPORT.md](docs/PARITY_REPORT.md)** -- Machine-precision parity validation against the legacy C++ analyzer (SM18, BTP8, MC62).
+- **[Correction Options Reference](docs/correction_options_reference.md)** -- Option-by-option guide with cel/fed failure modes and benchmark comparison across all four implementations.
 
 ---
 
@@ -461,7 +457,7 @@ Key formulas implemented:
 - Center location (CEL) and feeddown corrections
 - Marusov temporal decomposition: `σ_{n,k} = (1/M) Σ_j C_n(j) exp(-i 2π k j / M)` — separates spatial and temporal content
 
-The implementation achieves **machine-precision parity** (float64 rounding floor) with the legacy C++ analyzer on SM18 streaming (285,095 turns, B1 diff = 1.82e-12 T) and LIU BTP8 plateau (222 turns, B1/A1 at ~1e-18 T). See [PARITY_REPORT.md](PARITY_REPORT.md) for full details.
+The implementation achieves **machine-precision parity** (float64 rounding floor) with the legacy C++ analyzer on SM18 streaming (285,095 turns, B1 diff = 1.82e-12 T) and LIU BTP8 plateau (222 turns, B1/A1 at ~1e-18 T). See [PARITY_REPORT.md](docs/PARITY_REPORT.md) for full details.
 
 ---
 

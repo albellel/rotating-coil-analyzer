@@ -16,12 +16,12 @@ Overleaf.
 | Topic | Canonical document |
 |---|---|
 | Feature overview, install, GUI tab list, kn file format | [`../README.md`](../README.md) |
-| Programmatic pipeline walkthrough (the recipe the magnet repos use) | [`../GUIDE.md`](../GUIDE.md) |
+| Programmatic pipeline walkthrough (the recipe the magnet repos use) | [`GUIDE.md`](GUIDE.md) |
 | Architecture, data models, full function reference | [`../DOCUMENTATION.md`](../DOCUMENTATION.md) |
-| Golden-standard parity numbers (SM18, LIU BTP8, LEAR MC62) | [`../PARITY_REPORT.md`](../PARITY_REPORT.md) |
-| Option-by-option guide, cel/fed failure modes, sign conventions | [`../rotating_coil_analyzer/notebooks/correction_options_reference.md`](../rotating_coil_analyzer/notebooks/correction_options_reference.md) |
-| Stage-by-stage pipeline narrative (what/where/why) | [`../rotating_coil_analyzer/notebooks/pipeline_reference.md`](../rotating_coil_analyzer/notebooks/pipeline_reference.md) |
-| Physics background (TF vs $L_d$, eddy settling, fringe $b_3$) | [`../rotating_coil_analyzer/notebooks/physics_reference.md`](../rotating_coil_analyzer/notebooks/physics_reference.md) |
+| Golden-standard parity numbers (SM18, LIU BTP8, LEAR MC62) | [`PARITY_REPORT.md`](PARITY_REPORT.md) |
+| Option-by-option guide, cel/fed failure modes, sign conventions | [`correction_options_reference.md`](correction_options_reference.md) |
+| Stage-by-stage pipeline narrative (what/where/why) | [`pipeline_reference.md`](pipeline_reference.md) |
+| Physics background (TF vs $L_d$, eddy settling, fringe $b_3$) | [`physics_reference.md`](physics_reference.md) |
 | **Theory** (Bottura MTA-IN-97-007, every equation transcribed, numbered) | `bibliography-review/magnetic_measurements/rotating_coil_harmonics/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md` (⭐⭐⭐ deep note, bib key `bottura1997`; §11 = equation → function map) |
 | **Theory → code, with deviations** (this folder) | [`10_bottura_cross_reference.md`](10_bottura_cross_reference.md) |
 

@@ -1,8 +1,19 @@
 # Rotating Coil Analyzer - Comprehensive Documentation
 
-**Date**: 2026-03-12
+**Updated**: 2026-11-03 (checked against the code of that date; first written 2026-03-12)
 **Version**: Current master branch
-**Author**: Auto-generated from full repository analysis
+
+**Scope.** This file is the **architecture, data-model and function reference** of the
+package. Where another document is the canonical home of a topic, this file only points to it:
+
+| Topic | Canonical document |
+|---|---|
+| Install, GUI tabs, kn file format, CLI | [`README.md`](README.md) |
+| Programmatic walkthrough | [`docs/GUIDE.md`](docs/GUIDE.md) |
+| Theory to code (Bottura equations, the three deviations) | [`docs/`](docs/README.md), chapters 1-10 |
+| Parity numbers against FFMM | [`docs/PARITY_REPORT.md`](docs/PARITY_REPORT.md) |
+| FFMM / MMM analyzer compared stage by stage | [`docs/12_implementations_and_their_errors.md`](docs/12_implementations_and_their_errors.md) |
+| Every fix, dated | [`docs/11_bugfix_diary.md`](docs/11_bugfix_diary.md) |
 
 ---
 
@@ -20,7 +31,7 @@
 10. [Parity with FFMM (C++ Golden Standard)](#10-parity-with-ffmm-c-golden-standard)
 11. [Parity with the MMM Python analyzer](#11-parity-with-the-mmm-python-analyzer)
 12. [Cross-Reference: Theory vs Implementation](#12-cross-reference-theory-vs-implementation)
-13. [Identified Deviations & Suggestions](#13-identified-deviations--suggestions)
+13. [Known Limitations and Open Points](#13-known-limitations-and-open-points)
 14. [Function Reference](#14-function-reference)
 
 ---
@@ -34,7 +45,7 @@ The Rotating Coil Analyzer is a Python package for harmonic analysis of magnetic
 1. **No synthetic time**: All computations use measured acquisition time; never interpolated or generated
 2. **Immutable data models**: All outputs use `@dataclass(frozen=True)` for safety and traceability
 3. **Full provenance**: Source files, timestamps, options attached to every result
-4. **FFMM parity**: Matches the official C++ reference implementation to **machine precision** (see [PARITY_REPORT.md](PARITY_REPORT.md))
+4. **FFMM parity**: Matches the official C++ reference implementation to **machine precision** (see [PARITY_REPORT.md](docs/PARITY_REPORT.md))
 5. **Bottura-compliant**: Follows analytical theory without synthetic adjustments
 
 ### Package Structure
@@ -42,26 +53,27 @@ The Rotating Coil Analyzer is a Python package for harmonic analysis of magnetic
 ```
 rotating_coil_analyzer/
   ├── analysis/           Core harmonic analysis pipeline
-  │   ├── fourier.py         FFT-based harmonic extraction
+  │   ├── fourier.py         Per-turn DFT and harmonic summaries (dft_per_turn)
   │   ├── turns.py           Turn reshaping (1D -> 2D)
-  │   ├── preprocess.py      Drift, di/dt corrections
+  │   ├── preprocess.py      Drift, di/dt corrections, preprocessing tags
   │   ├── kn_pipeline.py     Main Kn computation pipeline (HEART)
   │   ├── kn_head.py         Geometry-based Kn from measurement head CSV
-  │   ├── merge.py           Abs/Cmp channel merge diagnostics
-  │   ├── kn_bundle.py       Provenance containers
+  │   ├── merge.py           Abs/Cmp channel merge diagnostics (recommend_merge_choice)
+  │   ├── kn_bundle.py       Provenance containers (KnBundle, MergeResult)
   │   └── utility_functions.py  High-level wrappers, plateau detection, diagnostics (eddy fitting lives in tools-for-data-analysis)
   ├── models/             Immutable data containers
   │   ├── catalog.py         Measurement catalog (filesystem discovery)
   │   ├── frames.py          In-memory segment data (SegmentFrame)
   │   ├── profile.py         Analysis configuration (AnalysisProfile)
-  │   └── results.py         Computed harmonics containers
+  │   └── results.py         TurnQC, HarmonicsResult
   ├── ingest/             File discovery and readers
   │   ├── discovery.py       Measurement folder scanning
   │   ├── channel_detect.py  Heuristic channel identification
   │   ├── readers_streaming.py  Streaming (binary/text) reader
   │   └── readers_plateau.py    Plateau (DC) reader
   ├── gui/                8-panel Jupyter notebook GUI
-  │   ├── app.py             Main application entry point
+  │   ├── app.py             Main application entry point (build_gui)
+  │   ├── _dialogs.py        File/folder dialog helpers
   │   ├── harmonics.py       FFT & preprocessing panel
   │   ├── coil_calibration.py  Kn loading/computation panel
   │   ├── harmonic_merge.py    Channel merge & export panel
@@ -70,13 +82,14 @@ rotating_coil_analyzer/
   │   ├── physics_plots.py   Physics analysis panel (hysteresis, TF, Ld, eddy)
   │   ├── comparison.py      Measurement comparison panel
   │   └── log_view.py        HTML-based logging widget
-  ├── presentation/      PowerPoint report generation helpers
-  │   └── pptx_helpers.py     Slide layout and chart utilities
   ├── validation/         Golden-standard validation tools
   │   └── golden_streaming.py  Streaming validation workflow (C++ parity)
-  ├── tests/              unit + regression tests (run `python -m pytest`)
-  ├── notebooks/          Example/tool + parity-validation notebooks + reference docs
-  └── scripts/            Standalone utility scripts (btp8_bruteforce_turns.py)
+  ├── cli.py              `rca-analyze`: folder + kn file -> CSV (bundled FCC-ee demo without arguments)
+  └── tests/              unit + regression tests (run `python -m pytest`); tests/data = bundled demo data
+
+notebooks/                Tool + parity-validation notebooks (repository top level, not package code)
+docs/                     Theory-to-code chapters, guides, parity report and reference docs
+golden_standards/         Local validation data (git-ignored, 8.7 GB)
 ```
 
 ---
@@ -140,7 +153,7 @@ Raw Measurement Files
 
 ## 3. Theoretical Foundation (Bottura)
 
-Reference: L. Bottura, *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets - Part I: Harmonics*, MTA-IN-97-007, CERN, 2000.
+Reference: L. Bottura, *Standard Analysis Procedures for Field Quality Measurement of the LHC Magnets - Part I: Harmonics*, MTA-IN-97-007, CERN, 1997.
 
 > **Canonical versions (2026-08-20):** the full equation transcription is the bibliography note
 > `bibliography-review/magnetic_measurements/rotating_coil_harmonics/bottura1997_standard_analysis_field_quality_LHC_harmonics_notes.md`
@@ -258,17 +271,25 @@ zR = -C_cmp[10] / (10 * C_cmp[11])
 **Signature**:
 ```python
 compute_legacy_kn_per_turn(
-    df_abs_turns, df_cmp_turns, t_turns, I_turns,
-    *, kn, Rref_m, magnet_order,
+    *, df_abs_turns, df_cmp_turns, t_turns, I_turns,   # (n_turns, Ns) arrays
+    kn, Rref_m, magnet_order,
+    absCalib=1.0,
     options=("dri", "rot", "nor", "cel", "fed"),
     drift_mode="legacy",
+    skew_main=False,
+    eps_main=1e-20,
     legacy_rotate_excludes_last=False,
-    abs_calib=1.0, skew_main=False,
-    min_main_field=1e-20,
-    max_zR=None,
     dit_signed=False,
+    max_zR=None,
+    encoder_offset_rad=0.0,
+    flip_signal_polarity=False,
 ) -> LegacyKnPerTurn
 ```
+
+All arguments are keyword-only. `compute_from_profile(..., kn=, profile=)` is the same
+pipeline driven by an `AnalysisProfile`. The function's own default `options` contains
+`nor`; the standard set used by the notebooks and by `AnalysisProfile` leaves it out
+(see section 2).
 
 **Step-by-step pipeline** (per turn):
 
@@ -303,7 +324,12 @@ compute_legacy_kn_per_turn(
    C[:, k] *= exp(-i * φ_mech * (k+1))   for k=0..H-1
    ```
    - Default `legacy_rotate_excludes_last=False`: rotates ALL (Bottura AIV.6)
-   - `legacy_rotate_excludes_last=True`: excludes last harmonic (SM18 off-by-one only)
+   - `legacy_rotate_excludes_last=True`: excludes the last harmonic H. This reproduces the
+     loop `for (k = 1; k < nrHarmonics; ++k)` of the FFMM **native C++** analysis (production
+     code, verified in source 2026-10-30, not only the SM18 export); use it for FFMM parity only
+   - Two knobs act before this step: `flip_signal_polarity` negates all C right after kn (before
+     the `C_abs_db` snapshot); `encoder_offset_rad` is a pre-rotation `exp(-i k offset)`.
+     Both are described in `docs/06_corrections_rot_cel_fed.md`
 
 7. **cel** (if in options):
    - Dipole (m=1): `zR = -C_cmp[:,9] / (10 * C_cmp[:,10])` (n=10,11 from compensated)
@@ -321,6 +347,7 @@ compute_legacy_kn_per_turn(
 ### 4.2 Post-Pipeline Functions
 
 **`merge_coefficients()`**: Select Abs or Cmp per harmonic order
+- Function default `abs_main_cmp_others`; `AnalysisProfile.merge_mode` default `abs_upto_m_cmp_above`
 - Modes: `abs_all`, `cmp_all`, `abs_main_cmp_others`, `abs_upto_m_cmp_above`, `custom`
 - Main harmonic always forced to Abs
 
@@ -332,6 +359,7 @@ compute_legacy_kn_per_turn(
 - MAD-based noise estimation per channel per order
 - Prefers Cmp if noise_cmp < 0.90 × noise_abs
 - Flags mismatch > 50× noise
+- Lives in `analysis/merge.py` (returns `MergeDiagnostics`)
 
 ### 4.3 Utility Functions
 
@@ -376,7 +404,10 @@ In-memory representation of one loaded segment:
 
 Frozen pipeline configuration:
 - Required: `magnet_order`, `r_ref_m`, `samples_per_turn`, `shaft_speed_rpm`
-- Optional: `options`, `drift_mode`, `merge_mode`, `legacy_rotate_excludes_last`, etc.
+- Optional (default): `options` (`dri`, `rot`), `drift_mode` (`legacy`), `merge_mode` (`abs_upto_m_cmp_above`),
+  `legacy_rotate_excludes_last` (False), `min_main_field_T` (1e-20), `abs_calib` (1.0), `l_coil_m` (None),
+  `skew_main` (False), `dit_signed` (False), `max_zR` (None), `encoder_offset_rad` (0.0),
+  `flip_signal_polarity` (False)
 - `from_catalog(cat, **overrides)` takes `magnet_order` (magnetOrder, else magnetType),
   `r_ref_m` (refRadius) and `skew_main` (magnetNormSkew) from `Parameters.txt`;
   raises `ValueError` if `magnet_order` or `r_ref_m` is known neither from the file
@@ -385,9 +416,11 @@ Frozen pipeline configuration:
 ### 5.4 LegacyKnPerTurn
 
 Full pipeline result per turn:
+- `orders`: harmonic orders 1..H
 - `C_abs`, `C_cmp`: (n_turns, H) complex arrays (after all corrections)
 - `C_abs_db`, `C_cmp_db`: Snapshot after kn, before rot/cel/fed/nor
-- `phi_out_rad`, `zR`, `z_m`, `x_m`, `y_m`: Rotation and center location
+- `phi_out_rad`, `phi_bad`, `zR`, `zR_clamped`, `z_m`, `x_m`, `y_m`: Rotation and center location
+- `encoder_offset_rad`: the offset that was applied
 - `main_field`, `main_field_db`: Main harmonic value
 - `I_mean_A`, `dI_dt_A_per_s`, `duration_s`, `time_median_s`: Diagnostics
 - `dit_applied`, `cel_applied`, `phi_near_wrap`: per-turn flags (None if the option was off)
@@ -455,9 +488,9 @@ Full provenance containers:
 
 **Plateau Detection** (`gui/plateau_detection.py`): Uses `compute_block_averaged_range`, `detect_plateau_turns`, `classify_current`, and `find_contiguous_groups` from `utility_functions.py`. Block-averaged range (10 blocks of ~100 samples) filters ADC noise. Three detection rules: (a) I_range < threshold, (b) start on plateau, (c) end on plateau.
 
-**Physics Plots** (`gui/physics_plots.py`): Uses `plateau_summary`, `plot_hysteresis`, `build_run_averages`, and `fit_eddy_per_run` from `utility_functions.py`. Provides hysteresis loop visualization (B vs I with up/down ramp separation), transfer function (B/I), differential inductance (Ld = dB1/dI from staircase plateau data), and eddy-current settling analysis with exponential fits.
+**Physics Plots** (`gui/physics_plots.py`): Uses `plateau_summary`, `plot_hysteresis` and `build_run_averages` from `utility_functions.py`; the eddy fit (`fit_eddy_per_run`) comes from the optional companion package `tools-for-data-analysis` (extra `[eddy]`, imported lazily; the tab works without it, only the eddy fit is disabled). Provides hysteresis loop visualization (B vs I with up/down ramp separation), transfer function (B/I), differential inductance (Ld = dB1/dI from staircase plateau data), and eddy-current settling analysis with exponential fits.
 
-**Comparison** (`gui/comparison.py`): Uses `compute_level_stats` and `diff_sigma` from `utility_functions.py`. Loads two exported CSV files and computes per-operating-point differences with propagated uncertainties and sigma significance.
+**Comparison** (`gui/comparison.py`): Uses `diff_sigma` (and the level statistics built with `compute_level_stats`) from `utility_functions.py`. Loads two exported CSV files and computes per-operating-point differences with propagated uncertainties and sigma significance.
 
 **Architecture**: Shared state dict passed via closures; callable getters for lazy evaluation. Debouncing (250ms) for VS Code stability. HTML-based logging (no ipywidgets.Output stacking).
 
@@ -467,23 +500,19 @@ Full provenance containers:
 
 ### 8.1 Test Suite
 
-- Full suite passes (`python -m pytest`); the 2026-10-30 fixes are in `docs/11_bugfix_diary.md`
-- Run with: `python -m pytest rotating_coil_analyzer/tests/ -x -q`
+- 170 tests in 23 files (2026-11-03), all passing: `python -m pytest` (`testpaths` in `pyproject.toml`)
+- A fresh clone without `golden_standards/` and without the `[eddy]` extra: 166 pass, 4 are expected skips
+- `.gitlab-ci.yml` runs the suite on the Acc-Py templates (no publish job until the CERN OSPO process is done)
+- Fixes and the tests that pin them: `docs/11_bugfix_diary.md`
 
-| Category | Tests | Coverage |
-|----------|-------|---------|
-| Harmonic Merge | 18 | Modes, recommendations, metadata, end-to-end |
-| Safety Guards | 12 | Division by zero, NaN, weak field, zR clamp |
-| Channel Detection | 22 | Auto-mapping, robust range, reader integration |
-| Kn & Provenance | 11 | File format, roundtrip, bundle metadata |
-| Signal Processing | 9 | di/dt, drift, integration, time validation |
-| Analysis Profile | 9 | Defaults, immutability, catalog integration |
-| Plateau & Time | 8 | Detection, supercycle, time policies |
-| Reader & Format | 7 | Binary/text formats, Kn loading, CSV |
-| GUI Widgets | 5 | Panel creation, backend init |
-| Utilities | 12 | MAD clip, run discovery, eddy model, statistics |
-| GUI Events | 6 | Debouncing, plot lifecycle, button wiring |
-| FFT & Harmonics | 3 | DFT correctness, turn splitting |
+| Area | Test files |
+|------|-----------|
+| Merge, Kn and provenance | `test_harmonic_merge`, `test_kn_bundle`, `test_kn_loader_and_merge`, `test_mh_csv_compensation_scheme`, `test_kn_head_csv_vs_reference` |
+| Pipeline correctness and guards | `test_safety_guards`, `test_kn_synthetic_pipeline`, `test_weighted_drift_known_answer`, `test_review_fixes_2026_10`, `test_turns_fourier` |
+| Preprocessing and time policy | `test_preprocess`, `test_time_policy` |
+| Ingest and channels | `test_channel_detect`, `test_reader`, `test_discovery`, `test_plateau`, `test_plateau_hv_format`, `test_streaming_utilities` |
+| Profile and utilities | `test_analysis_profile`, `test_new_utility_functions` |
+| GUI widgets and events | `test_gui_plot_widgets`, `test_plot_debounce`, `test_plot_clear_pattern`, `test_preview` |
 
 ### 8.2 Golden-Standard Validation
 
@@ -507,14 +536,20 @@ notebooks live here; the magnet measurement campaigns moved to their own repos.
 | Tools | `tools/analysis_gui.ipynb`, `tools/kn_from_mh_csv.ipynb` | GUI demo, Kn-from-CSV utility |
 | LIU BTP8 | `LIU_BTP8/2019-07-17/b3_sextupole.ipynb`, `parity_validation.ipynb` | Quadrupole (m=2), golden standard |
 | SM18 | `SM18/2024-12-04_parity/parity_validation.ipynb` | Dipole (m=1), streaming parity |
+| Buckley steerer | `Buckley_steerer/2026-06-23_degauss_parity/parity_validation.ipynb`, `gui_walkthrough.ipynb` | Degauss parity (FFMM), GUI walkthrough |
+
+All paths are relative to the top-level `notebooks/` folder. Each campaign folder carries its own `report.md`.
 
 Magnet campaign notebooks (SPS MBB, LEAR MC62, ...) live in the sibling repos
 `mbb-data-analysis`, `mc62-data-analysis`, `mba-data-analysis`, which depend on
 this package. Programmatic notebook construction in those repos uses
 `tools_for_data_analysis.helpers.notebook` (mandatory — prevents encoding/f-string bugs).
-For a hands-on API walkthrough see `GUIDE.md`.
+For a hands-on API walkthrough see `docs/GUIDE.md`.
 
 ### 9.2 Magnet Parameters
+
+Configurations used by the notebooks; the measured values and their provenance are owned by the
+sibling repos (`results.md` there), not by this table.
 
 | Magnet | R_ref [mm] | Order | Samples/Turn | Standard OPTIONS |
 |--------|-----------|-------|--------------|-----------------|
@@ -539,13 +574,15 @@ Every analysis notebook follows:
 
 ### 9.4 Key Findings from Notebooks
 
-- **Parity**: Python matches C++ reference at **machine precision** (see [PARITY_REPORT.md](PARITY_REPORT.md))
+Orientation only; the numbers are owned by `docs/PARITY_REPORT.md` and by the `results.md` of the magnet repos.
+
+- **Parity**: Python matches C++ reference at **machine precision** (see [PARITY_REPORT.md](docs/PARITY_REPORT.md))
 - **Reproducibility**: Turn-to-turn CV < 0.5%
 - **cel/fed fragility**: Dipole center location (n=10,11 compensated) is UNSAFE at low current/SNR
 - **Quadrupole cel/fed**: Robust (uses C_{m-1}/C_m ratio, both strong signals)
 - **Eddy settling**: 8-15 turns sufficient for exponential decay (SM18/BTP8), tau ~ 33-40 s for MC62 (iron relaxation)
 - **4 Hz rotation** (MC62): 39% lower B1 noise, 49% lower b2 noise vs 1 Hz; rolling-std plateau detection required at fast rotation + slow ramp
-- **Marusov 2D reconstruction**: Temporal DFT decomposition validated at machine epsilon (K=M identity). Per-turn averaging error is (T/τ)²/24 ≈ 2×10⁻⁶ (sub-ppm) — the 0.7% per-turn field change cancels by averaging symmetry (only curvature contributes). Phase coupling between full-stream and two-step validated: n=1 follows 3.6×k/M exactly (constant prefactor ≈ 2π/√3 at all k), impact on B1 ≈ 5 ppm. Temporal filtering (K~50) provides noise reduction. For MC62 4 Hz, Marusov confirms the per-turn pipeline is adequate rather than fixing a problem. See `05_4Hz/marusov_guide.md` for complete theory and results.
+- **Marusov 2D reconstruction**: Temporal DFT decomposition validated at machine epsilon (K=M identity). Per-turn averaging error is (T/τ)²/24 ≈ 2×10⁻⁶ (sub-ppm) — the 0.7% per-turn field change cancels by averaging symmetry (only curvature contributes). Phase coupling between full-stream and two-step validated: n=1 follows 3.6×k/M exactly (constant prefactor ≈ 2π/√3 at all k), impact on B1 ≈ 5 ppm. Temporal filtering (K~50) provides noise reduction. For MC62 4 Hz, Marusov confirms the per-turn pipeline is adequate rather than fixing a problem. Complete theory and results: `marusov_guide.md` in `mc62-data-analysis/notebooks/2026-03-04_4Hz_precycle/rotating_coil/`.
 - **Multi-tau eddy fitting**: AICc selects 3-tau for B1/b2, 1-tau for b3 on MC62. Model validation residuals noise-limited (~3-4 × 10⁻⁴)
 
 ---
@@ -565,7 +602,7 @@ The FFMM (Flexible Framework for Magnetic Measurements) C++ implementation:
       flux = cumsum(df)
 3. FFT: f = 2 * FFT(flux) / N; f = f[1:H+1]
 4. KN:  C = (1/conj(kn)) * Rref^k * f
-5. ROT: if "rot": C[k] *= exp(-i * φ * k) for k=1..H
+5. ROT: if "rot": C[k] *= exp(-i * φ * k) for k=1..H-1   (loop k < nrHarmonics)
 6. CEL: if "cel": zR = -C[m-2]/((m-1)*C[m-1]) [or C_cmp[9]/(10*C_cmp[10]) for dipole]
 7. FED: if "fed": C'[n] = Σ C(k,n) * zR^(k-n) * C[k]
 8. NOR: if "nor": C /= B_main * 10000
@@ -581,7 +618,7 @@ The FFMM (Flexible Framework for Magnetic Measurements) C++ implementation:
 | FFT scaling | 2 * FFT / N | 2.0 * FFT / Ns | **Yes** |
 | Kn application | 1/conj(kn) * Rref^ki | 1/conj(kn) * Rref^[0..H-1] | **Yes** |
 | Phase wrapping | if > π/2: -= π; if < -π/2: += π | Same logic | **Yes** |
-| Rotation range | k=1..nrHarmonics-1 (C++ loop) | k=1..H (default, all) | **Yes** (default) |
+| Rotation range | k=1..nrHarmonics-1 (C++ loop, skips order H) | k=1..H (default, all); `legacy_rotate_excludes_last=True` reproduces the C++ loop | **Only with `legacy_rotate_excludes_last=True`** |
 | CEL dipole | C_cmp(9) / (10*C_cmp(10)) | C_cmp[:,9] / (10*C_cmp[:,10]) | **Yes** |
 | CEL quadrupole | C_abs(m-2) / ((m-1)*C_abs(m-1)) | C_abs[:,m-2] / ((m-1)*C_abs[:,m-1]) | **Yes** |
 | Feeddown | Σ C(k,n) * zR^(k-n) * C[k] | Same binomial formula | **Yes** |
@@ -600,9 +637,9 @@ The FFMM (Flexible Framework for Magnetic Measurements) C++ implementation:
 
 ### 10.4 Validated Parity Results
 
-Machine-precision parity has been achieved on all golden standard datasets. See [PARITY_REPORT.md](PARITY_REPORT.md) for comprehensive results:
+Machine-precision parity has been achieved on all golden standard datasets. See [PARITY_REPORT.md](docs/PARITY_REPORT.md) for comprehensive results:
 
-- **SM18**: B1 diff = 1.82e-12 T on 285,095 turns (streaming, all segments)
+- **SM18**: B1 diff = 1.82e-12 T on 285,095 turns (streaming, all segments; `legacy_rotate_excludes_last=True`)
 - **LIU BTP8**: B1/A1 at ~1e-18 T, B2 at ~5e-9 T (brute-force turn-selection recovery, 222 turns)
 - **LEAR MC62**: Machine-precision B_main on streaming tests 03/04 (plateau-averaged comparison within µT)
 
@@ -654,106 +691,32 @@ An independent Python analyzer used in the MMM section (`rotcoil_lib.py`) implem
 
 ## 12. Cross-Reference: Theory vs Implementation
 
-> **Superseded (2026-08-20)** by [`docs/10_bottura_cross_reference.md`](docs/10_bottura_cross_reference.md),
-> which carries the complete equation → function table (note numbering) and the three documented
-> deviations (no AII.15–16 forward/backward averaging; dipole centring = linearised 20-pole AIII.3;
-> `legacy_rotate_excludes_last` SM18-parity only). Sections 12–13 below are retained as the
-> 2026-03-12 audit record.
+The equation-by-equation map from Bottura's procedure to the functions, with the three documented
+deviations, is [`docs/10_bottura_cross_reference.md`](docs/10_bottura_cross_reference.md). The three
+deviations are: (1) no forward/backward rotation averaging (AII.15-16); (2) dipole centring uses the
+linearised 20-pole formula (AIII.3) instead of the 16-pole polynomial and cost function; (3)
+`legacy_rotate_excludes_last=True` exists for FFMM parity only. The earlier "fully compliant" audit
+table that stood here (2026-03-12) was removed because it contradicted these deviations.
 
-### 12.1 Bottura Equations → Code Mapping
-
-| Bottura Eq. | Description | Code Location | Status |
-|-------------|-------------|---------------|--------|
-| Eq. 1 | Harmonic field expansion | Conceptual basis | **Implemented** |
-| Eq. 4 | Normalization to units | `safe_normalize_to_units()` | **Exact** |
-| Eq. 5 | Translation (feeddown) | `kn_pipeline.py` fed step | **Exact** |
-| Eq. 6 | Rotation | `kn_pipeline.py` rot step | **Exact** |
-| Eq. 15 | DFT definition | `fourier.py` dft_per_turn() | **Exact** |
-| Eq. AII.12 | Voltage offset | `preprocess.py` legacy drift | **Exact** |
-| Eq. AII.14 | Drift correction | `preprocess.py` weighted drift | **Exact** |
-| Eq. AII.17-18 | Flux integration | `preprocess.py` integrate_to_flux() | **Exact** |
-| Eq. AII.20-21 | Spectrum folding | `kn_pipeline.py` FFT step (implicit via 2/N) | **Exact** |
-| Eq. AII.22 | Harmonics from DFT | `kn_pipeline.py` Kn application | **Exact** |
-| Eq. AIII.4 | Center location (m>1) | `kn_pipeline.py` cel step | **Exact** |
-| Eq. AIII.6 | Feeddown correction | `kn_pipeline.py` fed step | **Exact** |
-| Eq. AIV.4 | Phase wrapping | `kn_pipeline.py` rot step | **Exact** |
-| Eq. AIV.6 | Rotation ALL harmonics | `kn_pipeline.py` rot step | **Exact** (default) |
-| Eq. AIV.8-9 | Normalization | `safe_normalize_to_units()` | **Exact** |
-
-### 12.2 Theoretical Compliance Assessment
-
-**Fully compliant**: The Python analyzer follows Bottura's theory without synthetic adjustments. All key equations are implemented as written. The `2/Ns` FFT scaling, phase wrapping, rotation of ALL harmonics, binomial feeddown, and 10^4 normalization are exact.
-
-**No synthetic adjustments detected**:
-- No artificial time generation
-- No signal interpolation or resampling
-- No windowing applied to FFT
-- No artificial smoothing or filtering
-- No synthetic current profiles
-- No estimated/interpolated calibration values
+What the package does not do, by design: no synthetic time, no interpolation or resampling of the
+signals, no FFT windowing, no smoothing, no estimated calibration values.
 
 ---
 
-## 13. Identified Deviations & Suggestions
+## 13. Known Limitations and Open Points
 
-### 13.1 Confirmed Issues
+Current as of 2026-11-03. The first four rows are the open software gaps; the rest are scope limits.
 
-#### A. SM18 `legacy_rotate_excludes_last` Off-by-One
-- **What**: SM18 C++ code has an off-by-one in the rotation loop (excludes last harmonic)
-- **Python handling**: `legacy_rotate_excludes_last=True` option
-- **Assessment**: Correctly handled as a backward-compatibility option. The default `False` matches Bottura AIV.6.
-- **Recommendation**: Document that `True` has no theoretical basis; exists only for SM18 legacy parity.
-
-#### B. Dipole CEL Fragility
-- **What**: Dipole center location uses C_cmp[10]/C_cmp[11] (high-order, weak signals)
-- **Impact**: UNSAFE at low current or poor SNR; produces unphysical |zR| > 0.01
-- **Current handling**: `diagnose_cel_fed()` flags and recommends disabling
-- **Recommendation**: This is a known limitation of the compensated coil technique for dipoles. The current diagnostic approach is the correct solution. Consider adding automatic fallback (disable cel/fed when UNSAFE) as a pipeline option.
-
-#### C. Weighted Drift Mode Not Widely Used
-- **What**: Bottura AII.14 weighted drift is implemented. Legacy remains the default; three `mbb-data-analysis` notebooks run weighted as a cross-check. A known-answer test covers it end to end (diary BF-2026-11-02-02).
-- **Recommendation**: Streaming supercycle data have not been tested. The legacy mode assumes uniform sampling.
-
-### 13.2 Potential Improvements
-
-#### D. Multi-Segment Support
-- **Gap**: The MMM Python analyzer supports IntegralSegment and CentralSegment (B*L weighted merge)
-- **Impact**: Cannot analyze magnets with multiple coil positions in a single pipeline call
-- **Recommendation**: Add multi-segment merge to utility_functions.py (weighted by B*L per segment)
-
-#### E. Pulsed Mode
-- **Gap**: The MMM Python analyzer and FFMM both support time-resolved pulsed measurements
-- **Impact**: Cannot analyze AC/pulsed measurements
-- **Recommendation**: Share `rot_coil_analyzer_turn()` concept — make the per-turn analyzer callable per time-step
-
-#### F. External (Ext) Channel in Pipeline
-- **Gap**: KnBundle supports ext channel but `compute_legacy_kn_per_turn()` does not process it
-- **Recommendation**: Add ext processing path (parallel to abs/cmp) for triple-coil configurations
-
-#### G. Impedance Gain Correction
-- **Gap**: The MMM Python analyzer applies `(Z_coil + Z_inst) / Z_inst` gain correction
-- **Assessment**: Not needed if hardware/calibration handles it upstream. But should be documented.
-- **Recommendation**: Add optional impedance gain parameter to AnalysisProfile for traceability
-
-#### H. Forward/Backward Rotation Averaging
-- **Gap**: Bottura Eq. AII.15 describes averaging ΔΦ+ and ΔΦ- (forward/backward rotations)
-- **Assessment**: Not implemented; the analyzer processes each rotation independently
-- **Recommendation**: Consider adding as preprocessing option for DC measurements with bidirectional rotation
-
-### 13.3 Minor Suggestions
-
-#### I. Notebook Consistency
-- Some comparison notebooks (LEAR_MC62) use `OPTIONS=("dri", "rot", "cel", "fed")` despite main analysis using only `("dri", "rot")` — verify this is intentional.
-- Consider standardizing `FLIP_SIGNAL_POLARITY=False` as a default in AnalysisProfile rather than repeating in each notebook.
-
-#### J. Test Coverage Gaps
-- No test for `legacy_rotate_excludes_last=True` path (SM18 parity)
-- No integration test for streaming supercycle plateau detection
-- Consider adding parametric tests across magnet types
-
-#### K. Error Messages
-- Silent skip of dit correction on NaN/Inf (matches FFMM but could warn)
-- Consider adding a diagnostic flag to LegacyKnPerTurn indicating which corrections were actually applied vs skipped
+| Point | State | Where it is described |
+|-------|-------|-----------------------|
+| Dipole centring fragility | `cel` for m=1 uses the compensated n=10, 11 harmonics and is UNSAFE at low current or poor SNR. `diagnose_cel_fed()` classifies SAFE/UNSAFE/MIXED, `max_zR` clamps the offset (flag `zR_clamped`), `cel_applied` and `warnings` report what actually ran. There is **no automatic fallback** that disables cel/fed | `docs/06`, `docs/correction_options_reference.md` |
+| Weighted drift (`drift_mode="weighted"`, Bottura AII.14) | Implemented and covered by a known-answer test; legacy stays the default. Not validated on streaming supercycle data (the legacy mode assumes uniform sampling) | `docs/03`, diary BF-2026-11-02-02 |
+| External (third) coil channel | `KnBundle` carries it, the pipeline does not process it | `docs/12` |
+| Forward/backward rotation averaging | Not implemented (deviation 1); each rotation is analysed independently | `docs/10` |
+| Multi-segment merge | Not implemented (the MMM analyzer merges Integral and Central segments weighted by B*L); one segment per pipeline call | `docs/12` |
+| Pulsed (time-resolved) mode | Not implemented; the package is DC and streaming only | `docs/12` |
+| Impedance gain `(Z_coil + Z_inst)/Z_inst` | Not applied; assumed handled by the hardware or the calibration upstream | `docs/12` |
+| `dit` on NaN/Inf | The correction is skipped silently, as in FFMM | `docs/03` |
 
 ---
 
@@ -763,20 +726,23 @@ An independent Python analyzer used in the MMM section (`rotcoil_lib.py`) implem
 
 | Function | Signature | Purpose |
 |----------|-----------|---------|
-| `compute_legacy_kn_per_turn` | `(df_abs, df_cmp, t, I, *, kn, Rref_m, magnet_order, options, ...)` → `LegacyKnPerTurn` | Full per-turn pipeline |
-| `merge_coefficients` | `(*, C_abs, C_cmp, magnet_order, mode, ...)` → `(C_merged, choice)` | Channel merge |
-| `safe_normalize_to_units` | `(C, magnet_order, *, absCalib, ...)` → `(C_units, ok_mask)` | Post-merge normalization |
+| `compute_legacy_kn_per_turn` | `(*, df_abs_turns, df_cmp_turns, t_turns, I_turns, kn, Rref_m, magnet_order, absCalib, options, drift_mode, skew_main, eps_main, legacy_rotate_excludes_last, dit_signed, max_zR, encoder_offset_rad, flip_signal_polarity)` → `LegacyKnPerTurn` | Full per-turn pipeline |
+| `compute_from_profile` | `(*, df_abs_turns, df_cmp_turns, t_turns, I_turns, kn, profile)` → `LegacyKnPerTurn` | Profile-based wrapper |
+| `merge_coefficients` | `(*, C_abs, C_cmp, magnet_order, mode, per_order_choice)` → `(C_merged, choice)` | Channel merge |
+| `safe_normalize_to_units` | `(C, magnet_order, *, absCalib, skew_main, min_main_field)` → `(C_units, ok_mask)` | Post-merge normalization |
 | `load_segment_kn_txt` | `(path)` → `SegmentKn` | Load Kn from text file |
-| `compute_from_profile` | `(df_abs, df_cmp, t, I, *, kn, profile)` → `LegacyKnPerTurn` | Profile-based wrapper |
+| `bucked_cmp_orders` | `(kn, choice, *, rel_tol)` → `list[int]` | Orders taken from Cmp although the bucked Cmp channel cancels them (merge guard) |
 
 ### 14.2 Preprocessing (`analysis/preprocess.py`)
 
 | Function | Purpose |
 |----------|---------|
-| `di_dt_weights(t, I, *, min_slope, min_mean_I, signed)` | Compute dit correction weights |
-| `integrate_to_flux(df, *, drift, drift_mode, t)` | Integrate df to flux with optional drift |
+| `di_dt_weights(t_turns, I_turns, *, min_slope_A_per_s, min_mean_I_A, eps_I_A, signed)` | Compute dit correction weights (`DiDtResult`) |
+| `apply_di_dt_to_channels(df_abs_turns, df_cmp_turns, t_turns, I_turns, **kwargs)` | Apply the dit weights to both channels (returns both arrays and the `DiDtResult`) |
+| `integrate_to_flux(df_turns, *, drift, drift_mode, t_turns)` | Integrate df to flux with optional drift (`DriftResult`) |
 | `estimate_linear_slope_per_turn(t, y)` | Least-squares slope per turn |
 | `provenance_columns(n_turns, *, ...)` | Build provenance metadata |
+| `format_preproc_tag(...)`, `append_tag_to_path(...)` | File-name tag describing the preprocessing options |
 
 ### 14.3 Utility Functions (`analysis/utility_functions.py`)
 
@@ -821,6 +787,16 @@ An independent Python analyzer used in the MMM section (`rotcoil_lib.py`) implem
 | `compute_head_kn_from_csv(csv_path, ...)` | Compute per-coil kn from head geometry |
 | `compute_segment_kn_from_head(head, *, connections)` | Combine coils via connections |
 | `parse_connection(conn)` | Parse "1.1-1.3+2*1.2" syntax |
+| `write_segment_kn_txt(segment_kn, path)` | Write a segment kn TXT file |
+
+### 14.6 Other Analysis Modules
+
+| Function | Module | Purpose |
+|----------|--------|---------|
+| `split_into_turns(...)` → `TurnBlock` | `analysis/turns.py` | Reshape a 1-D stream into (n_turns, Ns) |
+| `dft_per_turn(...)`, `summarize_harmonics(...)` | `analysis/fourier.py` | Per-turn DFT and harmonic summaries |
+| `recommend_merge_choice(...)` → `MergeDiagnostics` | `analysis/merge.py` | Abs/Cmp recommendation per order |
+| `run_golden_folder(...)`, `compare_units_table(...)` | `validation/golden_streaming.py` | Golden-standard comparison |
 
 ---
 
@@ -840,7 +816,7 @@ An independent Python analyzer used in the MMM section (`rotcoil_lib.py`) implem
 - **Phase coupling validation**: Two-step ignores exp(-2πi·ks/(MNs)). For n=1, measured |Δσ|/|σ| = 3.6×k/M with constant prefactor (≈ 2π/√3) at all k — independently validates both implementations.
 - Essential when τ/T < 10 (averaging error grows to > 4×10⁻⁵ of A); acts as noise filter when τ/T >> 10
 - Our implementation applies temporal DFT to validated pipeline output C_n(j), guaranteeing K=M identity
-- See `notebooks/LEAR_MC62/05_4Hz/marusov_guide.md` for complete theory, derivations, and results
+- Complete theory, derivations and results: `marusov_guide.md` in `mc62-data-analysis/notebooks/2026-03-04_4Hz_precycle/rotating_coil/`
 
 ## Appendix B: Glossary
 
@@ -893,4 +869,4 @@ Measurement.AP1.FDIs = TABLE{NCS\t0\t2\t0.7\nCS\t1\t3\t0.7}
 
 ---
 
-*End of documentation. Updated 2026-03-05 from full repository analysis including comparison with FFMM C++ golden standard, the MMM-section Python analyzer, and Bottura's theoretical framework.*
+*End of documentation. Updated 2026-11-03; checked against the code (signatures, field lists, test layout, module list) and aligned with `docs/`.*

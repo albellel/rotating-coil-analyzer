@@ -248,8 +248,8 @@ meaningful instead of depending on where the coil happened to start.
 > FFT coefficient. Taking the reference before Kn would fold the coil's
 > calibration phase into $\varphi$.
 
-Applied to all orders $k=1..H$ (Bottura Eq. AIV.6). The legacy SM18/FFMM C++ has
-an off-by-one that **skips the last order** ($k=H$); set
+Applied to all orders $k=1..H$ (Bottura Eq. AIV.6). The FFMM native C++ (which
+produced the SM18 export) has an off-by-one that **skips the last order** ($k=H$); set
 `legacy_rotate_excludes_last=True` only to reproduce that export. See
 [`correction_options_reference.md`](correction_options_reference.md) (`rot`
 section) for the encoder-offset interaction and the $\pm\pi/2$ wrap caveat.
@@ -345,6 +345,6 @@ thing, never the first.
   benchmark: [`correction_options_reference.md`](correction_options_reference.md)
 - Transfer function, eddy/multi-$\tau$ settling, NMR, fringe sextupole:
   [`physics_reference.md`](physics_reference.md)
-- Hands-on API walkthrough: [`../../GUIDE.md`](../../GUIDE.md)
+- Hands-on API walkthrough: [`GUIDE.md`](GUIDE.md)
 - Theory source: Bottura, *Standard Analysis Procedures for Field Quality
   Measurement of the LHC Magnets — Part I: Harmonics* (in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`).

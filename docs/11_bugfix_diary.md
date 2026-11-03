@@ -282,3 +282,29 @@ their numbers do not change.
   and $b_3$ agrees to $3\times10^{-13}$ units. Unchanged by these fixes.
 - (Correction to an earlier draft of this entry: the FCC-ee residual was first
   attributed to ASCII input precision. That was checked and is wrong.)
+
+## 2026-11-02 — Repository housekeeping (no code change)
+- Removed `scripts/` (its only file, `btp8_bruteforce_turns.py`, was a one-off
+  search for the C++ turn selection of the LIU BTP8 golden standard; the result
+  is in `PARITY_REPORT.md` §2.3–2.4 and the parity notebook, the script remains
+  in git history, last in commit `8d6d5e5`).
+- Moved `GUIDE.md` and `PARITY_REPORT.md` from the repository root into `docs/`;
+  links in `README.md`, `DOCUMENTATION.md`, `docs/` and
+  `notebooks/pipeline_reference.md` updated. Dangling reference to the
+  non-existent `btp8_residual_decomposition.py` removed from `PARITY_REPORT.md`.
+- Moved `rotating_coil_analyzer/notebooks/` to a top-level `notebooks/` (they are
+  not importable package code); the three `*_reference.md` files moved to `docs/`.
+  `.gitignore` patterns and notebook links updated.
+- Removed the unused `rotating_coil_analyzer/presentation/pptx_helpers.py` and the
+  `[pptx]` extra (nothing imported it; the shared deck code is
+  `tools_for_visualization.deck`). Recoverable from git history.
+- `DOCUMENTATION.md` brought in line with the code and `docs/` (2026-11-03): corrected the
+  `compute_legacy_kn_per_turn`, `di_dt_weights`, `integrate_to_flux` signatures and the
+  `AnalysisProfile` / `LegacyKnPerTurn` field lists; replaced the stale test table; marked the
+  rotation-range row of the FFMM comparison as a difference (parity needs
+  `legacy_rotate_excludes_last=True`); removed the 2026-03-12 "fully compliant" table that
+  contradicted the documented deviations; rewrote section 13 as the current limitations list.
+  Wording "SM18 off-by-one" aligned to "FFMM native C++" in `GUIDE.md`, `09_usage_examples.md`,
+  `pipeline_reference.md`.
+- The package analysis code, tests and results are untouched (170 tests pass
+  before and after).

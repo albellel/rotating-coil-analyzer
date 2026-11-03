@@ -3,7 +3,7 @@
 Code: `analysis/preprocess.py` (`di_dt_weights`, `apply_di_dt_to_channels`,
 `integrate_to_flux`, `estimate_linear_slope_per_turn`, `provenance_columns`),
 called from `analysis/kn_pipeline.compute_legacy_kn_per_turn`. Bottura
-counterpart: AII.8–18. Narrative version: `notebooks/pipeline_reference.md`
+counterpart: AII.8–18. Narrative version: `pipeline_reference.md`
 §1–3.
 
 All steps act **per turn** on `(n_turns, Ns)` arrays and never exchange

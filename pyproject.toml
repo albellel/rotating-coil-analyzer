@@ -24,8 +24,6 @@ dependencies = [
 eddy = [
   "tools-for-data-analysis @ git+https://gitlab.cern.ch/albellel/tools-for-data-analysis.git",
 ]
-# PowerPoint helpers in rotating_coil_analyzer.presentation
-pptx = ["python-pptx>=0.6", "Pillow>=9"]
 dev = ["pytest>=7"]
 # Installed by the Acc-Py CI templates.
 test = ["pytest>=7"]

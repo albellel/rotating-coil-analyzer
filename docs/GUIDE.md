@@ -297,7 +297,7 @@ res, Cm, Cu, ok = process_kn_pipeline(
     kn=kn, r_ref=R_REF, magnet_order=MAGNET_ORDER,
     options=("dri", "rot"),
     min_b1_T=MIN_B1_T,
-    legacy_rotate_excludes_last=True,   # SM18 C++ off-by-one in the rotation loop
+    legacy_rotate_excludes_last=True,   # FFMM native C++ rotation loop skips order H (parity only)
 )
 ```
 
@@ -319,7 +319,7 @@ See `PARITY_REPORT.md` for the validated tolerances.
 
 These are passed straight through `process_kn_pipeline`. For the difference
 between a polarity swap and an encoder offset, compare even/odd `b_n` signs
-against a reference (see `notebooks/correction_options_reference.md`).
+against a reference (see `correction_options_reference.md`).
 
 ---
 
@@ -327,11 +327,11 @@ against a reference (see `notebooks/correction_options_reference.md`).
 
 - `README.md` — feature overview and Kn file format.
 - `DOCUMENTATION.md` — architecture and full function reference.
-- `notebooks/pipeline_reference.md` — end-to-end pipeline explained (what each
+- `pipeline_reference.md` — end-to-end pipeline explained (what each
   stage does, where it sits, and why): integrate-to-flux, `dit`, `dri` modes,
   `Kn`, `rot`, `cel`, `fed`, merge, `nor`.
-- `notebooks/correction_options_reference.md` — option-by-option guide with
+- `correction_options_reference.md` — option-by-option guide with
   `cel`/`fed` failure modes.
 - `notebooks/SM18/2024-12-04_parity/` and `notebooks/LIU_BTP8/2019-07-17/` —
   worked parity-validation notebooks against the legacy analyzer.
-- `theory/` (git-ignored) — a pointer README only: the Bottura and Marusov papers the algorithms follow live in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/`.
+- Theory papers (Bottura, Marusov, Buzio) are not kept in this repo: they live, with their notes, in `bibliography-review/magnetic_measurements/rotating_coil_harmonics/` (and `search_coils_flux/` for Buzio).

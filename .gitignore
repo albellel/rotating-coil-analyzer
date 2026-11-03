@@ -66,14 +66,14 @@ temp/
 # =========================
 # Generated notebook outputs
 # =========================
-rotating_coil_analyzer/notebooks/**/*_computed.txt
-rotating_coil_analyzer/notebooks/**/*_executed.ipynb
-rotating_coil_analyzer/notebooks/**/*.png
+notebooks/**/*_computed.txt
+notebooks/**/*_executed.ipynb
+notebooks/**/*.png
 
 # =========================
 # Executed notebooks (large, regenerated on demand)
 # =========================
-rotating_coil_analyzer/notebooks/**/executed_*.ipynb
+notebooks/**/executed_*.ipynb
 
 # =========================
 # Temp plots from interactive analysis
@@ -118,27 +118,22 @@ presentation_template/
 # =========================
 # Generated presentations (PPTX, regenerated from notebooks)
 # =========================
-rotating_coil_analyzer/notebooks/**/*.pptx
+notebooks/**/*.pptx
 
 # =========================
 # Old reports / documents (large PDFs, not for version control)
 # =========================
-rotating_coil_analyzer/notebooks/**/old_reports_and_documents/
+notebooks/**/old_reports_and_documents/
 
 # =========================
 # Archived (superseded) notebooks
 # =========================
-rotating_coil_analyzer/notebooks/**/_archive/
-
-# =========================
-# Theory / reference papers (local PDFs, too large for git)
-# =========================
-theory/
+notebooks/**/_archive/
 
 # =========================
 # Generated reports (PDFs regenerated from notebooks/scripts)
 # =========================
-rotating_coil_analyzer/notebooks/**/*.pdf
+notebooks/**/*.pdf
 
 # =========================
 # Large data files (HDF5, etc.)
@@ -149,3 +144,6 @@ rotating_coil_analyzer/notebooks/**/*.pdf
 # rca-analyze default output folder (demo data + CSVs)
 # =========================
 rca_output/
+
+# SM18 parity notebook: ~285k points per trace make the SVG copies huge
+notebooks/SM18/**/figures/*.svg
